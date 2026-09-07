@@ -134,3 +134,134 @@ func TestGatesCannotBeOpenedOnCompletedWork(t *testing.T) {
 		t.Fatal("opened a gate on completed work")
 	}
 }
+
+func TestResolveAcceptsOnlyOfferedOptionsAndIsFinal(t *testing.T) {
+	state, now := gateFixture(t)
+	gate, err := state.OpenGate("WI-001", "Which cache?", []string{"redis", "in-process"}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(time.Hour)
+
+	if err := state.ResolveGate(gate.ID, "memcached", "", "carl@example.com", later); err == nil {
+		t.Fatal("resolved a gate with an option it does not offer")
+	}
+	if err := state.ResolveGate(gate.ID, "", "", "carl@example.com", later); err == nil {
+		t.Fatal("resolved a gate without choosing an option")
+	}
+	if err := state.ResolveGate(gate.ID, "redis", "", "", later); err == nil {
+		t.Fatal("resolved a gate without a decision maker")
+	}
+	if err := state.ResolveGate("GATE-404", "redis", "", "carl@example.com", later); err == nil {
+		t.Fatal("resolved an unknown gate")
+	}
+	if state.OpenGateCount("WI-001") != 1 {
+		t.Fatal("a refused resolution closed the gate anyway")
+	}
+
+	if err := state.ResolveGate(gate.ID, "redis", "the latency budget rules it in", "carl@example.com", later); err != nil {
+		t.Fatal(err)
+	}
+	resolved := state.GatesFor("WI-001")[0]
+	if resolved.Status != GateResolved || resolved.Choice != "redis" {
+		t.Fatalf("gate = %#v", resolved)
+	}
+	if resolved.Note != "the latency budget rules it in" || resolved.DecidedBy != "carl@example.com" {
+		t.Fatalf("gate lost the judgement behind the choice: %#v", resolved)
+	}
+	if resolved.DecidedAt == nil || !resolved.DecidedAt.Equal(later) {
+		t.Fatalf("gate = %#v, want decided at %s", resolved, later)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A closed Gate is history: nothing may change it again.
+	if err := state.ResolveGate(gate.ID, "in-process", "", "carl@example.com", later); err == nil {
+		t.Fatal("re-resolved a closed gate")
+	}
+	if err := state.CancelGate(gate.ID, "asked the wrong question", "carl@example.com", later); err == nil {
+		t.Fatal("cancelled a resolved gate")
+	}
+	if got := state.GatesFor("WI-001")[0]; got.Choice != "redis" {
+		t.Fatalf("a refused change still altered the gate: %#v", got)
+	}
+}
+
+func TestCancelRequiresAReasonAndLiftsTheBlock(t *testing.T) {
+	state, now := gateFixture(t)
+	first, err := state.OpenGate("WI-001", "Which cache?", []string{"redis", "in-process"}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := state.OpenGate("WI-001", "Backfill the old rows?", []string{"yes", "no"}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(time.Hour)
+
+	if err := state.CancelGate(first.ID, "", "carl@example.com", later); err == nil {
+		t.Fatal("cancelled a gate without a reason")
+	}
+	if err := state.CancelGate(first.ID, "   ", "carl@example.com", later); err == nil {
+		t.Fatal("cancelled a gate with a blank reason")
+	}
+	if err := state.CancelGate(first.ID, "the caches are not comparable", "", later); err == nil {
+		t.Fatal("cancelled a gate without a decision maker")
+	}
+
+	if err := state.CancelGate(first.ID, "the caches are not comparable", "carl@example.com", later); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := state.GatesFor("WI-001")[0]
+	if cancelled.Status != GateCancelled || cancelled.Reason != "the caches are not comparable" {
+		t.Fatalf("gate = %#v", cancelled)
+	}
+	if cancelled.DecidedBy != "carl@example.com" || cancelled.DecidedAt == nil {
+		t.Fatalf("cancellation lost who withdrew the question: %#v", cancelled)
+	}
+
+	// One of two Gates closed leaves the work blocked by the other.
+	if state.OpenGateCount("WI-001") != 1 {
+		t.Fatalf("open gate count = %d, want 1", state.OpenGateCount("WI-001"))
+	}
+	if err := state.Start("WI-001", later); err == nil {
+		t.Fatal("started work still blocked by a gate")
+	}
+
+	if err := state.ResolveGate(second.ID, "yes", "", "carl@example.com", later); err != nil {
+		t.Fatal(err)
+	}
+	if state.OpenGateCount("WI-001") != 0 {
+		t.Fatal("closing every gate did not lift the block")
+	}
+	next, ok := state.Next()
+	if !ok || next.ID != "WI-001" {
+		t.Fatalf("next = %#v, %v, want WI-001 once no gate is open", next, ok)
+	}
+	if err := state.Start("WI-001", later); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestClosingAGateDoesNotChangeTheWorkItemStatus is the mirror of opening: the
+// status field was never touched, so there is nothing to put back.
+func TestClosingAGateDoesNotChangeTheWorkItemStatus(t *testing.T) {
+	state, now := gateFixture(t)
+	if err := state.Start("WI-001", now); err != nil {
+		t.Fatal(err)
+	}
+	gate, err := state.OpenGate("WI-001", "Which cache?", []string{"redis", "in-process"}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.ResolveGate(gate.ID, "redis", "", "carl@example.com", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.WorkItemStatus("WI-001"); got != Running {
+		t.Fatalf("closing a gate changed the status to %s", got)
+	}
+}

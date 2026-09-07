@@ -219,3 +219,58 @@ func (s *State) gateBlock(workItemID string) error {
 	}
 	return fmt.Errorf("work item %q is blocked by open gate(s) %s; resolve or cancel them first", workItemID, strings.Join(open, ", "))
 }
+
+// ResolveGate answers a Gate by selecting one of the options it offered. Free
+// text alone is not an answer: the choice is structured so that reading the
+// record later does not mean interpreting a sentence a second time.
+func (s *State) ResolveGate(gateID, choice, note, decidedBy string, now time.Time) error {
+	gate, err := s.closableGate(gateID, decidedBy)
+	if err != nil {
+		return err
+	}
+	if !contains(gate.Options, choice) {
+		return fmt.Errorf("gate %q offers %s; %q is not among them — cancel it with a reason if none of them are right",
+			gateID, strings.Join(gate.Options, ", "), choice)
+	}
+	decidedAt := now
+	gate.Status, gate.Choice, gate.Note = GateResolved, choice, note
+	gate.DecidedBy, gate.DecidedAt = decidedBy, &decidedAt
+	return nil
+}
+
+// CancelGate withdraws a Gate whose question does not hold — the options are all
+// wrong, or it was the wrong thing to ask. It lifts the block, which is not a
+// back door: whoever cancels could already have picked any option. What it adds
+// is a permanent, visible record that the question itself was withdrawn.
+func (s *State) CancelGate(gateID, reason, decidedBy string, now time.Time) error {
+	gate, err := s.closableGate(gateID, decidedBy)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(reason) == "" {
+		return errors.New("cancelling a gate requires a reason")
+	}
+	decidedAt := now
+	gate.Status, gate.Reason = GateCancelled, reason
+	gate.DecidedBy, gate.DecidedAt = decidedBy, &decidedAt
+	return nil
+}
+
+// closableGate finds a Gate that may still be closed. RESOLVED and CANCELLED are
+// terminal: the decision record has to be history a reader can trust, and a
+// record that can be edited afterwards is not one.
+func (s *State) closableGate(gateID, decidedBy string) (*Gate, error) {
+	if decidedBy == "" {
+		return nil, errors.New("closing a gate requires a decision maker")
+	}
+	for i := range s.Gates {
+		if s.Gates[i].ID != gateID {
+			continue
+		}
+		if s.Gates[i].Status != GateOpen {
+			return nil, fmt.Errorf("gate %q is already %s and cannot be changed", gateID, s.Gates[i].Status)
+		}
+		return &s.Gates[i], nil
+	}
+	return nil, fmt.Errorf("unknown gate %q", gateID)
+}

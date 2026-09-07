@@ -8,15 +8,15 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `gate resolve` 只接受該 Gate 列出的選項之一，其他輸入被拒絕
-- [ ] resolve 保存選定的選項、可選的自由文字說明、自述決策者與時間
-- [ ] 決策者身分預設取自 Git 設定，可由參數覆寫
-- [ ] `gate cancel` 要求理由，缺少時被拒絕
-- [ ] cancel 解除阻擋，並在 `status` 中可見
-- [ ] 全部 Gate 關閉後，該工作重新可 `start`／`verify` 並重新被 `next` 選中
-- [ ] 尚有其他未解除 Gate 時，關閉其中一個不解除阻擋
-- [ ] 已進入 RESOLVED 或 CANCELLED 的 Gate 不可再 resolve、cancel 或以任何方式變更
-- [ ] 關閉 Gate 不改變 Work Item 的狀態
-- [ ] `make verify` 通過
+- [x] `gate resolve` 只接受該 Gate 列出的選項之一，其他輸入被拒絕
+- [x] resolve 保存選定的選項、可選的自由文字說明、自述決策者與時間
+- [x] 決策者身分預設取自 Git 設定，可由參數覆寫
+- [x] `gate cancel` 要求理由，缺少時被拒絕
+- [x] cancel 解除阻擋，並在 `status` 中可見
+- [x] 全部 Gate 關閉後，該工作重新可 `start`／`verify` 並重新被 `next` 選中
+- [x] 尚有其他未解除 Gate 時，關閉其中一個不解除阻擋
+- [x] 已進入 RESOLVED 或 CANCELLED 的 Gate 不可再 resolve、cancel 或以任何方式變更
+- [x] 關閉 Gate 不改變 Work Item 的狀態
+- [x] `make verify` 通過

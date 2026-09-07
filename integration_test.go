@@ -96,11 +96,21 @@ type commandError struct {
 
 func (e *commandError) Error() string { return e.err.Error() + ": " + e.output }
 
+// fixtureIdentity is the Git-configured identity a fixture repository carries,
+// so tests can assert on the default self-asserted decision maker.
+const fixtureIdentity = "fixture@example.com"
+
 func fixture(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
 	if output, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v: %s", err, output)
+	}
+	// Configure an identity in the repository itself so that the default decision
+	// maker is the fixture's, not whatever the machine running the test happens
+	// to have configured globally.
+	if output, err := exec.Command("git", "-C", root, "config", "user.email", fixtureIdentity).CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v: %s", err, output)
 	}
 	stories := filepath.Join(root, "specs", "stories")
 	if err := os.MkdirAll(stories, 0755); err != nil {
@@ -828,4 +838,92 @@ func TestConcurrentGateOpensKeepBothGates(t *testing.T) {
 	if state.OpenGateCount("WI-001") != 2 {
 		t.Fatalf("open gate count = %d, want 2", state.OpenGateCount("WI-001"))
 	}
+}
+
+func TestGateResolveAndCancelAreFinalAndVisible(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Which cache?", "--option", "redis", "--option", "in-process")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Backfill the old rows?", "--option", "yes", "--option", "no")
+
+	for _, arguments := range [][]string{
+		{"gate", "resolve", "GATE-001", "--option", "memcached"},
+		{"gate", "resolve", "GATE-001"},
+		{"gate", "resolve", "GATE-404", "--option", "redis"},
+		{"gate", "cancel", "GATE-001"},
+		{"gate", "cancel"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
+		}
+	}
+
+	// Resolving takes the decision maker from Git configuration by default, and
+	// says out loud that the identity is only a claim.
+	output, err := command(binary, root, "gate", "resolve", "GATE-001",
+		"--option", "redis", "--note", "the latency budget rules it in")
+	if err != nil || !strings.Contains(output, "RESOLVED") {
+		t.Fatalf("gate resolve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, fixtureIdentity) || !strings.Contains(output, "self-asserted") {
+		t.Fatalf("resolve output %q does not record a self-asserted decision maker", output)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := state.GatesFor("WI-001")[0]
+	if resolved.Status != work.GateResolved || resolved.Choice != "redis" || resolved.DecidedBy != fixtureIdentity {
+		t.Fatalf("gate = %#v", resolved)
+	}
+	if resolved.Note != "the latency budget rules it in" || resolved.DecidedAt == nil {
+		t.Fatalf("gate lost the judgement behind the choice: %#v", resolved)
+	}
+
+	// One gate closed is not enough to lift the block.
+	if output, err := command(binary, root, "start", "WI-001"); err == nil {
+		t.Fatalf("started work still blocked by GATE-002: %s", output)
+	}
+
+	// A closed Gate is history and cannot be changed again.
+	for _, arguments := range [][]string{
+		{"gate", "resolve", "GATE-001", "--option", "in-process"},
+		{"gate", "cancel", "GATE-001", "--reason", "changed my mind"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v changed a closed gate: %s", arguments, output)
+		}
+	}
+
+	// Cancelling takes an explicit identity and a required reason.
+	output, err = command(binary, root, "gate", "cancel", "GATE-002",
+		"--reason", "the rows do not exist yet", "--as", "someone@example.com")
+	if err != nil || !strings.Contains(output, "CANCELLED") {
+		t.Fatalf("gate cancel = %q, %v", output, err)
+	}
+
+	// The cancellation is visible, and the block is lifted.
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Gates: 0 open") {
+		t.Fatalf("status does not report the block lifted: %s", output)
+	}
+	for _, want := range []string{"GATE-001 RESOLVED", "GATE-002 CANCELLED", "the rows do not exist yet", "someone@example.com"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("status %q does not show %q", output, want)
+		}
+	}
+	if !strings.Contains(output, "Next: WI-001") {
+		t.Fatalf("next does not select work whose gates are all closed: %s", output)
+	}
+	if !strings.Contains(output, "WI-001 READY") {
+		t.Fatalf("closing gates changed the work item's status: %s", output)
+	}
+	mustRun(t, binary, root, "start", "WI-001")
 }
