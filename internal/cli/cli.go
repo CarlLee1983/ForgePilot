@@ -20,9 +20,38 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|verify|gate|review|status>"
+
+// Asking what the commands are must not require an initialized repository:
+// discovering the CLI is the step before deciding to run it anywhere.
+const helpText = `ForgePilot — engineering control plane for AI-assisted work.
+
+` + usageSummary + `
+
+  init                              create .forgepilot state in the current repository
+  migrate                           upgrade state written by an older binary
+  goal create --id <id> --title <t> declare a goal
+  goal <block|unblock|complete|cancel> <goal-id>
+  work add --goal <id> --story <path> [--depends-on <work-id>]
+  next                              print the next READY work item
+  start <work-id>                   move a READY work item to RUNNING
+  verify <work-id>                  run the project's make verify against HEAD and record evidence
+  gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
+  gate <resolve|cancel> <gate-id>
+  review <approve|reject> <work-id> [--pr <owner/name#number>]
+  status                            print goals, work items, gates and latest evidence
+
+ForgePilot does not replace ForgeFlow or your coding agent, and makes no
+network requests.
+`
+
 func run(args []string, cwd string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|verify|gate|review|status>")
+		return errors.New(usageSummary)
+	}
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		_, err := fmt.Fprint(output, helpText)
+		return err
 	}
 	if args[0] == "init" {
 		if len(args) != 1 {

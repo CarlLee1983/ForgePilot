@@ -1751,3 +1751,27 @@ func TestStatusShowsThePullRequestOnlyWhenThereIsOne(t *testing.T) {
 		t.Fatalf("status %q does not show the pull request that was recorded", output)
 	}
 }
+
+// Help must work before init, and outside a repository altogether: the point of
+// asking what the commands are is that you have not committed to running any.
+func TestHelpDoesNotRequireInitializedState(t *testing.T) {
+	root, binary := fixture(t)
+
+	for _, argument := range []string{"help", "--help", "-h"} {
+		output, err := command(binary, root, argument)
+		if err != nil {
+			t.Fatalf("%s in an uninitialized repository: %v: %s", argument, err, output)
+		}
+		for _, want := range []string{"usage: forgepilot", "verify", "gate", "review"} {
+			if !strings.Contains(output, want) {
+				t.Fatalf("%s output does not mention %q: %s", argument, want, output)
+			}
+		}
+	}
+
+	// A directory that is not a repository at all is the same case.
+	output, err := command(binary, t.TempDir(), "help")
+	if err != nil {
+		t.Fatalf("help outside a repository: %v: %s", err, output)
+	}
+}
