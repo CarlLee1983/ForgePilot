@@ -1,0 +1,5 @@
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+
+# ForgePilot's own runtime state, created by `forgepilot init` inside a repo.
+.forgepilot/
