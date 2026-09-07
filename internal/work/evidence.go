@@ -50,8 +50,14 @@ type Evidence struct {
 	// self-asserted identity, never an authenticated one (ADR-0005); Note holds
 	// the free text behind the judgement. Verification Evidence leaves both
 	// empty, and is refused if it does not.
-	Reviewer  string    `json:"reviewer"`
-	Note      string    `json:"note"`
+	Reviewer string `json:"reviewer"`
+	Note     string `json:"note"`
+	// PR names the pull request a Human Review was carried out on, as
+	// owner/name#number. It is identification alone: nothing reads it when
+	// deciding whether work completes or whether Evidence has gone stale
+	// (ADR-0011), and it is never checked against GitHub (ADR-0010). Optional,
+	// and forbidden on Verification Evidence.
+	PR        string    `json:"pr"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -174,7 +180,7 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 			if (record.Result == Interrupted) != (record.ExitCode == nil) {
 				return fmt.Errorf("evidence %q pairs result %q with the wrong exit code", record.ID, record.Result)
 			}
-			if record.Reviewer != "" || record.Note != "" {
+			if record.Reviewer != "" || record.Note != "" || record.PR != "" {
 				return fmt.Errorf("evidence %q is a verification but carries review fields", record.ID)
 			}
 		case ReviewEvidence:

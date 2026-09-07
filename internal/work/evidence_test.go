@@ -317,3 +317,32 @@ func TestCompletedWorkIsNeverStale(t *testing.T) {
 		t.Fatalf("completed work no longer shows the revision it finished on: %#v", latest)
 	}
 }
+
+// TestV4EvidenceCarriesEmptyPRReference pins the field schema v4 adds without
+// yet writing to it. PR Reference belongs to Human Review alone: Verification
+// Evidence serialises it empty and is refused if it carries one, for the same
+// reason a verification may not carry a reviewer — one kind of Evidence must
+// never be readable as the other.
+func TestV4EvidenceCarriesEmptyPRReference(t *testing.T) {
+	zero := 0
+	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
+	encoded, err := json.Marshal(verification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"pr":""`) {
+		t.Fatalf("evidence %s lacks an empty pr field", encoded)
+	}
+
+	items := map[string]Item{"WI-001": {ID: "WI-001"}}
+	if err := validateEvidence([]Evidence{verification}, 2, items); err != nil {
+		t.Fatal(err)
+	}
+	withPR := verification
+	withPR.PR = "carl/forgepilot#123"
+	if err := validateEvidence([]Evidence{withPR}, 2, items); err == nil {
+		t.Fatal("accepted verification evidence carrying a PR reference")
+	}
+}

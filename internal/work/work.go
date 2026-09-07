@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 type GoalStatus string
 

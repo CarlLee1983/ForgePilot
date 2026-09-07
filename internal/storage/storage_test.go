@@ -62,7 +62,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":4,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":5,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +333,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 3`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 4`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -354,5 +354,96 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	}
 	if string(after) != rewound {
 		t.Fatal("a refused migration still modified the state")
+	}
+}
+
+// v3State writes an M3-era snapshot: evidence and gates both populated, so a
+// migration that dropped either would be caught rather than merely suspected.
+func v3State(t *testing.T, root string) string {
+	t.Helper()
+	canonical, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := `{"schema_version":3,"next_work_id":3,"next_evidence_id":3,"next_gate_id":2,` +
+		`"goals":[{"id":"g","title":"Goal","description":"","repository":"` + canonical +
+		`","status":"ACTIVE","reason":"","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"work_items":[{"id":"WI-001","goal_id":"g","story_ref":"specs/stories/a","status":"REVIEW","depends_on":null,` +
+		`"current_run":null,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"},` +
+		`{"id":"WI-002","goal_id":"g","story_ref":"specs/stories/b","status":"PENDING","depends_on":["WI-001"],` +
+		`"current_run":null,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"evidence":[{"id":"EV-001","type":"verification","repository":"` + canonical +
+		`","work_item_id":"WI-001","story_ref":"specs/stories/a","revision":"abc123","command":"make verify",` +
+		`"exit_code":0,"result":"PASS","reviewer":"","note":"","created_at":"2026-09-07T00:00:00Z"},` +
+		`{"id":"EV-002","type":"review","repository":"` + canonical +
+		`","work_item_id":"WI-001","story_ref":"specs/stories/a","revision":"abc123","command":"",` +
+		`"exit_code":null,"result":"REJECTED","reviewer":"carl@example.com","note":"not yet",` +
+		`"created_at":"2026-09-07T00:00:00Z"}],` +
+		`"gates":[{"id":"GATE-001","work_item_id":"WI-001","question":"which?","rationale":"",` +
+		`"options":["a","b"],"status":"RESOLVED","choice":"a","note":"","reason":"",` +
+		`"decided_by":"carl@example.com","opened_at":"2026-09-07T00:00:00Z",` +
+		`"decided_at":"2026-09-07T00:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+// TestMigrateUpgradesV3StateAndKeepsEverything covers the step that changes no
+// data at all. The ceremony still has to happen: the contract the user works to
+// is "upgrading means a backup and a version bump", not "sometimes there is a
+// backup".
+func TestMigrateUpgradesV3StateAndKeepsEverything(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	original := v3State(t, root)
+
+	if _, err := Load(root); err == nil {
+		t.Fatal("read a v3 state without migrating")
+	} else if !strings.Contains(err.Error(), "migrate") {
+		t.Fatalf("error %q does not tell the user to migrate", err)
+	}
+
+	migrated, err := Migrate(root)
+	if err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SchemaVersion != work.SchemaVersion {
+		t.Fatalf("migration did not reach the current schema: %#v", state)
+	}
+	if state.NextWorkID != 3 || state.NextEvidenceID != 3 || state.NextGateID != 2 {
+		t.Fatalf("migration lost counters: %#v", state)
+	}
+	if len(state.Goals) != 1 || len(state.WorkItems) != 2 || len(state.Evidence) != 2 || len(state.Gates) != 1 {
+		t.Fatalf("migration lost data: %#v", state)
+	}
+	if got := state.Evidence[1]; got.Result != work.Rejected || got.Reviewer != "carl@example.com" || got.PR != "" {
+		t.Fatalf("migration changed review evidence: %#v", got)
+	}
+	if got := state.Gates[0]; got.ID != "GATE-001" || got.Choice != "a" {
+		t.Fatalf("migration changed gates: %#v", got)
+	}
+
+	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v3.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatal("backup does not hold the original snapshot")
+	}
+
+	// Running it again is safe and says so, so nobody has to remember whether
+	// they already upgraded.
+	if migrated, err := Migrate(root); err != nil || migrated {
+		t.Fatalf("second Migrate = %v, %v", migrated, err)
 	}
 }

@@ -111,6 +111,9 @@ func upgrade(contents []byte, from int) (work.State, error) {
 		state.NextGateID = 1
 		state.Gates = nil
 	}
+	// v3 → v4 introduces no container, only an optional field on Evidence, so
+	// there is nothing for a step to create and nothing it could discard. The
+	// version bump below is the whole upgrade.
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

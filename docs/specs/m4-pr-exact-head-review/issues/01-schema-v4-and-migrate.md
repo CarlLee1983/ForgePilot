@@ -6,14 +6,14 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `schema_version` 升至 4；Evidence 新增選填的 PR Reference 欄位，無其他欄位變更或語意改變
-- [ ] v3 state 被新版 binary 拒讀，錯誤訊息指示執行 `migrate`；v4 state 被舊版拒讀
-- [ ] `migrate` 把 v3 state 備份為 `state.json.v3.bak` 後升級，佇列、Evidence 與 Gate 逐筆完整
-- [ ] 備份檔已存在時 `migrate` 拒絕執行而非覆寫
-- [ ] 對已是 v4 的 state，`migrate` 回報「已是最新版本」並以 exit 0 結束，重複執行安全
-- [ ] `migrate` 逐版套用，從 v2 出發者執行一次即可走到 v4
-- [ ] 兩處版本號 fixture 調到 v4：`internal/storage` 中驗證「較新 schema 應被拒讀」者，與 `internal/work` 中區分較舊／較新 schema 錯誤者
-- [ ] 整合測試建立舊版快照的方式維持操作解碼後的文件，不用字串替換
-- [ ] `make verify` 通過
+- [x] `schema_version` 升至 4；Evidence 新增選填的 PR Reference 欄位，無其他欄位變更或語意改變
+- [x] v3 state 被新版 binary 拒讀，錯誤訊息指示執行 `migrate`；v4 state 被舊版拒讀
+- [x] `migrate` 把 v3 state 備份為 `state.json.v3.bak` 後升級，佇列、Evidence 與 Gate 逐筆完整
+- [x] 備份檔已存在時 `migrate` 拒絕執行而非覆寫
+- [x] 對已是 v4 的 state，`migrate` 回報「已是最新版本」並以 exit 0 結束，重複執行安全
+- [x] `migrate` 逐版套用，從 v2 出發者執行一次即可走到 v4
+- [x] 兩處版本號 fixture 調到 v4：`internal/storage` 中驗證「較新 schema 應被拒讀」者，與 `internal/work` 中區分較舊／較新 schema 錯誤者
+- [x] 整合測試建立舊版快照的方式維持操作解碼後的文件，不用字串替換
+- [x] `make verify` 通過
