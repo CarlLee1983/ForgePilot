@@ -13,11 +13,11 @@ _Avoid_：Story、Task（作為另一種獨立工作物件）
 **ForgeFlow Story**：由 ForgeFlowV2 管理的工程契約，包含需求、acceptance criteria 與工程指引。
 _Avoid_：ForgePilot requirement、Work Item 的需求副本
 
-**Gate**：需要明確 Human Decision 才能解除的工程決策關卡。
-_Avoid_：自動核准、驗證失敗
+**Gate**：依附於單一 Work Item、需要明確 Human Decision 才能解除的工程決策關卡；提出時必須列出至少兩個選項。未解除的 Gate 阻擋該工作推進，但不改變它的狀態。
+_Avoid_：自動核准、驗證失敗、Goal 層級的阻擋
 
-**Human Decision**：人對 Gate 所記錄的明確選擇或判斷。
-_Avoid_：Agent 推測、默認同意
+**Human Decision**：對某個 Gate 所記錄的選擇——選定其列出的選項之一，連同自述的決策者身分。
+_Avoid_：Agent 推測、默認同意、自由作答、經過認證的身分
 
 **Evidence**：針對特定工作與 revision 保存的驗證或審查紀錄；可能成功、失敗，或因中斷而未產生結果。
 _Avoid_：完成宣告、Agent 自評
@@ -37,8 +37,8 @@ _Avoid_：最新版本、branch name
 **Actionable Work**：屬於可執行 Goal、處於 READY、依賴已完成且沒有未解決 Gate 的工作。
 _Avoid_：RUNNING 工作、所有未完成工作
 
-**Human Review**：人對特定 revision 所記錄的工程審查結果。
-_Avoid_：Verification PASS、merge authorization
+**Human Review**：對特定 revision 所記錄的工程審查結果，為 APPROVED 或 REJECTED。
+_Avoid_：Verification PASS、merge authorization、Human Decision
 
-**DONE**：工作已滿足適用的驗證與人工審查條件後的完成狀態。
-_Avoid_：Agent 停止執行、RUNNING、已 merge、已 release
+**DONE**：工作在某個確切 revision 上滿足驗證與人工審查條件後的終態。它記錄的是已經發生的事，後續的 commit 不會使其失效，也不會使其重開。
+_Avoid_：Agent 停止執行、RUNNING、已 merge、已 release、可重開的狀態

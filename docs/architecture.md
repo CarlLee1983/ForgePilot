@@ -47,12 +47,14 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/carl/forgepilot`
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
 | Work Item run | `current_run`（revision、worktree path、started_at；閒置時為 null） | M2 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
-| Gate | `id`, `goal_id`, `work_item_id`, `question`, `reason`, `options`, `status`，以及決策、決策者、時間的紀錄 | M3；詳細 schema 待定 |
+| Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`reason`、`options`（至少兩個）、`status`，以及 resolve／cancel 時的選項或理由、自述決策者與時間 | M3 |
 | Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、實際 command、exit code、`result`、timestamp | M2 起 |
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
-Work Item statuses：`PENDING`, `READY`, `RUNNING`, `VERIFYING`, `REVIEW`, `WAITING_HUMAN`, `BLOCKED`, `DONE`。M1 可到達的狀態只有前三者。
+Work Item statuses：`PENDING`, `READY`, `RUNNING`, `VERIFYING`, `REVIEW`, `DONE`。M1 可到達的狀態只有前三者，M2 加上 `VERIFYING` 與 `REVIEW`，`DONE` 由 M3 提供。
+
+沒有 `BLOCKED` 或 `WAITING_HUMAN`：阻擋由「該 Work Item 有沒有未解除的 Gate」表達，不佔用狀態欄。狀態描述工作在生命週期的位置，Gate 是另一個維度的條件；兩處各表達一次同一事實，就會需要「記住進入阻擋前是什麼狀態」這種只為修補覆寫而存在的欄位。詳見 [ADR-0007](adr/0007-blocking-is-not-a-status.md)。Goal 的 `BLOCKED` 保留，它是刻意的不對稱——擋整個 Goal 用 Goal 狀態，擋一件工作用 Gate。
 
 Gate statuses：`OPEN`, `RESOLVED`, `CANCELLED`。Gate resolution 不等同於 Human Review，也不授予 merge／release 權限。
 
@@ -96,13 +98,14 @@ M3 完成某個 Work Item 時，在同一 state transaction 中更新受影響�
 | VERIFYING → REVIEW | PASS evidence 對應受驗證且目前有效的 revision；M2 |
 | VERIFYING → RUNNING | Verification FAIL，或回收中斷的 Verification Run；M2 |
 | REVIEW → VERIFYING | 由明確的 `verify` 命令觸發；stale 本身不改變狀態；M2 |
-| REVIEW → DONE | 同一有效 revision 有 Verification PASS 與 explicit Human Review APPROVED，且無 unresolved Gate；M3 |
-| RUNNING → BLOCKED | M3；建立阻擋、解除與重試操作須在該階段開工前定案 |
-| 非終態 → WAITING_HUMAN | 建立需要 Human Decision 的 Gate；M3 |
+| REVIEW → RUNNING | Human Review REJECTED；M3 |
+| REVIEW → DONE | 同一 revision 的最新 Verification 為 PASS 且最新 Human Review 為 APPROVED，且無 unresolved Gate；由 `review approve` 在同一交易內達成；M3 |
 
 非法 transition 回傳明確 domain error，不能偷偷改成另一個操作。M1 不提供任意 state setter、complete 或測試專用 approve 指令。
 
-`WAITING_HUMAN` 的恢復規則、多個 Gate、Gate cancellation 是否解除阻擋、BLOCKED recovery，以及 DONE 是否允許重新開啟，都必須在 M3 開工前補齊。不能把「Gate 已 resolve」直接等同於 READY 或 DONE。
+開啟或關閉 Gate 不是 transition：它不改變 Work Item 的狀態，只改變它能否推進。Gate 可以開在任何非 DONE 的工作上。
+
+DONE 是終態，不因後續 commit 重開，也沒有 reopen 操作；需要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄。詳見 [ADR-0006](adr/0006-done-is-terminal.md)。不能把「Gate 已 resolve」直接等同於 READY 或 DONE。
 
 ## Durable local storage
 
@@ -186,6 +189,21 @@ Revision 只存在於 Evidence 與 `current_run`，Work Item 本身不保存 `ta
 
 OPEN Gate 必須阻擋工作推進。Resolve 需保存明確 Decision 與時間；不能由 Agent 推測選項或以逾時當同意。
 
-`review approve` 是 explicit CLI action，ForgePilot 不自動 approve。CLI action 本身只能記錄聲明，不能證明執行者為人；信任模式、操作者身分與是否需要額外認證須於 M3 決定。
+`review approve` 是 explicit CLI action，ForgePilot 不自動 approve。
 
-建議 DONE 保留「在某 revision 完成」的歷史意義，不因 repository 每次新增 commit 就重開所有已完成工作；新 target 不能沿用舊 Evidence。此 DONE／reopen policy 尚待 M3 定案。
+### M3 開工前定案（已完成）
+
+1. **Gate 的依附與開啟**：Gate 只依附單一 Work Item；擋整個 Goal 用 `Goal.BLOCKED`，不另設 Goal 層級 Gate。開啟者不區分人或 Agent——ForgePilot 記錄「有人提出了這個問題」，不宣稱知道那是誰。
+2. **Gate 生命週期**：一件 Work Item 可同時有多個 OPEN Gate，推進條件是 OPEN 數為零。`options` 必填且至少兩個，`resolve` 只能選其中之一並可附自由文字 note；選項全都不對時的正確動作是 `cancel`（須附理由）再重開一個。CANCELLED 解除阻擋——同一個人本來就能用 resolve 選任何選項，cancel 沒有打開 resolve 沒打開的門，差別只在它記錄「這個問題問錯了」。Gate 集合為 append-only，進入 RESOLVED 或 CANCELLED 後不可變更或刪除，因此不需要另外複製成 Evidence。
+3. **決策者身分**：保存自述的身分（預設取 Git 的 `user.email`），明確標示為聲明而非認證。不做認證——半套的認證比不做更危險，它會讓人以為那個名字有保證。詳見 [ADR-0005](adr/0005-self-asserted-decision-maker.md)。
+4. **阻擋不佔用狀態欄**：不設 `WAITING_HUMAN` 與 Work Item 的 `BLOCKED`。詳見 [ADR-0007](adr/0007-blocking-is-not-a-status.md)。
+5. **DONE 的可逆性**：終態，無 reopen。詳見 [ADR-0006](adr/0006-done-is-terminal.md)。
+6. **完成的達成方式**：不提供獨立的完成指令。`review approve` 在同一交易內檢查條件，滿足就進入 DONE 並解鎖下游。詳見 [ADR-0008](adr/0008-approval-completes-work.md)。
+7. **多筆結果的判定**：同一 revision 各取最新一筆——DONE 要求最新 Verification 為 PASS 且最新 Human Review 為 APPROVED。曾經出現過即算數會讓「重跑以確認 PASS 是否穩定」反過來變成漏洞。
+8. **Goal lifecycle**：提供 `goal block` / `unblock` / `complete` / `cancel`。COMPLETED 是人手動宣告且要求全部 Work Item 皆為 DONE，不由系統推斷——自動標記會產生一個需要退回 ACTIVE 的可逆狀態，與 DONE 不可逆的立場矛盾。Goal 轉為非 ACTIVE 時，底下活躍的工作維持原狀但無法推進；進行中的 Verification Run 跑完仍須記錄其 Evidence，那是已發生的事實。
+
+### 呈現規則
+
+`status` 顯示每件工作的 OPEN Gate 數量。DONE 的工作不標示 stale——stale 的用途是提示需要重驗，對終態工作那個提示是錯的，而沒有行動意義的警示會讓人開始忽略所有警示；仍顯示其完成時的 revision。
+
+`review approve` 當下的 HEAD 與最新 PASS 的 revision 對不上時，審查仍被記錄（先審後驗是正當流程）但不進入 DONE，`status` 必須說出沒有進入 DONE 的原因。

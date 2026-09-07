@@ -202,9 +202,30 @@ Integration fixture 加入 Makefile 與真實 commit。驗收：PASS → REVIEW�
 
 ### M3
 
-先定義 Gate resolve／cancel／resume、多 Gate、BLOCKED 建立與 recovery、Human identity、Goal lifecycle 與 DONE／reopen policy，再實作 Gate、Review 與完成流程。
+開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m3-開工前定案已完成) 與 `docs/adr/0005`–`0008`。剩下的是實作。
 
-驗收未解 Gate 不可推進、不同 revision 的 PASS／APPROVED 不可組合、未 review 不可 DONE、approve 後依賴原子解鎖。完成真實 A DONE → B READY 的端到端流程，並覆蓋完整 MVP 的 Goal lifecycle、Gate blocking 與 Evidence append 測試。
+其中兩項原本列為必須定案的問題是被消滅而非回答：移除 `WAITING_HUMAN` 之後不存在「恢復規則」，移除 Work Item 的 `BLOCKED` 之後不存在「BLOCKED recovery」。
+
+M3 新增九個指令：
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot gate open --work <id> --question <text> --option <text> --option <text> [--reason <text>]` | 配發 Gate ID，該工作即被阻擋；至少兩個 `--option` |
+| `forgepilot gate resolve <gate-id> --option <text> [--note <text>] [--by <identity>]` | 保存 Decision、自述決策者與時間；Gate 轉為 RESOLVED |
+| `forgepilot gate cancel <gate-id> --reason <text> [--by <identity>]` | Gate 轉為 CANCELLED 並解除阻擋 |
+| `forgepilot review approve <work-id> [--note <text>] [--by <identity>]` | append APPROVED Evidence；條件滿足則同交易進入 DONE 並解鎖下游 |
+| `forgepilot review reject <work-id> --reason <text> [--by <identity>]` | append REJECTED Evidence，工作退回 RUNNING |
+| `forgepilot goal block <goal-id> --reason <text>` / `unblock <goal-id>` | 切換 Goal 的 ACTIVE／BLOCKED |
+| `forgepilot goal complete <goal-id>` | 全部 Work Item 皆 DONE 時才允許；人手動宣告 |
+| `forgepilot goal cancel <goal-id> --reason <text>` | Goal 轉為 CANCELLED |
+
+`status` 擴充為顯示每件工作的 OPEN Gate 數量、最新一筆 Human Review，以及 approve 之後未進入 DONE 時的原因。不提供 `done`、`complete <work-id>` 或任何等價指令（[ADR-0008](adr/0008-approval-completes-work.md)），不提供 Gate 查詢指令，不提供 `--json`。
+
+Schema 升至 v3：新增 Gate 集合與其 ID 配發計數，Evidence 加入 review 專用欄位。沿用 M2 的升級契約——不自動升級，由 `migrate` 備份為 `state.json.v2.bak` 後升級，備份已存在時拒絕。
+
+交付切片依序為：schema v3 與 v2→v3 升級；Gate 的開啟、解除、取消與阻擋語意；Human Review Evidence 與 reject；approve 至 DONE 與依賴原子解鎖；Goal lifecycle；`status` 擴充與端到端驗收。
+
+驗收：未解 Gate 不可推進；多 Gate 需全部關閉才解除；cancel 解除阻擋且留下理由；resolve 只接受列出的選項；不同 revision 的 PASS 與 APPROVED 不可組合；同一 revision 上較新的 FAIL 或 REJECTED 勝過較舊的 PASS 或 APPROVED；未 review 不可 DONE；approve 後依賴在同一交易內解鎖；DONE 無任何 reopen 路徑；DONE 工作不標示 stale；Goal 非 ACTIVE 時活躍工作維持原狀但無法推進，而進行中的 Verification Run 跑完仍記錄 Evidence；`goal complete` 在尚有非 DONE 工作時被拒。另完成真實的 A → verify → approve → DONE → B READY 端到端流程，這是 M1 分段驗收時延後至此的項目。
 
 ### M4
 
