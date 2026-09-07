@@ -1,0 +1,25 @@
+name: verify
+
+# The runner is macOS because macOS is the only platform this product claims to
+# support: the process lock is an OS flock and no other platform has been
+# verified to behave the same way. Running the suite on Linux would report a
+# green that says nothing about the supported configuration.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # make verify is the canonical check this product runs against itself,
+      # the same one it runs against the repositories it manages. CI runs that
+      # command rather than its own list of steps, so the two cannot drift.
+      - run: make verify
+      - run: go test -race -count=1 ./...

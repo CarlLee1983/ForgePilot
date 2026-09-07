@@ -45,7 +45,26 @@ M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review ap
 | [Domain vocabulary](CONTEXT.md) | 統一核心名詞，避免把 Story 與 Work Item 混用 |
 | [Architecture](docs/architecture.md) | 責任邊界、資料模型、狀態規則、持久化與 revision 契約 |
 | [Development plan](docs/development-plan.md) | Milestone、開發順序、CLI 契約、測試與驗收清單 |
-| [Decision records](docs/adr/) | 不易反轉的決定與其失效條件 |
+| [Decision records](docs/adr/README.md) | 不易反轉的決定與其失效條件，共 11 份 |
+| [AGENTS.md](AGENTS.md) | 接手這個 repo 的 Agent 該先知道的事：邊界、地雷與工作方式 |
+
+## 安裝
+
+需要 Go 1.25.5 或以上。ForgePilot 只用標準函式庫，沒有外部相依。
+
+```bash
+go install github.com/carl/forgepilot/cmd/forgepilot@latest
+```
+
+或從原始碼建置：
+
+```bash
+git clone https://github.com/CarlLee1983/ForgePilot.git
+cd ForgePilot
+go build -o forgepilot ./cmd/forgepilot
+```
+
+初始支援平台只有 macOS 的本機檔案系統——程序鎖使用 OS `flock`，其他平台尚未驗證行為相同，因此不宣稱支援。
 
 ## 使用流程
 
