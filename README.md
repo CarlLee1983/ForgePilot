@@ -47,6 +47,7 @@ M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review ap
 | [Development plan](docs/development-plan.md) | Milestone、開發順序、CLI 契約、測試與驗收清單 |
 | [Decision records](docs/adr/README.md) | 不易反轉的決定與其失效條件，共 11 份 |
 | [架構圖](docs/diagrams/README.md) | 狀態機、分層、交易邊界與兩條主要流程的視覺化 |
+| [專案導覽](docs/show-me-forgepilot.html) | 一頁講完問題、核心概念、四個 milestone 與關鍵決定 |
 | [AGENTS.md](AGENTS.md) | 接手這個 repo 的 Agent 該先知道的事：邊界、地雷與工作方式 |
 
 ## 安裝

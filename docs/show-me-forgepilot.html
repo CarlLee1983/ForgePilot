@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ForgePilot 是什麼</title>
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --panel: #ffffff;
+    --ink: #16150f;
+    --muted: #6b6a63;
+    --faint: #93918a;
+    --line: #e3e0d8;
+    --accent: #0f7b5f;
+    --accent-soft: #e6f2ed;
+    --warn: #a8611a;
+    --warn-soft: #fbf0e2;
+    --stop: #a33045;
+    --stop-soft: #fbe9ec;
+    --code-bg: #f4f2ec;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #131310;
+      --panel: #1b1b17;
+      --ink: #ecebe4;
+      --muted: #a3a199;
+      --faint: #7a7871;
+      --line: #302f29;
+      --accent: #4bbd97;
+      --accent-soft: #16332a;
+      --warn: #d9a05e;
+      --warn-soft: #2f2617;
+      --stop: #e08095;
+      --stop-soft: #351f25;
+      --code-bg: #201f1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.75;
+    font-size: 16px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 64px 24px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 44px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--faint); margin: 0 0 10px;
+  }
+  h1 { font-size: 34px; line-height: 1.25; margin: 0 0 14px; letter-spacing: -.01em; }
+  .lede { font-size: 18px; color: var(--muted); margin: 0; max-width: 60ch; }
+  h2 {
+    font-size: 13px; font-family: var(--mono); letter-spacing: .12em;
+    text-transform: uppercase; color: var(--faint);
+    margin: 56px 0 18px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  h3 { font-size: 17px; margin: 32px 0 8px; }
+  p { margin: 0 0 16px; max-width: 66ch; }
+  .muted { color: var(--muted); }
+  code { font-family: var(--mono); font-size: .9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre {
+    font-family: var(--mono); font-size: 13px; line-height: 1.65;
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 18px 20px; overflow-x: auto; margin: 0 0 20px;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .terms { display: grid; gap: 14px; margin: 0 0 8px; }
+  .term {
+    background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 14px 18px;
+  }
+  .term .name { font-family: var(--mono); font-weight: 700; font-size: 14px; }
+  .term .body { margin: 4px 0 0; color: var(--muted); font-size: 15px; }
+  .term .avoid { margin: 6px 0 0; font-size: 13px; color: var(--faint); }
+  .term .avoid b { font-weight: 600; color: var(--stop); }
+
+  .rail { display: grid; gap: 0; margin: 8px 0 24px; }
+  .ms {
+    display: grid; grid-template-columns: 76px 1fr; gap: 20px;
+    padding: 18px 0; border-top: 1px solid var(--line);
+  }
+  .ms:last-child { border-bottom: 1px solid var(--line); }
+  .ms .tag {
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft);
+    border-radius: 5px; padding: 3px 0; text-align: center; height: fit-content;
+  }
+  .ms h4 { margin: 0 0 4px; font-size: 16px; }
+  .ms p { margin: 0; font-size: 15px; color: var(--muted); }
+
+  .decisions { display: grid; gap: 0; }
+  .d { padding: 20px 0; border-top: 1px solid var(--line); }
+  .d:last-child { border-bottom: 1px solid var(--line); }
+  .d .adr {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+    color: var(--faint); display: block; margin-bottom: 2px;
+  }
+  .d h4 { margin: 0 0 6px; font-size: 16px; }
+  .d p { margin: 0; font-size: 15px; color: var(--muted); }
+
+  .callout {
+    background: var(--warn-soft); border: 1px solid var(--line);
+    border-left: 3px solid var(--warn); border-radius: 6px;
+    padding: 16px 18px; margin: 0 0 20px;
+  }
+  .callout p { margin: 0; font-size: 15px; }
+  .callout .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--warn); display: block; margin-bottom: 4px;
+  }
+
+  .not { background: var(--stop-soft); border-left-color: var(--stop); }
+  .not .label { color: var(--stop); }
+
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 460px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  td code { font-size: 12.5px; }
+
+  footer {
+    margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line);
+    font-size: 14px; color: var(--faint);
+  }
+  footer a { color: var(--accent); }
+  @media (max-width: 620px) {
+    .wrap { padding: 40px 18px 64px; }
+    h1 { font-size: 27px; }
+    .ms { grid-template-columns: 1fr; gap: 6px; }
+    .ms .tag { width: 62px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">ForgePilot · Engineering Control Plane</p>
+  <h1>它不寫程式。<br>它決定什麼可以開始、什麼算完成。</h1>
+  <p class="lede">一個只用 Go 標準函式庫的本機 CLI，管理工程工作的可執行性、進度，以及每一個判斷的證據。M1–M4 已全部實作。</p>
+</header>
+
+<h2>問題</h2>
+
+<p>Agent 輔助的工程有一個特定的失效模式：狀態活在對話裡。哪件事可以開始、哪件事在等誰的判斷、某次「測試通過了」是在哪一版通過的——這些都留在某次 session 的上下文中，換一個 session 就沒了。</p>
+
+<p>後果不是效率問題，是可信度問題。Agent 面對規格歧義時最容易做的事，是自己選一個然後繼續往下寫；而「跑過測試了」如果沒有綁定確切的 commit，它就只是一句話。</p>
+
+<div class="callout">
+  <span class="label">ForgePilot 的位置</span>
+  <p>它不產生 Story、不用 LLM 判斷 PASS、不決定架構、不 merge 也不 release。工程要求由 ForgeFlowV2 定義，正確性由 repository 自己的 <code>make verify</code> 判斷，該由人決定的事由人決定。ForgePilot 只負責把這些事實記下來，並且擋住不該推進的工作。</p>
+</div>
+
+<h2>核心概念</h2>
+
+<div class="terms">
+  <div class="term">
+    <div class="name">Goal</div>
+    <p class="body">需要跨多次工程工作推進的長期目標。有 ACTIVE / BLOCKED / COMPLETED / CANCELLED 四個狀態，COMPLETED 必須人手動宣告且要求底下全部工作皆已完成。</p>
+  </div>
+  <div class="term">
+    <div class="name">Work Item</div>
+    <p class="body">歸屬一個 Goal、參照一個 ForgeFlow Story 的工作單位，有自己的狀態與依賴。它只保存 <code>story_ref</code>，不複製 Story 的需求。</p>
+    <p class="avoid"><b>不是</b>另一種獨立的 Task 物件，也不是 Story 的副本。</p>
+  </div>
+  <div class="term">
+    <div class="name">Gate</div>
+    <p class="body">依附於單一 Work Item、需要明確人為決定才能解除的關卡。提出時必須列出至少兩個選項。未解除的 Gate 擋住那件工作推進，但<strong>不改變它的狀態</strong>。</p>
+    <p class="avoid"><b>不是</b>驗證失敗，也不是逾時就自動同意。</p>
+  </div>
+  <div class="term">
+    <div class="name">Evidence</div>
+    <p class="body">綁定一件工作與一個確切 commit SHA 的紀錄，只新增不修改。兩種：Verification（PASS / FAIL / INTERRUPTED）與 Human Review（APPROVED / REJECTED），共用同一條時間軸。</p>
+    <p class="avoid"><b>不是</b>完成宣告，也不是 Agent 的自評。</p>
+  </div>
+  <div class="term">
+    <div class="name">Human Review</div>
+    <p class="body">人對某個確切 revision 記錄的判斷。M4 起可以額外指明它發生在哪個 pull request 上。</p>
+    <p class="avoid"><b>不是</b>Verification PASS，也不是 merge 授權。</p>
+  </div>
+</div>
+
+<h2>完成是條件的結果，不是一個指令</h2>
+
+<p>產品裡沒有 <code>done</code>，沒有 <code>complete &lt;work-id&gt;</code>，也沒有測試專用的捷徑。DONE 只會在 <code>review approve</code> 記錄審查的同一次交易內、四項條件同時成立時發生：</p>
+
+<pre><code>forgepilot review approve WI-001
+  ├─ 記錄 APPROVED Evidence          ← 一定會發生，先審後驗是正當流程
+  └─ CompletionBlockers(WI-001) 是空的嗎？
+       ├─ 同一 revision 的最新 Verification 是 PASS
+       ├─ 最新 Human Review 是 APPROVED
+       ├─ 沒有未解除的 Gate
+       └─ Goal 是 ACTIVE
+     ── 全部成立 ─▶ DONE + RefreshReady()   同一次交易，下游立刻 READY
+     ── 有一項不成立 ─▶ 停在 REVIEW，status 說出差的是什麼</code></pre>
+
+<p class="muted">最後一行不是客套。因為沒有完成指令，<code>status</code> 是使用者唯一能得知「為什麼還沒完成」的地方，所以它<strong>不能對未完成的原因沉默</strong>——這條被測試釘住。</p>
+
+<h2>四個 milestone</h2>
+
+<div class="rail">
+  <div class="ms">
+    <div class="tag">M1</div>
+    <div>
+      <h4>Durable Engineering Queue</h4>
+      <p>Goal、Work Item、依賴、狀態轉移、deterministic 的 next-work selection，以及受程序鎖保護的原子 JSON state。跨 process 保存一致。</p>
+    </div>
+  </div>
+  <div class="ms">
+    <div class="tag">M2</div>
+    <div>
+      <h4>Verification Evidence</h4>
+      <p>在隔離的 detached worktree 對確切 commit 執行受管理專案自己的 <code>make verify</code>，結果存成綁定該 revision 的 Evidence。新 revision 不沿用舊的 PASS。</p>
+    </div>
+  </div>
+  <div class="ms">
+    <div class="tag">M3</div>
+    <div>
+      <h4>Human Gate &amp; Review</h4>
+      <p>Gate 擋住需要人判斷的工作，Human Review 記錄 APPROVED / REJECTED，完成與下游解鎖落在同一次交易內。佇列第一次真的會前進。</p>
+    </div>
+  </div>
+  <div class="ms">
+    <div class="tag">M4</div>
+    <div>
+      <h4>PR exact-head review</h4>
+      <p>Human Review 可以額外攜帶 <code>owner/name#number</code>，讓日後回頭讀這筆紀錄的人找得到當時的討論。刻意的小增量：沒有新增任何狀態機行為。</p>
+    </div>
+  </div>
+</div>
+
+<h2>幾個關鍵決定</h2>
+
+<div class="decisions">
+  <div class="d">
+    <span class="adr">ADR-0007</span>
+    <h4>阻擋不佔用狀態欄</h4>
+    <p>沒有 <code>WAITING_HUMAN</code>，Work Item 也沒有 <code>BLOCKED</code>。狀態描述工作在生命週期的位置，Gate 是另一個維度的條件。兩處各表達一次同一事實，就會需要「記住進入阻擋前是什麼狀態」這種只為修補覆寫而存在的欄位。</p>
+  </div>
+  <div class="d">
+    <span class="adr">ADR-0006</span>
+    <h4>DONE 是終態，沒有 reopen</h4>
+    <p>它記錄的是已經發生的事，後續 commit 不使其失效。需要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄。也因此 DONE 的工作不標示 stale——那個提示對它不對應任何行動。</p>
+  </div>
+  <div class="d">
+    <span class="adr">ADR-0005</span>
+    <h4>身分是自述的，不做認證</h4>
+    <p>決策者預設取自 <code>git config user.email</code>，並在每一處輸出明確標示為聲明。半套的認證比不做更危險——它會讓人以為那個名字有保證。</p>
+  </div>
+  <div class="d">
+    <span class="adr">ADR-0009</span>
+    <h4>回收先於拒絕</h4>
+    <p><code>verify</code> 先無條件把上次被中斷的執行記為 INTERRUPTED，再判斷能不能開始新的一次。中斷是已經發生的事實，不該被任何阻擋條件扣住；能不能再跑一次，才是阻擋條件要回答的問題。</p>
+  </div>
+  <div class="d">
+    <span class="adr">ADR-0010</span>
+    <h4>不主動發出網路請求</h4>
+    <p>不自行 HTTP，也不 spawn <code>gh</code>。PR 是使用者輸入的識別字串，只驗格式。代價是標錯不會被偵測；換來的是這個工具在沒有網路、沒有 token、GitHub 掛掉時照樣可用，而 Evidence 的結果集合不必為「遠端不可用」再開一個值。</p>
+  </div>
+  <div class="d">
+    <span class="adr">ADR-0001</span>
+    <h4>四者共用同一次原子替換</h4>
+    <p>Goal、Work Item、Evidence 與 Gate 存在同一份 JSON snapshot，受同一個程序鎖保護。完成一件工作與解鎖其下游必須落在同一次交易內，否則讀取者會看到「A 已 DONE 但 B 仍 PENDING」的中間狀態。</p>
+  </div>
+</div>
+
+<h2>指令面</h2>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>指令</th><th>做什麼</th></tr></thead>
+  <tbody>
+    <tr><td><code>init</code> / <code>migrate</code></td><td>在 repository root 建立 <code>.forgepilot/</code>；升級 state schema（備份後升級，不自動發生）</td></tr>
+    <tr><td><code>goal</code></td><td>create / block / unblock / complete / cancel</td></tr>
+    <tr><td><code>work add</code></td><td>新增 Work Item，指定 Story 與依賴</td></tr>
+    <tr><td><code>next</code> / <code>start</code></td><td>純查詢下一件可執行的工作；把 READY 推進到 RUNNING</td></tr>
+    <tr><td><code>verify</code></td><td>在隔離 worktree 對當下 HEAD 跑 <code>make verify</code>，記錄 Evidence</td></tr>
+    <tr><td><code>gate</code></td><td>open / resolve / cancel——提出、決定或撤銷一個需要人判斷的問題</td></tr>
+    <tr><td><code>review</code></td><td>approve / reject；approve 在條件成立時完成工作並解鎖下游</td></tr>
+    <tr><td><code>status</code></td><td>整份佇列，包含未解除的 Gate 數、最新 Evidence 與未完成的原因</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout not">
+  <span class="label">刻意不做</span>
+  <p>Web UI、雲端服務、資料庫、daemon、multi-agent scheduler、Agent spawning、plugin framework、network API、自動 merge 或 release。以及任何能直接寫入 DONE 的路徑。</p>
+</div>
+
+<footer>
+  <p>Go 1.25.5，只用標準函式庫。初始支援平台是 macOS 的本機檔案系統——程序鎖使用 OS <code>flock</code>，其他平台尚未驗證行為相同，因此不宣稱支援。</p>
+  <p>細節見 <a href="architecture.md">architecture.md</a>、<a href="../CONTEXT.md">CONTEXT.md</a>、<a href="adr/README.md">11 份 ADR</a> 與 <a href="diagrams/README.md">四張架構圖</a>。</p>
+</footer>
+
+</div>
+</body>
+</html>
