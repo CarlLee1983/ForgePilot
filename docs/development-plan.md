@@ -229,18 +229,18 @@ Schema 升至 v3：新增 Gate 集合與其 ID 配發計數，Evidence 加入 re
 
 ### M3 Exit checklist
 
-- [x] 未解除 Gate 阻擋 `start` 與 `verify`，且不被 `next` 選中；開關 Gate 不改變 Work Item 的狀態。
+- [x] 未解除 Gate 阻擋 `start` 與 `verify`，且不被 `next` 選中；開關 Gate 不改變 Work Item 的狀態。卡在 VERIFYING 的孤兒不再是繞過 Gate 的路徑（`eb2f7fd`）。
 - [x] 一件工作可同時掛多個 Gate，全部關閉才解除阻擋；`resolve` 只接受列出的選項，`cancel` 要求理由並在 `status` 中可見。
 - [x] Gate 進入 RESOLVED 或 CANCELLED 後不可再變更；決策連同自述決策者與時間保存，身分明確標示為聲明而非認證。
 - [x] Human Review 綁定完整 commit SHA，與 Verification 共用同一容器與 ID 序列；REJECTED 要求理由並退回 RUNNING；髒工作樹被拒。
 - [x] 未驗證或未審查不可 DONE；不同 revision 的 PASS 與 APPROVED 不可組合；同一 revision 上較新的 FAIL 或 REJECTED 勝過較舊的 PASS 或 APPROVED。
-- [x] 有未解除 Gate 或 Goal 非 ACTIVE 時不完成；approve 與 PASS revision 不符時仍記錄審查、不完成，且 `status` 說明原因。
+- [x] 有未解除 Gate 或 Goal 非 ACTIVE 時不完成；approve 與 PASS revision 不符時仍記錄審查、不完成，且 `status` 說明原因——包括最後一個阻擋在 approve 之後才被解除、條件已全部成立卻仍停在 REVIEW 的情況（`eb2f7fd`）。
 - [x] 完成後全部依賴皆 DONE 的下游在同一交易內轉為 READY，仍有其他未完成依賴者不被解鎖；新 process 讀回不存在中間狀態。
 - [x] 產品中不存在完成指令、reopen、Gate 查詢指令、`--json` 或身分認證；DONE 工作不標示 stale 但仍顯示完成時的 revision。
 - [x] Goal 非 ACTIVE 時活躍工作維持原狀但無法推進，進行中的 Verification Run 跑完仍記錄 Evidence；`goal complete` 在尚有非 DONE 工作時被拒。
 - [x] v2 state 被拒讀並指示 migrate；`migrate` 逐版升級、備份、重複執行安全、備份已存在時拒絕、升級不遺失資料。
 - [x] 真實的 A start → verify → approve → DONE → B READY 端到端流程以獨立 process 跑通，同一流程涵蓋 Gate 的阻擋與解除。
-- [x] `make verify` 與 `go test -race ./...` 於本次實際執行並記錄環境與命令。
+- [x] `make verify` 與 `go test -race -count=1 ./...` 於 macOS 26.5.1 arm64、go1.25.5 實跑通過，commit `34a2536`，工作目錄乾淨。
 - [x] README、architecture 與 CONTEXT 反映實際行為，PR review target 仍清楚標示為未實作。
 
 ### M4

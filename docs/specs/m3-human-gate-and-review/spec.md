@@ -80,6 +80,8 @@ M2 之後，一件工作可以被驗證，通過就停在 REVIEW。流程到此�
 
 **`internal/work` 承接全部新規則，仍然不碰 filesystem、Git 或 subprocess。** 外部事實依舊以參數傳入，沿用 `now time.Time` 的既有模式；決策者身分由 CLI 解析後傳入，domain 不去讀 Git 設定。M3 不需要 `internal/repository` 的任何新能力。
 
+> **實作時的偏離**：上一句在實作中不成立。決策者身分預設取自 Git 的 `user.email`，那必須有人去讀，而 `internal/repository` 是這個專案唯一允許碰 Git 的地方——把 `exec.Command("git")` 放進 `internal/cli` 會是更嚴重的分層破壞。因此新增了 `internal/repository/identity.go` 的 `ConfiguredIdentity`。這一句規劃時漏看了「預設取自 Git 設定」這個要求本身就需要讀 Git。
+
 **Gate 依附單一 Work Item**，不設 Goal 層級 Gate；擋整個 Goal 用 `Goal.BLOCKED`。Gate 保存在同一份 state snapshot 內，與 Work Item 共用同一次受鎖的原子替換，理由同 [ADR-0001](../../adr/0001-evidence-in-state-snapshot.md)。ID 沿用既有的配發方式，由受鎖操作發出遞增序號。
 
 **Gate 集合為 append-only**：Gate 可從 OPEN 轉為 RESOLVED 或 CANCELLED，此後不可再變更也不可刪除。這是它不需要另外複製成 Evidence 的前提（[ADR-0007](../../adr/0007-blocking-is-not-a-status.md) 之外的獨立決定，記於 architecture 的 M3 定案第 2 點）。
