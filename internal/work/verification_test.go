@@ -205,3 +205,68 @@ func TestReclaimRunRecordsAnInterruptionWithoutAnExitCode(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestOrphanReclaimSeparatesRecordingFromStarting draws the line the M3 spec
+// draws: an interrupted run is a fact that already happened, so it is recorded
+// regardless of what is blocking the Work Item, while starting a *new* run is
+// subject to every block. Collapsing the two either loses the fact or opens a
+// way past a Gate.
+func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
+	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
+	revision := "1111111111111111111111111111111111111111"
+	state := NewState()
+	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+		t.Fatal(err)
+	}
+	item, err := state.AddWork("g", "specs/stories/a", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(item.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", now); err != nil {
+		t.Fatal(err)
+	}
+	// The runner dies here, leaving an orphan, and then a question is raised.
+	if _, err := state.OpenGate(item.ID, "Which cache?", []string{"redis", "in-process"}, "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new run must not start: an open Gate blocks verification, and an
+	// abandoned run is not a licence to ignore it.
+	if err := state.CanBeginVerification(item.ID); err == nil {
+		t.Fatal("an orphaned run let verification start past an open gate")
+	}
+	// The fact that a run was interrupted is still recorded.
+	evidence, _, found, err := state.ReclaimRun(item.ID, "make verify", now)
+	if err != nil || !found {
+		t.Fatalf("ReclaimRun = %#v, %v, %v", evidence, found, err)
+	}
+	if evidence.Result != Interrupted || evidence.Revision != revision {
+		t.Fatalf("evidence = %#v", evidence)
+	}
+	if got := state.WorkItemStatus(item.ID); got != Running {
+		t.Fatalf("status after reclaim = %s, want RUNNING", got)
+	}
+
+	// The same holds when the block is an inactive Goal rather than a Gate.
+	if err := state.ResolveGate("GATE-001", "redis", "", "carl@example.com", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BlockGoal("g", "the direction is wrong", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CanBeginVerification(item.ID); err == nil {
+		t.Fatal("an orphaned run let verification start under a blocked goal")
+	}
+	if _, _, found, err := state.ReclaimRun(item.ID, "make verify", now); err != nil || !found {
+		t.Fatalf("a blocked goal discarded an interrupted run: %v, %v", found, err)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

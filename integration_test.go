@@ -1372,3 +1372,84 @@ func headRevision(root string) (string, error) {
 	}
 	return strings.TrimSpace(string(output)), nil
 }
+
+// TestMissingIdentityNamesTheFlagThatFixesIt runs without any Git identity
+// configured, so the default decision maker cannot be resolved. The error has to
+// name a flag that actually exists: guidance that fails when followed is worse
+// than none.
+func TestMissingIdentityNamesTheFlagThatFixesIt(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Which cache?", "--option", "redis", "--option", "in-process")
+	if output, err := exec.Command("git", "-C", root, "config", "--unset", "user.email").CombinedOutput(); err != nil {
+		t.Fatalf("git config --unset: %v: %s", err, output)
+	}
+	// Ignore the machine's own configuration, so the fixture decides what Git
+	// knows rather than whoever is running the tests.
+	withoutIdentity := func(arguments ...string) (string, error) {
+		command := exec.Command(binary, arguments...)
+		command.Dir = root
+		command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		output, err := command.CombinedOutput()
+		return string(output), err
+	}
+
+	output, err := withoutIdentity("gate", "resolve", "GATE-001", "--option", "redis")
+	if err == nil {
+		t.Fatalf("resolved a gate with no identity to record: %s", output)
+	}
+	flag := "--by"
+	if !strings.Contains(output, flag) {
+		t.Fatalf("error %q does not name the flag that fixes it", output)
+	}
+	// The named flag must be the one the command actually accepts.
+	if output, err := withoutIdentity("gate", "resolve", "GATE-001", "--option", "redis", flag, "someone@example.com"); err != nil {
+		t.Fatalf("%s did not fix the error it was offered for: %q, %v", flag, output, err)
+	}
+}
+
+// TestApprovalHeldByAGateSaysWhatIsLeftAfterItCloses covers the state ADR-0008
+// forbids: an approval that did not complete must never sit silently. Once the
+// last blocker is lifted the conditions all hold, and the user has to be told
+// what finishes the work — the completion check runs inside `review approve`,
+// so nothing happens until it is run again.
+func TestApprovalHeldByAGateSaysWhatIsLeftAfterItCloses(t *testing.T) {
+	root, binary := fixture(t)
+	reviewable(t, binary, root)
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Which cache?", "--option", "redis", "--option", "in-process")
+
+	output, err := command(binary, root, "review", "approve", "WI-001")
+	if err != nil {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Not complete") || !strings.Contains(output, "gate") {
+		t.Fatalf("approve %q does not name the gate holding the completion", output)
+	}
+
+	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "redis")
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-001 REVIEW") {
+		t.Fatalf("resolving a gate completed the work on its own: %s", output)
+	}
+	if !strings.Contains(output, "review approve WI-001") {
+		t.Fatalf("status %q leaves an approved, unblocked work item stalled without saying what finishes it", output)
+	}
+
+	if output, err := command(binary, root, "review", "approve", "WI-001"); err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkItemStatus("WI-002") != work.Ready {
+		t.Fatalf("WI-002 = %s, want READY", state.WorkItemStatus("WI-002"))
+	}
+}

@@ -26,7 +26,12 @@ func review(args []string, root string, output io.Writer) error {
 }
 
 func recordReview(args []string, root string, output io.Writer, result work.Result) error {
-	verb := strings.ToLower(string(result))
+	// Name the command, not its outcome: "approved WI-001: ..." on a failure
+	// reads as though the review had succeeded.
+	verb := "review approve"
+	if result == work.Rejected {
+		verb = "review reject"
+	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
 		if result == work.Rejected {
 			return errors.New("usage: forgepilot review reject <work-id> --reason <text> [--by <identity>]")
@@ -120,6 +125,11 @@ func readyDependents(state *work.State, id string) []string {
 // DONE. Since there is no completion command, this is the only place a user can
 // learn what is still missing — staying silent would leave them guessing at an
 // approval that appeared to do nothing.
+//
+// The conditions are checked when an approval is recorded, so lifting the last
+// blocker afterwards — resolving a Gate, unblocking the Goal — leaves work whose
+// conditions all hold but which is still in REVIEW. That case has to speak
+// loudest: there is nothing left to explain, only something left to run.
 func completionSummary(state *work.State, id string) string {
 	if state.WorkItemStatus(id) == work.Done {
 		return ""
@@ -130,7 +140,7 @@ func completionSummary(state *work.State, id string) string {
 	}
 	blockers := state.CompletionBlockers(id)
 	if len(blockers) == 0 {
-		return ""
+		return fmt.Sprintf("Not complete, but every condition now holds: run `forgepilot review approve %s` to finish it", id)
 	}
 	return "Not complete: " + strings.Join(blockers, "; ")
 }
@@ -143,7 +153,10 @@ func reviewSummary(state *work.State, id string) string {
 	if !ok {
 		return "not reviewed"
 	}
-	summary := fmt.Sprintf("%s %s at %s by %s", latest.ID, latest.Result, shortRevision(latest.Revision), latest.Reviewer)
+	// The identity is marked as a claim here too. status is the one place these
+	// records are browsed by someone who did not issue the command, so leaving
+	// the qualifier off exactly here would be leaving it off where it matters.
+	summary := fmt.Sprintf("%s %s at %s by %s (self-asserted)", latest.ID, latest.Result, shortRevision(latest.Revision), latest.Reviewer)
 	if latest.Note != "" {
 		summary += fmt.Sprintf(": %s", latest.Note)
 	}

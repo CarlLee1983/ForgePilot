@@ -243,6 +243,12 @@ func status(args []string, root string, output io.Writer) error {
 			note := ""
 			if item.CurrentRun != nil && !storage.VerificationRunning(root, item.ID) {
 				note = " (runner is gone; run forgepilot verify to recover)"
+				// Recovery happens on the next verify, and verify is refused while
+				// the work is blocked. Telling the user to run a command that will
+				// turn them away is worse than telling them nothing.
+				if state.CanBeginVerification(item.ID) != nil {
+					note = " (runner is gone; the next forgepilot verify records it as INTERRUPTED, but that is blocked for now)"
+				}
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
 				verificationSummary(&state, item.ID, revision), reviewSummary(&state, item.ID)); err != nil {
@@ -316,9 +322,14 @@ func verificationSummary(state *work.State, id, revision string) string {
 	return summary
 }
 
+// abbreviatedRevisionLength is how much of a commit SHA the CLI shows. It is
+// long enough to identify a commit by eye and short enough to keep a status line
+// readable.
+const abbreviatedRevisionLength = 12
+
 func shortRevision(revision string) string {
-	if len(revision) > 12 {
-		return revision[:12]
+	if len(revision) > abbreviatedRevisionLength {
+		return revision[:abbreviatedRevisionLength]
 	}
 	return revision
 }

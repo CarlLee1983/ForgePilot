@@ -80,9 +80,16 @@ func (s *State) Verifiable(id string) error {
 // admits a Work Item left in VERIFYING, because such a run can only be an orphan:
 // the caller reaches this while holding the Work Item's verification lock, so no
 // live runner can exist.
+//
+// Everything that blocks a new run blocks it here too. An abandoned run is not a
+// licence to ignore an open Gate: reclaiming that run is a separate act, and one
+// that ReclaimRun performs without asking this question.
 func (s *State) CanBeginVerification(id string) error {
 	item := s.item(id)
 	if item != nil && item.Status == Verifying && item.CurrentRun != nil {
+		if err := s.gateBlock(id); err != nil {
+			return err
+		}
 		if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
 			return fmt.Errorf("work item %q does not belong to an active goal", id)
 		}

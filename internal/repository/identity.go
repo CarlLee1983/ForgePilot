@@ -15,7 +15,7 @@ func ConfiguredIdentity(root string) (string, error) {
 	output, err := git(root, "config", "--get", "user.email")
 	identity := strings.TrimSpace(output)
 	if err != nil || identity == "" {
-		return "", errors.New("no git user.email is configured; pass --as to state who is deciding")
+		return "", errors.New("no git user.email is configured; pass --by to state who is deciding")
 	}
 	return identity, nil
 }

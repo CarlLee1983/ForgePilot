@@ -130,6 +130,20 @@ func validateGateOptions(gate Gate) error {
 	return nil
 }
 
+// trimmed normalises the options as they are stored. Resolution matches an
+// option exactly, so an option kept with stray whitespace could only be chosen
+// by retyping that whitespace.
+func trimmed(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	normalised := make([]string, 0, len(values))
+	for _, value := range values {
+		normalised = append(normalised, strings.TrimSpace(value))
+	}
+	return normalised
+}
+
 func contains(values []string, wanted string) bool {
 	for _, value := range values {
 		if value == wanted {
@@ -165,7 +179,7 @@ func (s *State) OpenGate(workItemID, question string, options []string, rational
 		ID:         fmt.Sprintf("GATE-%03d", s.NextGateID),
 		WorkItemID: item.ID,
 		Question:   strings.TrimSpace(question),
-		Options:    append([]string(nil), options...),
+		Options:    trimmed(options),
 		Rationale:  rationale,
 		Status:     GateOpen,
 		OpenedAt:   now,

@@ -90,13 +90,24 @@ func upgrade(contents []byte, from int) (work.State, error) {
 	if err := ensureEOF(decoder); err != nil {
 		return work.State{}, fmt.Errorf("read state: %w", err)
 	}
+	// The declared version is a claim about the file, and the file can disagree
+	// with it — a hand-edited header on a newer snapshot is the obvious way. The
+	// containers a step is meant to create must therefore be empty before it
+	// creates them; filling them in regardless would silently delete the exact
+	// history this product exists to keep.
 	if from < 2 {
 		// v1 → v2 introduced the Evidence container and its ID counter.
+		if len(state.Evidence) > 0 || state.NextEvidenceID > 1 {
+			return work.State{}, fmt.Errorf("state declares schema version %d but already carries evidence; refusing to migrate over it", from)
+		}
 		state.NextEvidenceID = 1
 		state.Evidence = nil
 	}
 	if from < 3 {
 		// v2 → v3 introduces the Gate container and its ID counter.
+		if len(state.Gates) > 0 || state.NextGateID > 1 {
+			return work.State{}, fmt.Errorf("state declares schema version %d but already carries gates; refusing to migrate over it", from)
+		}
 		state.NextGateID = 1
 		state.Gates = nil
 	}

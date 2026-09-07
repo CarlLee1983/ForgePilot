@@ -310,3 +310,49 @@ func TestMigrateWalksEveryVersionInOneStep(t *testing.T) {
 		t.Fatalf("migration lost work items: %#v", state.WorkItems)
 	}
 }
+
+// TestMigrateRefusesToDiscardWhatAStepWouldCreate guards the one way a version
+// header can lie: it is a claim about the file, and a hand-edited header on a
+// newer snapshot would otherwise send the migration through a step that empties
+// containers the file already fills.
+func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	// A current snapshot carrying evidence, with its version header rewound.
+	v2State(t, root)
+	if migrated, err := Migrate(root); err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	path := filepath.Join(root, stateDirectory, "state.json")
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewound := strings.Replace(string(current), `"schema_version": 3`, `"schema_version": 1`, 1)
+	if rewound == string(current) {
+		t.Fatalf("failed to rewind the version header of %s", current)
+	}
+	if err := os.WriteFile(path, []byte(rewound), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The v1 backup from the first migration is gone, so nothing blocks on that.
+	if err := os.Remove(filepath.Join(root, stateDirectory, "state.json.v2.bak")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Migrate(root); err == nil {
+		t.Fatal("migrated a snapshot whose header understated what it carries")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != rewound {
+		t.Fatal("a refused migration still modified the state")
+	}
+}

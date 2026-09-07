@@ -265,3 +265,20 @@ func TestClosingAGateDoesNotChangeTheWorkItemStatus(t *testing.T) {
 		t.Fatalf("closing a gate changed the status to %s", got)
 	}
 }
+
+// TestGateOptionsAreStoredTrimmed keeps an option choosable. Resolution matches
+// exactly, so an option kept with stray whitespace could only be selected by
+// retyping that whitespace.
+func TestGateOptionsAreStoredTrimmed(t *testing.T) {
+	state, now := gateFixture(t)
+	gate, err := state.OpenGate("WI-001", "Which cache?", []string{" redis", "in-process "}, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Options[0] != "redis" || gate.Options[1] != "in-process" {
+		t.Fatalf("options = %#v", gate.Options)
+	}
+	if err := state.ResolveGate(gate.ID, "redis", "", "carl@example.com", now); err != nil {
+		t.Fatalf("an option could not be chosen as it reads: %v", err)
+	}
+}

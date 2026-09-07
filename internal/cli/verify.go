@@ -121,9 +121,5 @@ func beginRun(id, root, revision, worktree string, output io.Writer) error {
 }
 
 func worktreePath(root, id, revision string) string {
-	short := revision
-	if len(short) > 12 {
-		short = short[:12]
-	}
-	return filepath.Join(root, ".forgepilot", "worktrees", fmt.Sprintf("%s-%s", id, short))
+	return filepath.Join(root, ".forgepilot", "worktrees", fmt.Sprintf("%s-%s", id, shortRevision(revision)))
 }

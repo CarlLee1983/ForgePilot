@@ -128,11 +128,19 @@ func (s *State) AddWork(goalID, story string, dependencies []string, now time.Ti
 	return created, nil
 }
 
+// RefreshReady promotes PENDING work whose dependencies have all completed. It
+// only promotes within an ACTIVE Goal: Next already refuses to select anything
+// else, and marking work READY under a Goal that is paused or abandoned would
+// leave two parts of the product disagreeing about the same fact.
 func (s *State) RefreshReady(now time.Time) {
 	for i := range s.WorkItems {
-		if s.WorkItems[i].Status == Pending && s.dependenciesDone(s.WorkItems[i].DependsOn) {
-			s.WorkItems[i].Status, s.WorkItems[i].UpdatedAt = Ready, now
+		if s.WorkItems[i].Status != Pending || !s.dependenciesDone(s.WorkItems[i].DependsOn) {
+			continue
 		}
+		if goal := s.goal(s.WorkItems[i].GoalID); goal == nil || goal.Status != GoalActive {
+			continue
+		}
+		s.WorkItems[i].Status, s.WorkItems[i].UpdatedAt = Ready, now
 	}
 }
 
