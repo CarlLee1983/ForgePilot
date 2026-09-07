@@ -334,6 +334,13 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note 
 	s.Evidence = append(s.Evidence, evidence)
 	if result == Rejected {
 		item.Status, item.UpdatedAt = Running, now
+		return evidence, nil
+	}
+	// The approval is recorded either way. Whether it also completes the work is
+	// decided here, in the same transaction, by conditions rather than by a
+	// command anyone could issue.
+	if len(s.CompletionBlockers(id)) == 0 {
+		s.complete(id, now)
 	}
 	return evidence, nil
 }
@@ -356,6 +363,12 @@ func (s *State) takeEvidenceID() string {
 func (s *State) Stale(id, revision string) bool {
 	latest, ok := s.LatestVerification(id)
 	if !ok || revision == "" {
+		return false
+	}
+	// Completed work is never stale. DONE means "finished at that revision",
+	// which later commits do not make false, so the prompt to re-verify would
+	// correspond to no action anyone should take (ADR-0006).
+	if s.WorkItemStatus(id) == Done {
 		return false
 	}
 	return latest.Revision != revision

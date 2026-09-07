@@ -1043,3 +1043,109 @@ func TestReviewRecordsAJudgementBesideTheVerification(t *testing.T) {
 		t.Fatalf("evidence = %#v", approval)
 	}
 }
+
+func TestApprovalCompletesWorkAndUnlocksTheQueue(t *testing.T) {
+	root, binary := fixture(t)
+	revision := reviewable(t, binary, root)
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/c.md",
+		"--depends-on", "WI-001", "--depends-on", "WI-002")
+
+	output, err := command(binary, root, "review", "approve", "WI-001")
+	if err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-002 READY") {
+		t.Fatalf("approve did not report the unlocked dependent: %s", output)
+	}
+
+	// A separate process reads back the completion and the unlock together:
+	// there is no moment at which WI-001 is DONE while WI-002 still waits.
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkItemStatus("WI-001") != work.Done {
+		t.Fatalf("WI-001 = %s, want DONE", state.WorkItemStatus("WI-001"))
+	}
+	if state.WorkItemStatus("WI-002") != work.Ready {
+		t.Fatalf("WI-002 = %s, want READY", state.WorkItemStatus("WI-002"))
+	}
+	if state.WorkItemStatus("WI-003") != work.Pending {
+		t.Fatalf("WI-003 = %s, want PENDING: WI-002 is not done yet", state.WorkItemStatus("WI-003"))
+	}
+
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-001 DONE") || !strings.Contains(output, "Next: WI-002") {
+		t.Fatalf("status = %s", output)
+	}
+	// Completed work still shows the revision it finished on.
+	if !strings.Contains(output, revision[:12]) {
+		t.Fatalf("status %q does not show the revision WI-001 completed on", output)
+	}
+
+	// Later commits do not make a completion stale, and nothing reopens it.
+	writeVerify(t, root, "verify:\n\t@echo moved on\n")
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if strings.Contains(output, "stale") {
+		t.Fatalf("completed work was marked stale after a later commit: %s", output)
+	}
+	for _, arguments := range [][]string{
+		{"done", "WI-002"}, {"complete", "WI-002"}, {"reopen", "WI-001"},
+		{"start", "WI-001"}, {"verify", "WI-001"}, {"review", "approve", "WI-001"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v gave a way into or out of DONE: %s", arguments, output)
+		}
+	}
+}
+
+func TestApprovalAheadOfVerificationRecordsButDoesNotComplete(t *testing.T) {
+	root, binary := fixture(t)
+	reviewable(t, binary, root)
+	// Move HEAD on: the PASS now covers a revision the approval will not.
+	moved := writeVerify(t, root, "verify:\n\t@echo checked again\n")
+
+	output, err := command(binary, root, "review", "approve", "WI-001")
+	if err != nil {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-001 REVIEW") {
+		t.Fatalf("work completed on a revision that was never verified: %s", output)
+	}
+	if !strings.Contains(output, "Not complete") {
+		t.Fatalf("approve %q did not say why the work is not complete", output)
+	}
+
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Not complete") || !strings.Contains(output, moved[:12]) {
+		t.Fatalf("status %q does not explain the revision mismatch", output)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest, ok := state.LatestReview("WI-001"); !ok || latest.Result != work.Approved {
+		t.Fatalf("the approval itself was not recorded: %#v, %v", latest, ok)
+	}
+	if state.WorkItemStatus("WI-002") != work.Pending {
+		t.Fatal("a dependent was unlocked without a completion")
+	}
+
+	// Verifying the revision that was approved completes it.
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "review", "approve", "WI-001")
+	if err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+}

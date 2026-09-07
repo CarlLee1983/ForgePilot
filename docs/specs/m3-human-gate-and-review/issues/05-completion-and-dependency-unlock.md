@@ -8,17 +8,17 @@
 
 **Blocked by:** 03, 04
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 四項條件全部滿足時，approve 於同一交易內讓工作進入 DONE
-- [ ] 未驗證、或最新 Verification 非 PASS 時不完成
-- [ ] approve 當下的 HEAD 與最新 PASS 的 revision 不同時，審查仍被記錄但不完成，且 `status` 說明未完成的原因
-- [ ] 同一 revision 上較新的 FAIL 勝過較舊的 PASS；較新的 REJECTED 勝過較舊的 APPROVED
-- [ ] 有未解除 Gate 時不完成
-- [ ] Goal 非 ACTIVE 時不完成
-- [ ] 完成後，全部依賴皆為 DONE 的下游工作在同一交易內轉為 READY
-- [ ] 仍有其他未完成依賴的下游工作不被解鎖
-- [ ] 新 process 讀回時只會看到解鎖前或解鎖後，不存在「A 已 DONE 但 B 仍 PENDING」的中間狀態
-- [ ] 產品中不存在任何能直接寫入 DONE 的指令或路徑，也不存在 reopen
-- [ ] DONE 的工作不被標示 stale，但仍顯示其完成時的 revision
-- [ ] `make verify` 通過
+- [x] 四項條件全部滿足時，approve 於同一交易內讓工作進入 DONE
+- [x] 未驗證、或最新 Verification 非 PASS 時不完成
+- [x] approve 當下的 HEAD 與最新 PASS 的 revision 不同時，審查仍被記錄但不完成，且 `status` 說明未完成的原因
+- [x] 同一 revision 上較新的 FAIL 勝過較舊的 PASS；較新的 REJECTED 勝過較舊的 APPROVED
+- [x] 有未解除 Gate 時不完成
+- [x] Goal 非 ACTIVE 時不完成
+- [x] 完成後，全部依賴皆為 DONE 的下游工作在同一交易內轉為 READY
+- [x] 仍有其他未完成依賴的下游工作不被解鎖
+- [x] 新 process 讀回時只會看到解鎖前或解鎖後，不存在「A 已 DONE 但 B 仍 PENDING」的中間狀態
+- [x] 產品中不存在任何能直接寫入 DONE 的指令或路徑，也不存在 reopen
+- [x] DONE 的工作不被標示 stale，但仍顯示其完成時的 revision
+- [x] `make verify` 通過

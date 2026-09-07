@@ -146,3 +146,174 @@ func TestRejectionReturnsWorkToRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// approveAt drives a Work Item that is already in REVIEW through an approval at
+// the given revision.
+func approveAt(t *testing.T, state *State, id, revision string, now time.Time) {
+	t.Helper()
+	if _, err := state.RecordReview(id, revision, Approved, "carl@example.com", "", now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApprovalCompletesWorkAndUnlocksDependents(t *testing.T) {
+	state, now, revision := reviewFixture(t)
+	// A third item that depends on both, so unlocking has something to refuse.
+	if _, err := state.AddWork("g", "specs/stories/c", []string{"WI-001", "WI-002"}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	approveAt(t, &state, "WI-001", revision, now)
+	if got := state.WorkItemStatus("WI-001"); got != Done {
+		t.Fatalf("status after approval = %s, want DONE", got)
+	}
+	if blockers := state.CompletionBlockers("WI-001"); len(blockers) != 0 {
+		t.Fatalf("completed work still reports blockers: %v", blockers)
+	}
+	// Every dependency of WI-002 is now DONE, so it is unlocked in the same
+	// transaction. WI-003 still waits on WI-002 and must not be.
+	if got := state.WorkItemStatus("WI-002"); got != Ready {
+		t.Fatalf("status of the unlocked dependent = %s, want READY", got)
+	}
+	if got := state.WorkItemStatus("WI-003"); got != Pending {
+		t.Fatalf("status of the still-blocked dependent = %s, want PENDING", got)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	// DONE is terminal: nothing reviews, verifies or restarts it again.
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "changed my mind", now); err == nil {
+		t.Fatal("reviewed completed work")
+	}
+	if err := state.Verifiable("WI-001"); err == nil {
+		t.Fatal("verified completed work")
+	}
+	if err := state.Start("WI-001", now); err == nil {
+		t.Fatal("restarted completed work")
+	}
+}
+
+func TestCompletionRequiresAPassAtTheApprovedRevision(t *testing.T) {
+	state, now, revision := reviewFixture(t)
+	other := "2222222222222222222222222222222222222222"
+
+	// Approving at a revision the PASS does not cover records the review but
+	// completes nothing, and says why.
+	approveAt(t, &state, "WI-001", other, now)
+	if got := state.WorkItemStatus("WI-001"); got != Review {
+		t.Fatalf("status = %s, want REVIEW when the approval names another revision", got)
+	}
+	blockers := state.CompletionBlockers("WI-001")
+	if len(blockers) == 0 {
+		t.Fatal("no reason given for work that was approved but not completed")
+	}
+	if !strings.Contains(strings.Join(blockers, "; "), "revision") {
+		t.Fatalf("blockers %v do not explain the revision mismatch", blockers)
+	}
+	if got := state.WorkItemStatus("WI-002"); got != Pending {
+		t.Fatalf("a dependent was unlocked without a completion: %s", got)
+	}
+
+	// Verifying that revision and approving it again does complete the work.
+	if err := state.BeginVerification("WI-001", other, "/tmp/worktree", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordVerification("WI-001", other, "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	approveAt(t, &state, "WI-001", other, now)
+	if got := state.WorkItemStatus("WI-001"); got != Done {
+		t.Fatalf("status = %s, want DONE", got)
+	}
+	_ = revision
+}
+
+// TestTheLatestResultWinsOnTheSameRevision is what makes re-running a check
+// worth doing: a later FAIL or REJECTED overrides the earlier good result rather
+// than being outvoted by it.
+func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
+	state, now, revision := reviewFixture(t)
+
+	// A newer FAIL on the same revision beats the older PASS: the FAIL returns
+	// the work to RUNNING, so there is nothing to approve.
+	if err := state.BeginVerification("WI-001", revision, "/tmp/worktree", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordVerification("WI-001", revision, "make verify", 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.WorkItemStatus("WI-001"); got != Running {
+		t.Fatalf("status after FAIL = %s, want RUNNING", got)
+	}
+	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", now); err == nil {
+		t.Fatal("approved work whose latest verification failed")
+	}
+
+	// A newer REJECTED on the same revision beats the older APPROVED. Getting
+	// back to REVIEW takes a fresh PASS, and the rejection then holds.
+	if err := state.BeginVerification("WI-001", revision, "/tmp/worktree", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordVerification("WI-001", revision, "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "found a leak", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.WorkItemStatus("WI-001"); got != Running {
+		t.Fatalf("status after REJECTED = %s, want RUNNING", got)
+	}
+	latest, ok := state.LatestReview("WI-001")
+	if !ok || latest.Result != Rejected {
+		t.Fatalf("LatestReview = %#v, %v, want the newer REJECTED", latest, ok)
+	}
+}
+
+func TestOpenGatesAndInactiveGoalsBlockCompletion(t *testing.T) {
+	state, now, revision := reviewFixture(t)
+	if _, err := state.OpenGate("WI-001", "Which cache?", []string{"redis", "in-process"}, "", now); err != nil {
+		t.Fatal(err)
+	}
+	approveAt(t, &state, "WI-001", revision, now)
+	if got := state.WorkItemStatus("WI-001"); got != Review {
+		t.Fatalf("status = %s, want REVIEW while a gate is open", got)
+	}
+	if !strings.Contains(strings.Join(state.CompletionBlockers("WI-001"), "; "), "gate") {
+		t.Fatalf("blockers %v do not name the open gate", state.CompletionBlockers("WI-001"))
+	}
+	if err := state.ResolveGate("GATE-001", "redis", "", "carl@example.com", now); err != nil {
+		t.Fatal(err)
+	}
+
+	// A Goal that is not ACTIVE blocks reaching DONE, but not recording what
+	// already happened.
+	state.Goals[0].Status = GoalBlocked
+	approveAt(t, &state, "WI-001", revision, now)
+	if got := state.WorkItemStatus("WI-001"); got != Review {
+		t.Fatalf("status = %s, want REVIEW while the goal is not active", got)
+	}
+	if !strings.Contains(strings.Join(state.CompletionBlockers("WI-001"), "; "), "goal") {
+		t.Fatalf("blockers %v do not name the inactive goal", state.CompletionBlockers("WI-001"))
+	}
+
+	state.Goals[0].Status = GoalActive
+	approveAt(t, &state, "WI-001", revision, now)
+	if got := state.WorkItemStatus("WI-001"); got != Done {
+		t.Fatalf("status = %s, want DONE once every condition holds", got)
+	}
+}
+
+// TestCompletedWorkIsNeverStale keeps a warning that implies no action from
+// accumulating until the user starts ignoring every warning.
+func TestCompletedWorkIsNeverStale(t *testing.T) {
+	state, now, revision := reviewFixture(t)
+	approveAt(t, &state, "WI-001", revision, now)
+	if state.Stale("WI-001", "3333333333333333333333333333333333333333") {
+		t.Fatal("completed work was marked stale against a later revision")
+	}
+	latest, ok := state.LatestVerification("WI-001")
+	if !ok || latest.Revision != revision {
+		t.Fatalf("completed work no longer shows the revision it finished on: %#v", latest)
+	}
+}

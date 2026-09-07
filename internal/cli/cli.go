@@ -184,6 +184,11 @@ func status(args []string, root string, output io.Writer) error {
 				verificationSummary(&state, item.ID, revision), reviewSummary(&state, item.ID)); err != nil {
 				return err
 			}
+			if unfinished := completionSummary(&state, item.ID); unfinished != "" {
+				if _, err := fmt.Fprintf(output, "    %s\n", unfinished); err != nil {
+					return err
+				}
+			}
 			for _, line := range gateSummary(&state, item.ID) {
 				if _, err := fmt.Fprintf(output, "    %s\n", line); err != nil {
 					return err

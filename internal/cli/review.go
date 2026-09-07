@@ -66,6 +66,8 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 
 	var evidence work.Evidence
 	var status work.Status
+	var unfinished string
+	var unlocked []string
 	if err := storage.Update(root, func(state *work.State) error {
 		var recordErr error
 		evidence, recordErr = state.RecordReview(id, revision, result, reviewer, note, now())
@@ -73,13 +75,64 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 			return recordErr
 		}
 		status = state.WorkItemStatus(id)
+		unfinished = completionSummary(state, id)
+		if status == work.Done {
+			unlocked = readyDependents(state, id)
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("%s %s: %w", verb, id, err)
 	}
-	_, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\nReviewed by: %s (self-asserted; ForgePilot does not authenticate identities)\n",
-		evidence.ID, evidence.Result, shortRevision(evidence.Revision), id, status, reviewer)
+	if _, err := fmt.Fprintf(output, "%s %s at %s\n%s %s\nReviewed by: %s (self-asserted; ForgePilot does not authenticate identities)\n",
+		evidence.ID, evidence.Result, shortRevision(evidence.Revision), id, status, reviewer); err != nil {
+		return err
+	}
+	for _, dependent := range unlocked {
+		if _, err := fmt.Fprintf(output, "%s READY\n", dependent); err != nil {
+			return err
+		}
+	}
+	if unfinished != "" {
+		_, err = fmt.Fprintln(output, unfinished)
+	}
 	return err
+}
+
+// readyDependents names the work a completion has just unlocked, so the user
+// sees the queue move rather than having to go looking for it.
+func readyDependents(state *work.State, id string) []string {
+	var unlocked []string
+	for _, item := range state.WorkItems {
+		if item.Status != work.Ready {
+			continue
+		}
+		for _, dependency := range item.DependsOn {
+			if dependency == id {
+				unlocked = append(unlocked, item.ID)
+				break
+			}
+		}
+	}
+	return unlocked
+}
+
+// completionSummary explains why work that has been approved has not reached
+// DONE. Since there is no completion command, this is the only place a user can
+// learn what is still missing — staying silent would leave them guessing at an
+// approval that appeared to do nothing.
+func completionSummary(state *work.State, id string) string {
+	if state.WorkItemStatus(id) == work.Done {
+		return ""
+	}
+	latest, ok := state.LatestReview(id)
+	if !ok || latest.Result != work.Approved {
+		return ""
+	}
+	blockers := state.CompletionBlockers(id)
+	if len(blockers) == 0 {
+		return ""
+	}
+	return "Not complete: " + strings.Join(blockers, "; ")
 }
 
 // reviewSummary describes a Work Item's latest Human Review. Work nobody has
