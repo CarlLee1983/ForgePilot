@@ -608,13 +608,17 @@ func TestVerifyRefusesWhenTheRevisionHasNoCanonicalCheck(t *testing.T) {
 // TestRefusedVerifyLeavesStateUntouched pins the ordering the spec requires:
 // preconditions are checked before anything is written, so a command the user
 // sees fail has not quietly reclaimed an orphan or moved the work item.
-func TestRefusedVerifyLeavesStateUntouched(t *testing.T) {
+// TestRefusedVerifyWritesOnlyTheRunThatEnded pins how much a refused verify is
+// allowed to write. Reclaiming an abandoned run is a recording of something that
+// already happened and survives the refusal; everything else a verify does is
+// starting a new run, and none of that may happen.
+func TestRefusedVerifyWritesOnlyTheRunThatEnded(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
 	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
 	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
-	writeVerify(t, root, "verify:\n\t@sleep 30\n")
+	slow := writeVerify(t, root, "verify:\n\t@sleep 30\n")
 
 	running := startVerify(t, binary, root, "WI-001")
 	if err := running.Process.Kill(); err != nil {
@@ -626,12 +630,38 @@ func TestRefusedVerifyLeavesStateUntouched(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("uncommitted\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	output, err := command(binary, root, "verify", "WI-001")
+	if err == nil {
+		t.Fatalf("verified a dirty worktree: %s", output)
+	}
+	if !strings.Contains(output, "clean") {
+		t.Fatalf("error %q does not explain the worktree is not clean", output)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 1 {
+		t.Fatalf("evidence = %#v, want only the run that ended", state.Evidence)
+	}
+	if got := state.Evidence[0]; got.Result != work.Interrupted || got.Revision != slow {
+		t.Fatalf("evidence = %#v, want INTERRUPTED at %s", got, slow)
+	}
+	// No new run was started: the refusal held for everything except the record.
+	if state.WorkItemStatus("WI-001") != work.Running || state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("WI-001 = %#v, want RUNNING with no run in flight", state.WorkItems[0])
+	}
+	if entries, err := os.ReadDir(filepath.Join(root, ".forgepilot", "worktrees")); err == nil && len(entries) != 0 {
+		t.Fatalf("a refused verification left worktrees behind: %v", entries)
+	}
+
+	// With nothing left to reclaim, a refused verify writes nothing at all.
 	before, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := command(binary, root, "verify", "WI-001")
-	if err == nil {
+	if output, err := command(binary, root, "verify", "WI-001"); err == nil {
 		t.Fatalf("verified a dirty worktree: %s", output)
 	}
 	after, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
@@ -639,7 +669,7 @@ func TestRefusedVerifyLeavesStateUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(before) != string(after) {
-		t.Fatalf("a refused verification wrote to state:\nbefore %s\nafter  %s", before, after)
+		t.Fatalf("a refused verification with nothing to reclaim wrote to state:\nbefore %s\nafter  %s", before, after)
 	}
 }
 
@@ -1451,5 +1481,78 @@ func TestApprovalHeldByAGateSaysWhatIsLeftAfterItCloses(t *testing.T) {
 	}
 	if state.WorkItemStatus("WI-002") != work.Ready {
 		t.Fatalf("WI-002 = %s, want READY", state.WorkItemStatus("WI-002"))
+	}
+}
+
+// TestOrphanIsReclaimedEvenWhenANewRunIsRefused separates the two things verify
+// does. An interrupted run is a fact that already happened, so it is recorded
+// whatever is blocking the Work Item; starting a *new* run is subject to every
+// block. Refusing both together would leave the fact unrecorded and the Work
+// Item stuck in VERIFYING with no way out until the block lifted.
+func TestOrphanIsReclaimedEvenWhenANewRunIsRefused(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	// Long enough that the test decides when the run ends, never the clock.
+	slow := writeVerify(t, root, "verify:\n\t@sleep 30\n")
+
+	running := startVerify(t, binary, root, "WI-001")
+	if err := running.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.Wait()
+
+	// A question is raised before anyone gets round to re-verifying.
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Which cache?", "--option", "redis", "--option", "in-process")
+
+	output, err := command(binary, root, "verify", "WI-001")
+	if err == nil {
+		t.Fatalf("started a new run past an open gate: %s", output)
+	}
+	if !strings.Contains(output, "GATE-001") {
+		t.Fatalf("error %q does not name the gate that blocks the new run", output)
+	}
+	if !strings.Contains(output, "INTERRUPTED") {
+		t.Fatalf("output %q does not report the run it reclaimed", output)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, ok := state.LatestVerification("WI-001")
+	if !ok || latest.Result != work.Interrupted || latest.Revision != slow {
+		t.Fatalf("the killed run was not recorded: %#v, %v", latest, ok)
+	}
+	if latest.ExitCode != nil {
+		t.Fatalf("an interruption was given an exit code: %#v", latest)
+	}
+	if state.WorkItemStatus("WI-001") != work.Running || state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("WI-001 = %#v, want RUNNING with no run in flight", state.WorkItems[0])
+	}
+	if entries, err := os.ReadDir(filepath.Join(root, ".forgepilot", "worktrees")); err == nil && len(entries) != 0 {
+		t.Fatalf("the abandoned run's worktree was left behind: %v", entries)
+	}
+
+	// Reclaiming happens once: a second refused verify has nothing left to record.
+	if output, err := command(binary, root, "verify", "WI-001"); err == nil {
+		t.Fatalf("started a new run past an open gate: %s", output)
+	} else if strings.Contains(output, "INTERRUPTED") {
+		t.Fatalf("a second refusal recorded another interruption: %s", output)
+	}
+	if state, err := storage.Load(root); err != nil {
+		t.Fatal(err)
+	} else if len(state.Evidence) != 1 {
+		t.Fatalf("evidence = %#v", state.Evidence)
+	}
+
+	// With the question answered, verification proceeds normally.
+	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "redis")
+	writeVerify(t, root, passingVerify)
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
 	}
 }

@@ -242,13 +242,9 @@ func status(args []string, root string, output io.Writer) error {
 			// status is a pure query, and reclaiming it would be a write.
 			note := ""
 			if item.CurrentRun != nil && !storage.VerificationRunning(root, item.ID) {
+				// verify reclaims an abandoned run before anything can refuse the
+				// command, so this instruction works even when the work is blocked.
 				note = " (runner is gone; run forgepilot verify to recover)"
-				// Recovery happens on the next verify, and verify is refused while
-				// the work is blocked. Telling the user to run a command that will
-				// turn them away is worse than telling them nothing.
-				if state.CanBeginVerification(item.ID) != nil {
-					note = " (runner is gone; the next forgepilot verify records it as INTERRUPTED, but that is blocked for now)"
-				}
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
 				verificationSummary(&state, item.ID, revision), reviewSummary(&state, item.ID)); err != nil {

@@ -78,7 +78,7 @@ ForgePilot 會確認工作樹乾淨、解析目前的 HEAD，在 `.forgepilot/wo
 
 之後每新增一個 commit，`status` 就會把先前的 PASS 標示為 stale：它保留為歷史，但不適用於新的 revision，要重新取得適用的 Evidence 就再跑一次 `verify`。
 
-驗證中斷（Ctrl-C、關掉終端機、機器重開）不會留下假結果：下一次 `verify` 會把那次執行記為 INTERRUPTED 並退回 RUNNING。
+驗證中斷（Ctrl-C、關掉終端機、機器重開）不會留下假結果：下一次 `verify` 會把那次執行記為 INTERRUPTED 並退回 RUNNING。這件事在任何拒絕之前發生，所以就算那件工作此刻被 Gate 擋著、`verify` 會被拒絕，中斷仍然被記錄下來——被擋住的是開始新的執行，不是記錄已經發生的事。
 
 ### 遇到需要人決定的問題
 

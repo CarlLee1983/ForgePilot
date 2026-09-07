@@ -25,9 +25,15 @@ func verify(args []string, root string, output io.Writer) error {
 }
 
 func runVerification(id, root string, output io.Writer) error {
-	// Everything that can refuse the command happens before anything is written.
-	// A user who sees this command fail must be able to trust that it changed
-	// nothing — including that it did not quietly reclaim an abandoned run.
+	// An abandoned run is a fact that already happened, so it is recorded before
+	// anything is allowed to refuse the command: a block stops new work, not the
+	// recording of what is already over. Reclaiming is never quiet — it is
+	// reported even when the command then refuses to start a new run. See
+	// docs/adr/0009-reclaim-before-refusing.md.
+	if err := reclaimOrphan(id, root, output); err != nil {
+		return err
+	}
+	// From here nothing else is written until every refusal has been passed.
 	state, err := storage.Load(root)
 	if err != nil {
 		return err
@@ -93,31 +99,44 @@ func runVerification(id, root string, output io.Writer) error {
 	return err
 }
 
-// beginRun closes out any abandoned run and marks the new one in a single
-// transaction, as the state machine requires: a Work Item is never briefly left
-// with neither an outcome for its old run nor a record of its new one.
-func beginRun(id, root, revision, worktree string, output io.Writer) error {
+// reclaimOrphan closes out a run that was abandoned, recording it as INTERRUPTED
+// and returning the Work Item to RUNNING. The caller holds the Work Item's
+// verification lock, so a run still marked in flight can only be an orphan: no
+// live runner can exist.
+//
+// It asks nothing about Gates or the Goal. Whether a new run may start is a
+// separate question, decided after this and by different rules.
+func reclaimOrphan(id, root string, output io.Writer) error {
 	var reclaimed work.Evidence
 	var abandoned string
 	var found bool
 	if err := storage.Update(root, func(state *work.State) error {
 		var err error
-		if reclaimed, abandoned, found, err = state.ReclaimRun(id, repository.CanonicalCommand, now()); err != nil {
-			return err
-		}
-		return state.BeginVerification(id, revision, worktree, now())
+		reclaimed, abandoned, found, err = state.ReclaimRun(id, repository.CanonicalCommand, now())
+		return err
 	}); err != nil {
 		return err
 	}
 	if !found {
 		return nil
 	}
-	// The abandoned run's own worktree, taken from state rather than recomputed.
-	if abandoned != "" && abandoned != worktree {
+	// The abandoned run's own worktree, taken from state rather than recomputed:
+	// state holds where that run actually ran, which survives changes to the
+	// naming scheme or the layout.
+	if abandoned != "" {
 		_ = repository.RemoveWorktree(root, abandoned)
 	}
 	_, err := fmt.Fprintf(output, "%s %s at %s (previous run did not finish)\n", reclaimed.ID, reclaimed.Result, reclaimed.Revision)
 	return err
+}
+
+// beginRun marks a new Verification Run in flight. Any abandoned run has already
+// been closed out by reclaimOrphan, so a Work Item is never left with neither an
+// outcome for its old run nor a record of its new one.
+func beginRun(id, root, revision, worktree string, output io.Writer) error {
+	return storage.Update(root, func(state *work.State) error {
+		return state.BeginVerification(id, revision, worktree, now())
+	})
 }
 
 func worktreePath(root, id, revision string) string {
