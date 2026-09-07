@@ -13,16 +13,23 @@ import (
 // that immutable history stays readable when Human Review Evidence arrives.
 type EvidenceType string
 
-const VerificationEvidence EvidenceType = "verification"
+const (
+	VerificationEvidence EvidenceType = "verification"
+	ReviewEvidence       EvidenceType = "review"
+)
 
-// Result is the outcome of a Verification Run. Interrupted means no result was
-// produced; it must never be reported as a failure.
+// Result is the outcome an Evidence record carries. PASS, FAIL and INTERRUPTED
+// belong to a Verification Run — INTERRUPTED means no result was produced and
+// must never be reported as a failure. APPROVED and REJECTED belong to a Human
+// Review: a person's judgement about the same revision the machine checked.
 type Result string
 
 const (
 	Pass        Result = "PASS"
 	Fail        Result = "FAIL"
 	Interrupted Result = "INTERRUPTED"
+	Approved    Result = "APPROVED"
+	Rejected    Result = "REJECTED"
 )
 
 // Evidence is an immutable record binding one outcome to one exact revision.
@@ -111,11 +118,8 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 	if revision == "" {
 		return Evidence{}, errors.New("evidence requires a revision")
 	}
-	if s.NextEvidenceID < 1 {
-		s.NextEvidenceID = 1
-	}
 	evidence := Evidence{
-		ID:         fmt.Sprintf("EV-%03d", s.NextEvidenceID),
+		ID:         s.takeEvidenceID(),
 		Type:       VerificationEvidence,
 		Repository: goal.Repository,
 		WorkItemID: item.ID,
@@ -126,7 +130,6 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 		Result:     result,
 		CreatedAt:  now,
 	}
-	s.NextEvidenceID++
 	s.Evidence = append(s.Evidence, evidence)
 	item.CurrentRun = nil
 	switch result {
@@ -151,22 +154,42 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 			return fmt.Errorf("duplicate evidence %q", record.ID)
 		}
 		seen[record.ID] = true
-		if record.Type != VerificationEvidence {
-			return fmt.Errorf("evidence %q has unknown type %q", record.ID, record.Type)
-		}
-		switch record.Result {
-		case Pass, Fail, Interrupted:
-		default:
-			return fmt.Errorf("evidence %q has unknown result %q", record.ID, record.Result)
-		}
 		if record.Revision == "" {
 			return fmt.Errorf("evidence %q has no revision", record.ID)
 		}
-		if (record.Result == Interrupted) != (record.ExitCode == nil) {
-			return fmt.Errorf("evidence %q pairs result %q with the wrong exit code", record.ID, record.Result)
-		}
-		if record.Reviewer != "" || record.Note != "" {
-			return fmt.Errorf("evidence %q is a verification but carries review fields", record.ID)
+		switch record.Type {
+		case VerificationEvidence:
+			switch record.Result {
+			case Pass, Fail, Interrupted:
+			default:
+				return fmt.Errorf("evidence %q is a verification with result %q", record.ID, record.Result)
+			}
+			if (record.Result == Interrupted) != (record.ExitCode == nil) {
+				return fmt.Errorf("evidence %q pairs result %q with the wrong exit code", record.ID, record.Result)
+			}
+			if record.Reviewer != "" || record.Note != "" {
+				return fmt.Errorf("evidence %q is a verification but carries review fields", record.ID)
+			}
+		case ReviewEvidence:
+			switch record.Result {
+			case Approved, Rejected:
+			default:
+				return fmt.Errorf("evidence %q is a review with result %q", record.ID, record.Result)
+			}
+			// A review is a judgement, not a command that ran: it has no exit code
+			// and no command, and recording either would invite a reader to treat
+			// one kind of Evidence as the other.
+			if record.ExitCode != nil || record.Command != "" {
+				return fmt.Errorf("evidence %q is a review but carries verification fields", record.ID)
+			}
+			if record.Reviewer == "" {
+				return fmt.Errorf("evidence %q is a review with no reviewer", record.ID)
+			}
+			if record.Result == Rejected && strings.TrimSpace(record.Note) == "" {
+				return fmt.Errorf("evidence %q rejects without a reason", record.ID)
+			}
+		default:
+			return fmt.Errorf("evidence %q has unknown type %q", record.ID, record.Type)
 		}
 		if _, ok := items[record.WorkItemID]; !ok {
 			return fmt.Errorf("evidence %q refers to unknown work item %q", record.ID, record.WorkItemID)
@@ -251,6 +274,79 @@ func (s *State) LatestVerification(id string) (Evidence, bool) {
 		}
 	}
 	return Evidence{}, false
+}
+
+// LatestReview returns the most recent Human Review Evidence for a Work Item.
+// A newer judgement always wins over an older one: a reviewer is allowed to
+// change their mind, and "an APPROVED exists somewhere in the history" would
+// turn that into a way past a later rejection.
+func (s *State) LatestReview(id string) (Evidence, bool) {
+	for i := len(s.Evidence) - 1; i >= 0; i-- {
+		if s.Evidence[i].WorkItemID == id && s.Evidence[i].Type == ReviewEvidence {
+			return s.Evidence[i], true
+		}
+	}
+	return Evidence{}, false
+}
+
+// RecordReview appends a person's judgement about one exact revision. REJECTED
+// returns the Work Item to RUNNING so the Agent goes straight back to fixing it.
+// APPROVED records the judgement and nothing more here; whether it also completes
+// the work is decided by the completion conditions.
+func (s *State) RecordReview(id, revision string, result Result, reviewer, note string, now time.Time) (Evidence, error) {
+	item := s.item(id)
+	if item == nil {
+		return Evidence{}, fmt.Errorf("unknown work item %q", id)
+	}
+	if result != Approved && result != Rejected {
+		return Evidence{}, fmt.Errorf("%q is not a review result", result)
+	}
+	// Only verified work is up for review: reviewing anything else would let a
+	// judgement stand in for a check that never ran.
+	if item.Status != Review {
+		return Evidence{}, fmt.Errorf("work item %q is %s; only REVIEW work can be reviewed", id, item.Status)
+	}
+	goal := s.goal(item.GoalID)
+	if goal == nil {
+		return Evidence{}, fmt.Errorf("work item %q has unknown goal", id)
+	}
+	if revision == "" {
+		return Evidence{}, errors.New("a review requires a revision")
+	}
+	if reviewer == "" {
+		return Evidence{}, errors.New("a review requires a reviewer")
+	}
+	if result == Rejected && strings.TrimSpace(note) == "" {
+		return Evidence{}, errors.New("rejecting work requires a reason")
+	}
+	evidence := Evidence{
+		ID:         s.takeEvidenceID(),
+		Type:       ReviewEvidence,
+		Repository: goal.Repository,
+		WorkItemID: item.ID,
+		StoryRef:   item.StoryRef,
+		Revision:   revision,
+		Result:     result,
+		Reviewer:   reviewer,
+		Note:       note,
+		CreatedAt:  now,
+	}
+	s.Evidence = append(s.Evidence, evidence)
+	if result == Rejected {
+		item.Status, item.UpdatedAt = Running, now
+	}
+	return evidence, nil
+}
+
+// takeEvidenceID hands out the next ID on the single sequence both kinds of
+// Evidence share.
+func (s *State) takeEvidenceID() string {
+	if s.NextEvidenceID < 1 {
+		s.NextEvidenceID = 1
+	}
+	id := fmt.Sprintf("EV-%03d", s.NextEvidenceID)
+	s.NextEvidenceID++
+	return id
 }
 
 // Stale reports whether a Work Item's latest Verification Evidence was produced

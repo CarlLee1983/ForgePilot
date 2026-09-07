@@ -22,7 +22,7 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 
 func run(args []string, cwd string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|verify|gate|status>")
+		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|verify|gate|review|status>")
 	}
 	if args[0] == "init" {
 		if len(args) != 1 {
@@ -53,6 +53,8 @@ func run(args []string, cwd string, output io.Writer) error {
 		return verify(args[1:], root, output)
 	case "gate":
 		return gate(args[1:], root, output)
+	case "review":
+		return review(args[1:], root, output)
 	case "status":
 		return status(args[1:], root, output)
 	default:
@@ -178,7 +180,8 @@ func status(args []string, root string, output io.Writer) error {
 			if item.CurrentRun != nil && !storage.VerificationRunning(root, item.ID) {
 				note = " (runner is gone; run forgepilot verify to recover)"
 			}
-			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n", item.ID, item.Status, item.StoryRef, note, verificationSummary(&state, item.ID, revision)); err != nil {
+			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
+				verificationSummary(&state, item.ID, revision), reviewSummary(&state, item.ID)); err != nil {
 				return err
 			}
 			for _, line := range gateSummary(&state, item.ID) {

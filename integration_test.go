@@ -927,3 +927,119 @@ func TestGateResolveAndCancelAreFinalAndVisible(t *testing.T) {
 	}
 	mustRun(t, binary, root, "start", "WI-001")
 }
+
+// reviewable drives a fixture to a Work Item sitting in REVIEW on a PASSing
+// revision, and returns that revision.
+func reviewable(t *testing.T, binary, root string) string {
+	t.Helper()
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	mustRun(t, binary, root, "start", "WI-001")
+	revision := writeVerify(t, root, passingVerify)
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	return revision
+}
+
+func TestReviewRecordsAJudgementBesideTheVerification(t *testing.T) {
+	root, binary := fixture(t)
+	revision := reviewable(t, binary, root)
+
+	for _, arguments := range [][]string{
+		{"review", "reject", "WI-001"},
+		{"review", "approve", "WI-002"},
+		{"review", "approve"},
+		{"review", "sign-off", "WI-001"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
+		}
+	}
+
+	// A review of a dirty worktree would name a revision that never held what
+	// was reviewed.
+	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("uncommitted\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "review", "approve", "WI-001")
+	if err == nil {
+		t.Fatalf("reviewed a dirty worktree: %s", output)
+	}
+	if !strings.Contains(output, "clean") {
+		t.Fatalf("error %q does not explain the worktree is not clean", output)
+	}
+	if err := os.Remove(filepath.Join(root, "stray.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 1 {
+		t.Fatalf("a refused review left evidence: %#v", state.Evidence)
+	}
+
+	// REJECTED sends the work straight back to RUNNING for the Agent to fix.
+	output, err = command(binary, root, "review", "reject", "WI-001", "--reason", "the error path is unhandled")
+	if err != nil || !strings.Contains(output, "REJECTED") {
+		t.Fatalf("review reject = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-001 RUNNING") {
+		t.Fatalf("rejection did not return the work to RUNNING: %s", output)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 2 {
+		t.Fatalf("evidence = %#v", state.Evidence)
+	}
+	rejection := state.Evidence[1]
+	if rejection.ID != "EV-002" || rejection.Type != work.ReviewEvidence || rejection.Result != work.Rejected {
+		t.Fatalf("evidence = %#v", rejection)
+	}
+	if rejection.Revision != revision || rejection.Reviewer != fixtureIdentity || rejection.Note != "the error path is unhandled" {
+		t.Fatalf("review evidence is not bound to the revision, reviewer and reason: %#v", rejection)
+	}
+	if rejection.ExitCode != nil || rejection.Command != "" {
+		t.Fatalf("review evidence carries verification fields: %#v", rejection)
+	}
+	if state.Evidence[0].Result != work.Pass {
+		t.Fatal("the earlier verification evidence was overwritten")
+	}
+
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	for _, want := range []string{"EV-002 REJECTED", fixtureIdentity, "the error path is unhandled", "not reviewed"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("status %q does not show %q", output, want)
+		}
+	}
+
+	// Re-verifying the same revision returns it to REVIEW, and an explicit
+	// reviewer overrides the Git-configured default.
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "review", "approve", "WI-001", "--as", "someone@example.com", "--note", "reads correct")
+	if err != nil || !strings.Contains(output, "APPROVED") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "self-asserted") {
+		t.Fatalf("approve output %q does not mark the identity as a claim", output)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := state.Evidence[len(state.Evidence)-1]
+	if approval.Result != work.Approved || approval.Reviewer != "someone@example.com" || approval.Revision != revision {
+		t.Fatalf("evidence = %#v", approval)
+	}
+}

@@ -6,14 +6,14 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `review approve` append 一筆 APPROVED Evidence，綁定 repository、Work Item、ForgeFlow Story、當下的完整 commit SHA、自述審查者與時間
-- [ ] `review reject` append 一筆 REJECTED Evidence 並要求理由，缺少時被拒絕
-- [ ] REJECTED 把 Work Item 退回 RUNNING
-- [ ] 審查者身分預設取自 Git 設定，可由參數覆寫
-- [ ] 只有 REVIEW 狀態的工作可被審查，其他狀態被拒絕
-- [ ] 既有 Evidence 不被覆寫；review 與 verification 共用同一條 ID 序列
-- [ ] 工作樹不乾淨時被拒絕——審查同樣必須指向一個 commit 能描述的內容
-- [ ] `status` 顯示最新一筆 Human Review 的結果與其 revision
-- [ ] `make verify` 通過
+- [x] `review approve` append 一筆 APPROVED Evidence，綁定 repository、Work Item、ForgeFlow Story、當下的完整 commit SHA、自述審查者與時間
+- [x] `review reject` append 一筆 REJECTED Evidence 並要求理由，缺少時被拒絕
+- [x] REJECTED 把 Work Item 退回 RUNNING
+- [x] 審查者身分預設取自 Git 設定，可由參數覆寫
+- [x] 只有 REVIEW 狀態的工作可被審查，其他狀態被拒絕
+- [x] 既有 Evidence 不被覆寫；review 與 verification 共用同一條 ID 序列
+- [x] 工作樹不乾淨時被拒絕——審查同樣必須指向一個 commit 能描述的內容
+- [x] `status` 顯示最新一筆 Human Review 的結果與其 revision
+- [x] `make verify` 通過
