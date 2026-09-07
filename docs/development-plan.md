@@ -111,6 +111,7 @@ internal/repository/
 internal/storage/
 docs/architecture.md
 docs/development-plan.md
+docs/adr/
 CONTEXT.md
 README.md
 Makefile
@@ -168,11 +169,22 @@ init
 
 ### M2
 
-先完成 architecture 中的 exact-revision、interruption、stale 觸發命令與 Evidence／state crash-consistency 決策，再實作 Git resolver、canonical runner、append-only Evidence 與 stale detection。
+開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m2-開工前定案已完成) 與 `docs/adr/0001`–`0004`。剩下的是實作。
 
-新增持久化欄位前，定義 M1 state 的版本相容性、必要的備份／升級／回復方式；若不支援直接升級，須明確拒絕並提供保留既有資料的操作方式，不得清空重建。
+M2 新增兩個指令，不新增其他：
 
-Integration fixture 加入 Makefile 與真實 commit；驗證 PASS → REVIEW、FAIL → RUNNING、新 commit 不沿用舊 PASS，以及程序中斷不產生假 PASS。另使用既有 M1 state fixture 驗證相容性或升級與失敗回復，並在 Evidence append／state 更新之間注入失敗，確認重啟後能恢復一致性。M2 仍不提供 DONE。
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot verify <work-id>` | 於隔離 worktree 執行受管理專案的 `make verify`，append Evidence；PASS → REVIEW，FAIL → RUNNING |
+| `forgepilot migrate` | 備份後將 v1 state 升級為 v2；已是 v2 時回報並成功結束 |
+
+`status` 擴充為顯示每件工作最新一筆 Evidence 的 result 與 SHA，以及是否 stale。不提供 `evidence` 查詢指令，不提供 `--json`。
+
+`verify` 的前置條件：Goal 為 ACTIVE、Work Item 為 RUNNING 或 REVIEW、repo 有 HEAD、工作樹乾淨、受管理專案有 `make verify` target。對同一 SHA 重跑不受限制。開頭交易先回收孤兒 VERIFYING。
+
+交付切片依序為：schema v2 與 `migrate`；`internal/repository` 的 revision resolver 與 worktree 隔離；canonical runner 與 Evidence append；`verify` 指令與 transition；`status` 的 stale 呈現。
+
+Integration fixture 加入 Makefile 與真實 commit。驗收：PASS → REVIEW、FAIL → RUNNING、新 commit 不沿用舊 PASS、髒工作樹被拒、缺少 `make verify` 被拒且不留 Evidence、程序中斷回收為 INTERRUPTED 且不產生假 PASS、隔離 worktree 看不到主樹未提交內容、`git worktree` 殘骸被 prune 清除。另以既有 M1 state fixture 驗證 v1 被拒讀、`migrate` 的備份與重複執行安全，以及備份檔已存在時的拒絕。M2 仍不提供 DONE。
 
 ### M3
 

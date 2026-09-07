@@ -45,10 +45,10 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/carl/forgepilot`
 |---|---|---|
 | Goal | `id`, `title`, `description`, `repository`, `status`, `created_at`, `updated_at` | M1 |
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
-| Work Item revision | `target_revision` | M2 |
+| Work Item run | `current_run`（revision、worktree path、started_at；閒置時為 null） | M2 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
 | Gate | `id`, `goal_id`, `work_item_id`, `question`, `reason`, `options`, `status`，以及決策、決策者、時間的紀錄 | M3；詳細 schema 待定 |
-| Evidence | ID、type、repository、Work Item、Story、revision、result、timestamp 與類型特定欄位 | M2 起 |
+| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、實際 command、exit code、`result`、timestamp | M2 起 |
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
@@ -67,6 +67,8 @@ Story reference 為 repository-relative path，必須存在於 `specs/stories/` 
 M1 不要求受管理專案已提供 `make verify`；該檢查與執行屬於 M2。ForgePilot 自身的 `make verify` 則由 M1 交付。
 
 Repository 路徑搬移、跨 worktree 共用 state 與 repository identity migration 尚未定義；M1 不默默重綁到其他 repository。
+
+M2 為驗證建立的 worktree 不在此限：它們是短暫的、detached 的，且不含自己的 `.forgepilot/`。State 永遠留在主工作樹，ForgePilot 只把 `make verify` 執行於該處。
 
 ## Dependency 與 selection rules
 
@@ -92,8 +94,8 @@ M3 完成某個 Work Item 時，在同一 state transaction 中更新受影響�
 | READY → RUNNING | ACTIVE Goal、依賴 DONE、無 unresolved Gate；M1 |
 | RUNNING → VERIFYING | 允許開始 canonical verification；M2 |
 | VERIFYING → REVIEW | PASS evidence 對應受驗證且目前有效的 revision；M2 |
-| VERIFYING → RUNNING | Verification FAIL；M2 |
-| REVIEW → VERIFYING | 新 revision 要求重新驗證；M2，具體觸發命令待定 |
+| VERIFYING → RUNNING | Verification FAIL，或回收中斷的 Verification Run；M2 |
+| REVIEW → VERIFYING | 由明確的 `verify` 命令觸發；stale 本身不改變狀態；M2 |
 | REVIEW → DONE | 同一有效 revision 有 Verification PASS 與 explicit Human Review APPROVED，且無 unresolved Gate；M3 |
 | RUNNING → BLOCKED | M3；建立阻擋、解除與重試操作須在該階段開工前定案 |
 | 非終態 → WAITING_HUMAN | 建立需要 Human Decision 的 Gate；M3 |
@@ -139,9 +141,28 @@ State snapshot 包含 `schema_version`、Goal、Work Item 與必要 ID 配發資
 - M1 不加入 migration framework；需要 migration 的階段再設計備份、升級與回復程序。
 - State 是本機信任資料，不宣稱具有防竄改或身份認證能力。
 
+### M2 storage layout 與 schema 升級
+
+```text
+.forgepilot/
+├── state.json
+├── locks/
+│   └── verify-<work-id>
+└── worktrees/
+    └── <work-id>-<short-sha>/
+```
+
+Schema v2 相對 v1 只有新增：`schema_version` 改為 2、根層加入 `evidence` 陣列與 `next_evidence_id`、Work Item 加入 `current_run`。無欄位刪除或語意改變。
+
+`internal/work` 的版本檢查是嚴格相等，因此 M2 binary 同樣拒讀 v1 state。升級不自動發生，必須由使用者明確執行 `forgepilot migrate`：該指令先把 `state.json` 備份為 `state.json.v1.bak`，備份檔已存在時拒絕執行而非覆寫；對已是 v2 的 state 回報「已是最新版本」並以 exit 0 結束，使重複執行安全。不提供 downgrade——v2 的 Evidence 在 v1 無容身之處，要回頭的人手動還原備份。
+
+`worktrees/` 由 ForgePilot 完全掌控：每次 `verify` 前先 `git worktree prune` 清除被強制終止的程序留下的殘骸，結束後一律 `git worktree remove --force`，PASS 與 FAIL 皆刪除。
+
 ## Verification 與 exact revision：M2 起
 
-Verification Evidence 必須至少保存 repository、Work Item、Story、完整 commit SHA、實際 command、exit code、PASS／FAIL 與 timestamp。FAIL 同樣 append；既有 Evidence 不覆寫。
+Verification Evidence 必須至少保存 repository、Work Item、Story、完整 commit SHA、實際 command、exit code 與 timestamp。`result` 有三個值：`PASS`、`FAIL`、`INTERRUPTED`。FAIL 與 INTERRUPTED 同樣 append；既有 Evidence 不覆寫。INTERRUPTED 表示未產生結果，不得視為 FAIL。
+
+受管理專案未提供 `make verify` target 時，`verify` 拒絕執行並回傳明確錯誤，不 append 任何 Evidence——那是無法驗證，不是驗證失敗。
 
 Canonical verification 固定為 repository 的 `make verify`；不開放任意 shell command template。Domain 接收結果，不直接執行 shell。
 
@@ -149,13 +170,15 @@ Human Review Evidence 同樣綁定 repository、Story 與 exact commit。進入 
 
 HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revision。新的 review target 必須重新驗證與審查。PR review 至少另綁定 PR number 與 HEAD SHA；M4 才實作。
 
-M2 開工前必須定案：
+### M2 開工前定案（已完成）
 
-1. Dirty worktree policy。建議要求乾淨的受測內容；只記 HEAD 無法代表未提交變更。
-2. 驗證前後 HEAD／工作樹變動、驗證期間並行修改的處置。若要保證不可變快照，須明確決定隔離方式，不能只靠前後 HEAD 相等。
-3. Process interruption、timeout 與遺留 VERIFYING 的恢復；不能偽造 FAIL exit code 或 PASS。
-4. Evidence append 與 state/index 更新的 crash consistency。
-5. Revision 過期由哪個寫命令觸發重新驗證；純讀指令可以呈現 stale，但不得偷偷改寫 state。
+1. **Dirty worktree policy**：驗證標的只能是 commit。工作樹不乾淨即拒絕執行 `verify`，不記錄任何 Evidence。乾淨採嚴格定義——tracked 檔案無修改、無 staged 變更、且無 untracked 檔案；ignored 檔案不計入。
+2. **隔離方式**：`git worktree add --detach <SHA>` 到 `.forgepilot/worktrees/` 下的暫存目錄執行，不在主工作樹原地驗證。見 [ADR-0002](adr/0002-verify-in-detached-worktree.md)，其中含對受管理專案強加的「`make verify` 必須能在全新 checkout 上執行」契約。
+3. **Interruption 與 timeout**：Verification Run 期間額外持有 `locks/verify-<work-id>` 的 flock 作為存活標記；不設逾時上限。孤兒 VERIFYING 由下一次 `verify` 的開頭交易回收，append 一筆 INTERRUPTED Evidence 後退回 RUNNING，不推斷 PASS 或 FAIL。見 [ADR-0004](adr/0004-verifying-liveness-via-flock.md)。
+4. **Crash consistency**：Evidence 保存在 `state.json` 內，與 Work Item 共用同一次受鎖的原子替換，因此不存在單邊寫入的中間態。見 [ADR-0001](adr/0001-evidence-in-state-snapshot.md)。
+5. **Stale 觸發**：Stale 定義為最新一筆 Verification Evidence 的 SHA 不等於目前 HEAD。它不造成任何自動 transition；REVIEW → VERIFYING 只由明確的 `verify` 命令推動。`next` 與 `status` 呈現 stale 但不寫入。
+
+Revision 只存在於 Evidence 與 `current_run`，Work Item 本身不保存 `target_revision`；該欄位的刪除見 [ADR-0003](adr/0003-no-work-item-target-revision.md)。
 
 ## Human decision：M3 起
 

@@ -19,8 +19,17 @@ _Avoid_：自動核准、驗證失敗
 **Human Decision**：人對 Gate 所記錄的明確選擇或判斷。
 _Avoid_：Agent 推測、默認同意
 
-**Evidence**：針對特定工作與 revision 保存的驗證或審查紀錄，可能成功，也可能失敗。
+**Evidence**：針對特定工作與 revision 保存的驗證或審查紀錄；可能成功、失敗，或因中斷而未產生結果。
 _Avoid_：完成宣告、Agent 自評
+
+**Verification**：對某個確切 revision 執行 repository 自己定義的 canonical 檢查，其結果構成 Evidence。
+_Avoid_：Agent 自我測試、臨時指定的 shell command
+
+**Verification Run**：一次進行中的 Verification。它是短暫的，可能因中斷而結束並且不留下成功或失敗的結論。
+_Avoid_：Evidence、VERIFYING 狀態本身
+
+**Stale**：既有 Evidence 所綁定的 revision 已不是目前的 revision，因而不適用於當下。
+_Avoid_：失效、FAIL、需要重做
 
 **Revision Identity**：Evidence 所對應的精確工程版本身分；完成與審查涉及 repository、Story 與 commit，PR review 另涉及 PR 與其 HEAD。
 _Avoid_：最新版本、branch name
