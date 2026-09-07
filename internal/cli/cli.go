@@ -162,10 +162,17 @@ func status(args []string, root string, output io.Writer) error {
 			return err
 		}
 		for _, item := range state.WorkItems {
-			if item.GoalID == goal.ID {
-				if _, err := fmt.Fprintf(output, "  %s %s %s\n", item.ID, item.Status, item.StoryRef); err != nil {
-					return err
-				}
+			if item.GoalID != goal.ID {
+				continue
+			}
+			// A Verification Run whose process is gone is reported, not repaired:
+			// status is a pure query, and reclaiming it would be a write.
+			note := ""
+			if item.CurrentRun != nil && !storage.VerificationRunning(root, item.ID) {
+				note = " (runner is gone; run forgepilot verify to recover)"
+			}
+			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n", item.ID, item.Status, item.StoryRef, note); err != nil {
+				return err
 			}
 		}
 	}

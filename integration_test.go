@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/carl/forgepilot/internal/storage"
 	"github.com/carl/forgepilot/internal/work"
@@ -336,5 +337,122 @@ func TestVerifyRunsOutsideTheMainWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "probe.txt")); err != nil {
 		t.Fatalf("verification disturbed the main worktree: %v", err)
+	}
+}
+
+// startVerify launches a verification in the background and waits until state
+// shows the run in flight, so the test can observe or interrupt it.
+func startVerify(t *testing.T, binary, root, id string) *exec.Cmd {
+	t.Helper()
+	running := exec.Command(binary, "verify", id)
+	running.Dir = root
+	if err := running.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := storage.Load(root)
+		if err == nil {
+			for _, item := range state.WorkItems {
+				if item.ID == id && item.CurrentRun != nil && item.Status == work.Verifying {
+					return running
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = running.Process.Kill()
+	t.Fatalf("%s never entered VERIFYING", id)
+	return nil
+}
+
+func TestVerifyIsVisibleConcurrentAndRecoversFromInterruption(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	mustRun(t, binary, root, "start", "WI-002")
+	// Long enough that the test controls when the run ends, never the clock.
+	slow := writeVerify(t, root, "verify:\n\t@sleep 30\n")
+
+	running := startVerify(t, binary, root, "WI-001")
+
+	// Queries stay available while a verification holds no state lock.
+	output, err := command(binary, root, "status")
+	if err != nil || !strings.Contains(output, "WI-001 VERIFYING") {
+		t.Fatalf("status during verification = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "next"); err != nil {
+		t.Fatalf("next during verification = %q, %v", output, err)
+	}
+
+	// The same Work Item cannot be verified twice at once.
+	if output, err := command(binary, root, "verify", "WI-001"); err == nil {
+		t.Fatalf("verified WI-001 twice concurrently: %s", output)
+	}
+	// A different Work Item can be: reaching VERIFYING while WI-001 is still in
+	// flight is the claim; the lock is per Work Item, not global.
+	second := startVerify(t, binary, root, "WI-002")
+	if err := second.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Wait()
+
+	// Interrupt the first run: the OS releases its lock, leaving an orphan.
+	if err := running.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.Wait()
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkItems[0].Status != work.Verifying || state.WorkItems[0].CurrentRun == nil {
+		t.Fatalf("killed run did not leave an orphan: %#v", state.WorkItems[0])
+	}
+	if output, err := command(binary, root, "status"); err != nil || !strings.Contains(output, "runner is gone") {
+		t.Fatalf("status did not report the orphan: %q, %v", output, err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, binary, root, "status")
+	mustRun(t, binary, root, "next")
+	after, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("a query reclaimed the orphan; only verify may write")
+	}
+
+	writeVerify(t, root, passingVerify)
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify after interruption = %q, %v", output, err)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var interrupted *work.Evidence
+	for i, record := range state.Evidence {
+		if record.Result == work.Interrupted {
+			interrupted = &state.Evidence[i]
+		}
+		if record.WorkItemID == "WI-001" && record.Result == work.Fail {
+			t.Fatalf("an interruption was recorded as a failure: %#v", record)
+		}
+	}
+	if interrupted == nil {
+		t.Fatalf("no INTERRUPTED evidence after a killed run: %#v", state.Evidence)
+	}
+	if interrupted.Revision != slow {
+		t.Fatalf("INTERRUPTED evidence carries %q, want the killed run's revision %q", interrupted.Revision, slow)
+	}
+	if state.WorkItems[0].Status != work.Review || state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("WI-001 = %#v after recovery", state.WorkItems[0])
 	}
 }

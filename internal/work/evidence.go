@@ -15,6 +15,10 @@ type EvidenceType string
 
 const VerificationEvidence EvidenceType = "verification"
 
+// VerificationCommand names the canonical check in Evidence. The domain records
+// the command; it never runs one.
+const VerificationCommand = "make verify"
+
 // Result is the outcome of a Verification Run. Interrupted means no result was
 // produced; it must never be reported as a failure.
 type Result string
@@ -149,4 +153,49 @@ func parseEvidenceID(id string) (int, bool) {
 	}
 	n, err := strconv.Atoi(strings.TrimPrefix(id, "EV-"))
 	return n, err == nil && n > 0 && fmt.Sprintf("EV-%03d", n) == id
+}
+
+// BeginVerification records that a Verification Run is in flight. The revision is
+// stored so that an interrupted run can still be attributed to the exact commit
+// it was testing.
+func (s *State) BeginVerification(id, revision, worktreePath string, now time.Time) error {
+	if err := s.Verifiable(id); err != nil {
+		return err
+	}
+	if revision == "" {
+		return errors.New("a verification run requires a revision")
+	}
+	item := s.item(id)
+	item.Status = Verifying
+	item.CurrentRun = &Run{Revision: revision, WorktreePath: worktreePath, StartedAt: now}
+	item.UpdatedAt = now
+	return nil
+}
+
+// ReclaimRun records an interrupted Verification Run and returns the Work Item to
+// RUNNING. It must only be called once the caller has established that no live
+// runner remains. INTERRUPTED means no result was produced: it is never a FAIL,
+// and a result is never inferred.
+func (s *State) ReclaimRun(id string, now time.Time) (Evidence, bool, error) {
+	item := s.item(id)
+	if item == nil {
+		return Evidence{}, false, fmt.Errorf("unknown work item %q", id)
+	}
+	if item.CurrentRun == nil {
+		return Evidence{}, false, nil
+	}
+	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, VerificationCommand, 0, Interrupted, now)
+	if err != nil {
+		return Evidence{}, false, err
+	}
+	return evidence, true, nil
+}
+
+// WorkItemStatus reports a Work Item's current status, or an empty status when no
+// such item exists.
+func (s *State) WorkItemStatus(id string) Status {
+	if item := s.item(id); item != nil {
+		return item.Status
+	}
+	return ""
 }
