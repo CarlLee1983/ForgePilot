@@ -37,8 +37,14 @@ type Evidence struct {
 	// ExitCode is absent for an INTERRUPTED run: no result was produced, so there
 	// is no exit code. Recording a zero would read as success to anything that
 	// treats zero as passing.
-	ExitCode  *int      `json:"exit_code"`
-	Result    Result    `json:"result"`
+	ExitCode *int   `json:"exit_code"`
+	Result   Result `json:"result"`
+	// Reviewer and Note belong to Human Review Evidence alone. Reviewer holds a
+	// self-asserted identity, never an authenticated one (ADR-0005); Note holds
+	// the free text behind the judgement. Verification Evidence leaves both
+	// empty, and is refused if it does not.
+	Reviewer  string    `json:"reviewer"`
+	Note      string    `json:"note"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -155,6 +161,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 		}
 		if (record.Result == Interrupted) != (record.ExitCode == nil) {
 			return fmt.Errorf("evidence %q pairs result %q with the wrong exit code", record.ID, record.Result)
+		}
+		if record.Reviewer != "" || record.Note != "" {
+			return fmt.Errorf("evidence %q is a verification but carries review fields", record.ID)
 		}
 		if _, ok := items[record.WorkItemID]; !ok {
 			return fmt.Errorf("evidence %q refers to unknown work item %q", record.ID, record.WorkItemID)

@@ -1,6 +1,7 @@
 package forgepilot_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,6 +146,53 @@ func mustRun(t *testing.T, binary, directory string, arguments ...string) {
 	}
 }
 
+// rewindToV1 rewrites a current snapshot into the shape M1 wrote: schema version
+// 1, with every field a later version introduced removed. It works on the
+// decoded document rather than the encoded text so that adding a field to the
+// current schema cannot silently turn this into a no-op.
+func rewindToV1(t *testing.T, path string) {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(contents, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	v1Fields := map[string]bool{"schema_version": true, "next_work_id": true, "goals": true, "work_items": true}
+	for field := range snapshot {
+		if !v1Fields[field] {
+			delete(snapshot, field)
+		}
+	}
+	snapshot["schema_version"] = 1
+	v1ItemFields := map[string]bool{"id": true, "goal_id": true, "story_ref": true, "status": true,
+		"depends_on": true, "created_at": true, "updated_at": true}
+	items, ok := snapshot["work_items"].([]any)
+	if !ok || len(items) == 0 {
+		t.Fatalf("snapshot has no work items to rewind: %s", contents)
+	}
+	for _, entry := range items {
+		item, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected work item shape in %s", contents)
+		}
+		for field := range item {
+			if !v1ItemFields[field] {
+				delete(item, field)
+			}
+		}
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigrateCommandUpgradesLegacyState(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
@@ -152,24 +200,7 @@ func TestMigrateCommandUpgradesLegacyState(t *testing.T) {
 	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
 
 	statePath := filepath.Join(root, ".forgepilot", "state.json")
-	current, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Rewind the snapshot to the shape M1 wrote: no v2 fields, schema version 1.
-	legacy := strings.NewReplacer(
-		`"schema_version": 2`, `"schema_version": 1`,
-		`"next_evidence_id": 1,`, "",
-		`"current_run": null,`, "",
-	).Replace(string(current))
-	if strings.Contains(legacy, "next_evidence_id") || strings.Contains(legacy, "current_run") {
-		t.Fatalf("failed to build a v1 snapshot from %s", current)
-	}
-	legacy = strings.Replace(legacy, `,
-  "evidence": []`, "", 1)
-	if err := os.WriteFile(statePath, []byte(legacy), 0600); err != nil {
-		t.Fatal(err)
-	}
+	rewindToV1(t, statePath)
 
 	output, err := command(binary, root, "status")
 	if err == nil {

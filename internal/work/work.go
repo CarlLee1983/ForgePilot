@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type GoalStatus string
 
@@ -28,7 +28,9 @@ const (
 	Running   Status = "RUNNING"
 	Verifying Status = "VERIFYING"
 	Review    Status = "REVIEW"
-	Done      Status = "DONE" // Reserved for M3 fixtures; no command below M3 can set it.
+	// Done is terminal and is only ever reached by satisfying the completion
+	// conditions in RecordReview; nothing sets it directly.
+	Done Status = "DONE"
 )
 
 type Goal struct {
@@ -65,13 +67,15 @@ type State struct {
 	SchemaVersion  int        `json:"schema_version"`
 	NextWorkID     int        `json:"next_work_id"`
 	NextEvidenceID int        `json:"next_evidence_id"`
+	NextGateID     int        `json:"next_gate_id"`
 	Goals          []Goal     `json:"goals"`
 	WorkItems      []Item     `json:"work_items"`
 	Evidence       []Evidence `json:"evidence"`
+	Gates          []Gate     `json:"gates"`
 }
 
 func NewState() State {
-	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1}
+	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1, NextGateID: 1}
 }
 
 func (s *State) AddGoal(id, title, description, repository string, now time.Time) error {
@@ -181,6 +185,9 @@ func (s State) Validate() error {
 	if s.NextEvidenceID < 1 {
 		return errors.New("next_evidence_id must be positive")
 	}
+	if s.NextGateID < 1 {
+		return errors.New("next_gate_id must be positive")
+	}
 	goals := map[string]Goal{}
 	for _, goal := range s.Goals {
 		if goal.ID == "" || goal.Title == "" || goal.Repository == "" || (goal.Status != GoalActive && goal.Status != GoalBlocked && goal.Status != GoalCompleted && goal.Status != GoalCancelled) {
@@ -239,6 +246,9 @@ func (s State) Validate() error {
 		}
 	}
 	if err := validateEvidence(s.Evidence, s.NextEvidenceID, items); err != nil {
+		return err
+	}
+	if err := validateGates(s.Gates, s.NextGateID, items); err != nil {
 		return err
 	}
 	visiting, visited := map[string]bool{}, map[string]bool{}

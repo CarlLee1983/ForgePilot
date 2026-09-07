@@ -59,7 +59,10 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, stateDirectory, "state.json")
-	for _, contents := range []string{"{", `{"schema_version":3,"next_work_id":1,"next_evidence_id":1,"goals":[],"work_items":[],"evidence":[]}`} {
+	// The second fixture must name a schema version this binary does not yet
+	// support. It has to be raised with every bump: left behind, it silently
+	// stops testing rejection and starts testing that a valid state loads.
+	for _, contents := range []string{"{", `{"schema_version":4,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -204,5 +207,106 @@ func TestMigrateUpgradesLegacyStateAndKeepsBackup(t *testing.T) {
 	}
 	if string(current) != original {
 		t.Fatal("refused migration still modified the state")
+	}
+}
+
+// v2State writes a schema v2 snapshot carrying accumulated Evidence, the shape
+// M2 left behind.
+func v2State(t *testing.T, root string) string {
+	t.Helper()
+	canonical, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := `{"schema_version":2,"next_work_id":3,"next_evidence_id":2,` +
+		`"goals":[{"id":"g","title":"Goal","description":"","repository":"` + canonical +
+		`","status":"ACTIVE","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"work_items":[{"id":"WI-001","goal_id":"g","story_ref":"specs/stories/a","status":"REVIEW","depends_on":null,` +
+		`"current_run":null,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"},` +
+		`{"id":"WI-002","goal_id":"g","story_ref":"specs/stories/b","status":"PENDING","depends_on":["WI-001"],` +
+		`"current_run":null,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"evidence":[{"id":"EV-001","type":"verification","repository":"` + canonical +
+		`","work_item_id":"WI-001","story_ref":"specs/stories/a","revision":"abc123","command":"make verify",` +
+		`"exit_code":0,"result":"PASS","created_at":"2026-09-07T00:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+func TestMigrateUpgradesV2StateAndKeepsEvidence(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	original := v2State(t, root)
+
+	if _, err := Load(root); err == nil {
+		t.Fatal("read a v2 state without migrating")
+	} else if !strings.Contains(err.Error(), "migrate") {
+		t.Fatalf("error %q does not tell the user to migrate", err)
+	}
+
+	migrated, err := Migrate(root)
+	if err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SchemaVersion != work.SchemaVersion || state.NextWorkID != 3 || state.NextEvidenceID != 2 {
+		t.Fatalf("migration lost counters: %#v", state)
+	}
+	if len(state.Goals) != 1 || len(state.WorkItems) != 2 || len(state.Evidence) != 1 {
+		t.Fatalf("migration lost data: %#v", state)
+	}
+	if got := state.Evidence[0]; got.ID != "EV-001" || got.Result != work.Pass || got.Revision != "abc123" || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("migration changed evidence: %#v", got)
+	}
+	if state.WorkItems[1].DependsOn[0] != "WI-001" || state.WorkItems[0].Status != work.Review {
+		t.Fatalf("migration changed work items: %#v", state.WorkItems)
+	}
+	// The v3 containers exist and start empty: nothing writes to them yet.
+	if state.NextGateID != 1 || len(state.Gates) != 0 {
+		t.Fatalf("migration did not initialise v3 fields: %#v", state)
+	}
+
+	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v2.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatal("backup does not hold the original snapshot")
+	}
+}
+
+// TestMigrateWalksEveryVersionInOneStep proves a snapshot left behind by M1
+// still reaches the current schema: the user who skipped a release migrates
+// once, not once per version they missed.
+func TestMigrateWalksEveryVersionInOneStep(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	legacyState(t, root)
+	if migrated, err := Migrate(root); err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SchemaVersion != work.SchemaVersion || state.NextEvidenceID != 1 || state.NextGateID != 1 {
+		t.Fatalf("v1 snapshot did not reach the current schema: %#v", state)
+	}
+	if len(state.WorkItems) != 2 {
+		t.Fatalf("migration lost work items: %#v", state.WorkItems)
 	}
 }

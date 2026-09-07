@@ -72,11 +72,13 @@ func Migrate(root string) (bool, error) {
 	return upgraded, err
 }
 
-// upgrade applies each step from the snapshot's version up to the current one.
-// v1 → v2 is purely additive, so decoding into the current shape and filling in
-// the new fields is the whole migration.
+// upgrade applies every step from the snapshot's version up to the current one,
+// so a user who skipped a release migrates once rather than once per version
+// they missed. Each step so far has been purely additive, so decoding into the
+// current shape and filling in the fields that step introduced is the whole
+// migration.
 func upgrade(contents []byte, from int) (work.State, error) {
-	if from != 1 {
+	if from < 1 || from >= work.SchemaVersion {
 		return work.State{}, fmt.Errorf("no upgrade path from schema version %d", from)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
@@ -88,8 +90,16 @@ func upgrade(contents []byte, from int) (work.State, error) {
 	if err := ensureEOF(decoder); err != nil {
 		return work.State{}, fmt.Errorf("read state: %w", err)
 	}
+	if from < 2 {
+		// v1 → v2 introduced the Evidence container and its ID counter.
+		state.NextEvidenceID = 1
+		state.Evidence = nil
+	}
+	if from < 3 {
+		// v2 → v3 introduces the Gate container and its ID counter.
+		state.NextGateID = 1
+		state.Gates = nil
+	}
 	state.SchemaVersion = work.SchemaVersion
-	state.NextEvidenceID = 1
-	state.Evidence = nil
 	return state, nil
 }
