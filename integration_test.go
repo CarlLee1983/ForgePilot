@@ -1625,3 +1625,121 @@ func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
 		t.Fatalf("work with a PR reference did not complete: %s", state.WorkItemStatus("WI-001"))
 	}
 }
+
+// TestPRReviewSurvivesAChangeOfHead is M4's acceptance flow. It proves the three
+// fields the milestone requires are held together — repository, pull request and
+// the exact HEAD — and that moving HEAD makes a new review target rather than
+// letting the previous approval carry over.
+//
+// The second half runs on WI-002 rather than reopening WI-001: DONE is terminal
+// and has no reopen (ADR-0006), so "a new HEAD needs a fresh review" is a claim
+// about work that has not completed yet.
+func TestPRReviewSurvivesAChangeOfHead(t *testing.T) {
+	root, binary := fixture(t)
+	first := reviewable(t, binary, root)
+
+	output, err := command(binary, root, "review", "approve", "WI-001", "--pr", "carl/forgepilot#7")
+	if err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-002 READY") {
+		t.Fatalf("the queue did not advance: %s", output)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, ok := state.LatestReview("WI-001")
+	if !ok || approval.PR != "carl/forgepilot#7" || approval.Revision != first || approval.Repository == "" {
+		t.Fatalf("approval does not carry repository, pull request and exact head: %#v", approval)
+	}
+
+	// WI-002 reaches REVIEW on the same revision, and then HEAD moves.
+	mustRun(t, binary, root, "start", "WI-002")
+	if output, err := command(binary, root, "verify", "WI-002"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "b.md"), []byte("# story\n\nmore\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	second := commitAll(t, root, "more work on the pull request")
+	if second == first {
+		t.Fatal("the fixture did not move HEAD")
+	}
+
+	// The approval lands on the new HEAD, which nothing has verified: the PASS
+	// from the previous revision is history, not a result that carries over.
+	output, err = command(binary, root, "review", "approve", "WI-002", "--pr", "carl/forgepilot#7")
+	if err != nil {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-002 REVIEW") || !strings.Contains(output, "Not complete") {
+		t.Fatalf("work completed against a revision nothing verified: %s", output)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest, ok := state.LatestVerification("WI-002"); !ok || latest.Revision != first {
+		t.Fatalf("the earlier verification was rewritten: %#v", latest)
+	}
+
+	// Re-verifying and re-approving the new HEAD completes it, and the fresh
+	// Evidence names the new revision rather than the old one.
+	if output, err := command(binary, root, "verify", "WI-002"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "review", "approve", "WI-002", "--pr", "carl/forgepilot#7")
+	if err != nil || !strings.Contains(output, "WI-002 DONE") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification, _ := state.LatestVerification("WI-002")
+	review, _ := state.LatestReview("WI-002")
+	if verification.Revision != second || review.Revision != second || review.PR != "carl/forgepilot#7" {
+		t.Fatalf("the new review target was not recorded: %#v, %#v", verification, review)
+	}
+	// Every earlier record is still there: superseded, not replaced.
+	if len(state.Evidence) != 6 {
+		t.Fatalf("history was rewritten: %#v", state.Evidence)
+	}
+}
+
+// TestStatusShowsThePullRequestOnlyWhenThereIsOne keeps the display honest in
+// both directions: a recorded pull request is readable, and its absence is a
+// legal state that must not be dressed up as something to act on.
+func TestStatusShowsThePullRequestOnlyWhenThereIsOne(t *testing.T) {
+	root, binary := fixture(t)
+	reviewable(t, binary, root)
+
+	if output, err := command(binary, root, "review", "reject", "WI-001", "--reason", "not yet"); err != nil {
+		t.Fatalf("review reject = %q, %v", output, err)
+	}
+	output, err := command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "EV-002 REJECTED") {
+		t.Fatalf("status %q does not show the review", output)
+	}
+	if strings.Contains(output, "PR") || strings.Contains(output, "pull request") {
+		t.Fatalf("status %q mentions a pull request for a review that has none", output)
+	}
+
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "review", "approve", "WI-001", "--pr", "carl/forgepilot#7"); err != nil {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "carl/forgepilot#7") {
+		t.Fatalf("status %q does not show the pull request that was recorded", output)
+	}
+}

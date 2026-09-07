@@ -2,7 +2,7 @@
 
 ## 文件狀態與範圍
 
-MVP 的 M1–M3 已依本文件實作；M4 的開工前決策已定案，實作尚未開始。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
+MVP 的 M1–M3 與 M4 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 

@@ -26,7 +26,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 ## 目前狀態
 
-**MVP 的 M1–M3 已全部實作並通過 `make verify`。**
+**M1–M4 已全部實作並通過 `make verify`。**
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
@@ -34,7 +34,7 @@ M2 加上 `forgepilot verify`：在隔離的 detached worktree 對確切的 comm
 
 M3 接上工作真正能完成的那條線：`gate` 讓需要人判斷的問題被記錄下來並確實擋住工作，`review` 記錄人對某個確切 revision 的 APPROVED／REJECTED，`goal` 讓 Goal 能被暫停、取消或宣告完成。條件滿足時 `review approve` 在同一次交易內讓工作進入 DONE 並解鎖下游依賴——佇列因此第一次會前進。
 
-**尚未實作**：PR number 與 HEAD SHA 的 review target（M4）。
+M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review approve` 與 `review reject` 接受選填的 `--pr owner/name#number`，該值連同確切的 commit SHA 一起存進 Evidence。ForgePilot **不去 GitHub 查證**那個 PR——它不發出任何網路請求（[ADR-0010](docs/adr/0010-no-outbound-network-requests.md)），只驗格式。PR 是識別資料，不參與完成或 stale 的判定（[ADR-0011](docs/adr/0011-pr-identity-does-not-gate-completion.md)）；「HEAD 一變就是新的 review target」由既有的 SHA 比對成立。
 
 初始支援平台是 macOS 的本機檔案系統，使用 Go 1.25.5。state 由程序鎖與原子替換保護；其他平台尚未宣稱支援。
 
@@ -103,6 +103,7 @@ forgepilot gate cancel GATE-002 --reason "這個問題問錯了"
 
 ```bash
 forgepilot review approve WI-001 --note "解決的是對的問題"
+forgepilot review approve WI-001 --pr carl/forgepilot#123
 forgepilot review reject WI-001 --reason "錯誤路徑沒有處理"
 ```
 

@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-MVP 的 M1–M3 已完成；M4 的開工前決策已定案，實作尚未開始。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M4 已全部完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -265,6 +265,22 @@ Schema 升至 v4：Evidence 加入選填的 `pr`。沿用既有升級契約—�
 交付切片依序為：schema v4 與 v3→v4 升級；PR Reference 的格式規則與 Evidence 驗證；`review approve`／`reject` 的 `--pr`；`status` 呈現與端到端驗收。
 
 驗收：在 PR 的 HEAD 上 verify PASS 後 `review approve --pr` 進入 DONE，Evidence 同時保存 PR Reference 與完整 SHA；新增 commit 使 HEAD 改變後，舊的 PASS／APPROVED 保留為歷史但不套用，必須重新 verify 與重新 approve，新的那筆記的是新的 HEAD；`--pr` 格式非法時整個指令被拒且不寫入任何 Evidence；verification Evidence 帶 PR Reference 時被 validation 拒讀；v3 state 被拒讀並指示升級，升級後資料完整。
+
+### M4 Exit checklist
+
+- [x] Evidence 新增選填的 `pr` 欄位，形式限定為 `owner/name#number`，number 拒絕 0 與前導零；URL 與其他寫法一律被拒。
+- [x] `review approve` 與 `review reject` 皆接受選填的 `--pr`；不帶時行為與 M3 完全相同。
+- [x] `--pr` 格式非法時整個指令以非零 exit code 失敗，重新讀回 state 時 Evidence 未增長、Work Item 未移動。
+- [x] 格式規則位於 `internal/work`，`validateEvidence` 對載入的 state 一併把關；手改的 `state.json` 夾帶非法值會被拒讀。
+- [x] verification Evidence 攜帶 PR Reference 時被驗證拒絕，與既有的 reviewer／note 分流同一套規則。
+- [x] 帶 PR 與不帶 PR 的完成判定與 stale 判定結果逐項相同；同一 revision 上標不同 PR 的兩筆 review 仍互相取代（ADR-0011）。
+- [x] 產品不發出任何網路請求，不讀 token，不查證 PR 是否存在（ADR-0010）。
+- [x] `status` 顯示最新一筆 Human Review 的 PR Reference；沒有 PR 時不印任何相關字樣、不帶提示語氣。
+- [x] 端到端流程以獨立 process 跑通：PR HEAD 上 verify PASS → `review approve --pr` → DONE → 解鎖下游；HEAD 改變後舊的 PASS／APPROVED 保留為歷史但不適用，重新 verify 與 approve 後才完成，新的兩筆記的是新的 HEAD。
+- [x] v3 state 被拒讀並指示 migrate；`migrate` 備份為 `state.json.v3.bak` 後升級、重複執行安全、備份已存在時拒絕、升級不遺失 Goal、Work Item、Evidence 或 Gate。
+- [x] 兩處版本號 fixture 調到 v4。
+- [x] README、architecture 與 CONTEXT 反映實際行為。
+- [x] `make verify` 與 `go test -race -count=1 ./...` 於 macOS 26.5.1 arm64、go1.25.5 實跑通過，commit `2fc9b92` 之後的工作樹，工作目錄乾淨。
 
 ## 每階段交付格式
 

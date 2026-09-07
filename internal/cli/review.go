@@ -157,6 +157,12 @@ func reviewSummary(state *work.State, id string) string {
 	// records are browsed by someone who did not issue the command, so leaving
 	// the qualifier off exactly here would be leaving it off where it matters.
 	summary := fmt.Sprintf("%s %s at %s by %s (self-asserted)", latest.ID, latest.Result, shortRevision(latest.Revision), latest.Reviewer)
+	// A recorded pull request is shown, an absent one passes without comment.
+	// Reviewing without one is legal (a review can precede the pull request), so
+	// flagging its absence would train the reader to ignore the line.
+	if latest.PR != "" {
+		summary += fmt.Sprintf(" on %s", latest.PR)
+	}
 	if latest.Note != "" {
 		summary += fmt.Sprintf(": %s", latest.Note)
 	}
