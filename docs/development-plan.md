@@ -15,7 +15,7 @@ M1–M4 已全部完成。本文件供後續開發拆分工作、驗收與交接
 | M3 — Human Gate & Review | Gate、Decision、Human Review、DONE 與依賴解鎖 | 合法完成 A 後 B 可執行；未 review 不可 DONE |
 | M4 — PR exact-head review integration | PR number＋HEAD SHA review target | 新 HEAD 必須重新取得適用 review Evidence |
 
-M1 通過後才開始 M2；M2 通過後才開始 M3。MVP 完成範圍為 M1–M3；M4 為後續階段。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
+M1 通過後才開始 M2，依此類推至 M4；四個階段皆已完成。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
 
 ## M1 驗收衝突的處理
 
