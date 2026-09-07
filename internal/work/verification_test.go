@@ -110,3 +110,44 @@ func TestValidateRejectsInconsistentEvidence(t *testing.T) {
 		t.Fatal("accepted evidence with an unknown result")
 	}
 }
+
+func TestLatestVerificationAndStaleness(t *testing.T) {
+	state, now := verifiableState(t)
+	if _, ok := state.LatestVerification("WI-001"); ok {
+		t.Fatal("reported verification for work that has never been verified")
+	}
+	if state.Stale("WI-001", "abc123") {
+		t.Fatal("never-verified work reported as stale rather than unverified")
+	}
+	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	latest, ok := state.LatestVerification("WI-001")
+	if !ok || latest.ID != "EV-001" {
+		t.Fatalf("latest = %#v, %v", latest, ok)
+	}
+	if state.Stale("WI-001", "abc123") {
+		t.Fatal("evidence for the current revision reported as stale")
+	}
+	if !state.Stale("WI-001", "def456") {
+		t.Fatal("evidence for an older revision not reported as stale")
+	}
+
+	// A newer record for another Work Item must not become this one's latest.
+	if _, err := state.AddWork("g", "specs/stories/b", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start("WI-002", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordVerification("WI-002", "def456", "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	latest, _ = state.LatestVerification("WI-001")
+	if latest.ID != "EV-001" {
+		t.Fatalf("latest for WI-001 = %s, want EV-001", latest.ID)
+	}
+	if !state.Stale("WI-001", "def456") {
+		t.Fatal("staleness leaked across work items")
+	}
+}

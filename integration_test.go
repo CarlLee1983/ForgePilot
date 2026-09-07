@@ -456,3 +456,70 @@ func TestVerifyIsVisibleConcurrentAndRecoversFromInterruption(t *testing.T) {
 		t.Fatalf("WI-001 = %#v after recovery", state.WorkItems[0])
 	}
 }
+
+func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+
+	output, err := command(binary, root, "status")
+	if err != nil || !strings.Contains(output, "not verified") {
+		t.Fatalf("status before any verification = %q, %v", output, err)
+	}
+	if strings.Contains(output, "PASS") {
+		t.Fatalf("unverified work reported as passing: %q", output)
+	}
+
+	mustRun(t, binary, root, "verify", "WI-001")
+	output, err = command(binary, root, "status")
+	if err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("status after PASS = %q, %v", output, err)
+	}
+	if strings.Contains(output, "stale") {
+		t.Fatalf("evidence for the current revision marked stale: %q", output)
+	}
+
+	// A new commit does not change any status, but the PASS no longer applies.
+	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "a.md"), []byte("# story revised\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "revise story")
+	output, err = command(binary, root, "status")
+	if err != nil || !strings.Contains(output, "stale") {
+		t.Fatalf("status after a new commit = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-001 REVIEW") {
+		t.Fatalf("a new commit changed the work item's status: %q", output)
+	}
+	after, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("status wrote to state while reporting staleness")
+	}
+
+	// REVIEW work can be verified again to obtain evidence that does apply.
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("re-verify of REVIEW work = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "status"); err != nil || strings.Contains(output, "stale") {
+		t.Fatalf("status after re-verification = %q, %v", output, err)
+	}
+	// Re-running against an unchanged revision is allowed and only accumulates.
+	mustRun(t, binary, root, "verify", "WI-001")
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 3 {
+		t.Fatalf("evidence = %#v, want three accumulated records", state.Evidence)
+	}
+}

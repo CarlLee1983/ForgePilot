@@ -157,6 +157,9 @@ func status(args []string, root string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Staleness needs the current revision, but a repository without one is not
+	// an error for a query: report what is known and omit the comparison.
+	revision, _ := repository.Head(root)
 	for _, goal := range state.Goals {
 		if _, err := fmt.Fprintf(output, "Goal %s %s: %s\n", goal.ID, goal.Status, goal.Title); err != nil {
 			return err
@@ -171,7 +174,7 @@ func status(args []string, root string, output io.Writer) error {
 			if item.CurrentRun != nil && !storage.VerificationRunning(root, item.ID) {
 				note = " (runner is gone; run forgepilot verify to recover)"
 			}
-			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n", item.ID, item.Status, item.StoryRef, note); err != nil {
+			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n", item.ID, item.Status, item.StoryRef, note, verificationSummary(&state, item.ID, revision)); err != nil {
 				return err
 			}
 		}
@@ -217,3 +220,24 @@ func (f flagValues) one(name string) string {
 }
 func (f flagValues) all(name string) []string { return append([]string(nil), f[name]...) }
 func now() time.Time                          { return time.Now().UTC() }
+
+// verificationSummary describes a Work Item's latest Verification Evidence. Work
+// that has never been verified says so explicitly: silence would read as approval.
+func verificationSummary(state *work.State, id, revision string) string {
+	latest, ok := state.LatestVerification(id)
+	if !ok {
+		return "not verified"
+	}
+	summary := fmt.Sprintf("%s %s at %s", latest.ID, latest.Result, shortRevision(latest.Revision))
+	if state.Stale(id, revision) {
+		summary += fmt.Sprintf(" (stale; HEAD is now %s)", shortRevision(revision))
+	}
+	return summary
+}
+
+func shortRevision(revision string) string {
+	if len(revision) > 12 {
+		return revision[:12]
+	}
+	return revision
+}

@@ -199,3 +199,27 @@ func (s *State) WorkItemStatus(id string) Status {
 	}
 	return ""
 }
+
+// LatestVerification returns the most recent Verification Evidence for a Work
+// Item. Evidence is only ever appended, so the last matching record is the
+// current one.
+func (s *State) LatestVerification(id string) (Evidence, bool) {
+	for i := len(s.Evidence) - 1; i >= 0; i-- {
+		if s.Evidence[i].WorkItemID == id && s.Evidence[i].Type == VerificationEvidence {
+			return s.Evidence[i], true
+		}
+	}
+	return Evidence{}, false
+}
+
+// Stale reports whether a Work Item's latest Verification Evidence was produced
+// against a revision other than the given one. Work that has never been verified
+// is not stale — it is unverified, which callers must present differently: an
+// absent result must never read as an untroubled one.
+func (s *State) Stale(id, revision string) bool {
+	latest, ok := s.LatestVerification(id)
+	if !ok || revision == "" {
+		return false
+	}
+	return latest.Revision != revision
+}
