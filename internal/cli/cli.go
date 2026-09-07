@@ -79,10 +79,27 @@ func migrate(args []string, root string, output io.Writer) error {
 }
 
 func goal(args []string, root string, output io.Writer) error {
-	if len(args) == 0 || args[0] != "create" {
-		return errors.New("usage: forgepilot goal create --id <id> --title <title> [--description <text>]")
+	if len(args) == 0 {
+		return errors.New("usage: forgepilot goal <create|block|unblock|complete|cancel>")
 	}
-	flags, err := flags(args[1:], map[string]bool{"id": false, "title": false, "description": false})
+	switch args[0] {
+	case "create":
+		return createGoal(args[1:], root, output)
+	case "block":
+		return changeGoal(args[1:], root, output, "block", work.GoalBlocked)
+	case "unblock":
+		return changeGoal(args[1:], root, output, "unblock", work.GoalActive)
+	case "complete":
+		return changeGoal(args[1:], root, output, "complete", work.GoalCompleted)
+	case "cancel":
+		return changeGoal(args[1:], root, output, "cancel", work.GoalCancelled)
+	default:
+		return fmt.Errorf("unknown goal subcommand %q", args[0])
+	}
+}
+
+func createGoal(args []string, root string, output io.Writer) error {
+	flags, err := flags(args, map[string]bool{"id": false, "title": false, "description": false})
 	if err != nil {
 		return err
 	}
@@ -95,6 +112,49 @@ func goal(args []string, root string, output io.Writer) error {
 		return err
 	}
 	_, err = fmt.Fprintf(output, "Goal %s created\n", flags.one("id"))
+	return err
+}
+
+// changeGoal drives the four lifecycle moves. Only the two that stop a Goal take
+// a reason: a status saying a Goal stopped without saying why is the record this
+// is meant to avoid.
+func changeGoal(args []string, root string, output io.Writer, action string, target work.GoalStatus) error {
+	needsReason := target == work.GoalBlocked || target == work.GoalCancelled
+	usage := fmt.Sprintf("usage: forgepilot goal %s <goal-id>", action)
+	if needsReason {
+		usage += " --reason <text>"
+	}
+	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
+		return errors.New(usage)
+	}
+	id := args[0]
+	allowed := map[string]bool{}
+	if needsReason {
+		allowed["reason"] = false
+	}
+	values, err := flags(args[1:], allowed)
+	if err != nil {
+		return err
+	}
+	reason := values.one("reason")
+	if needsReason && reason == "" {
+		return errors.New("--reason is required")
+	}
+	if err := storage.Update(root, func(state *work.State) error {
+		switch target {
+		case work.GoalBlocked:
+			return state.BlockGoal(id, reason, now())
+		case work.GoalActive:
+			return state.UnblockGoal(id, now())
+		case work.GoalCompleted:
+			return state.CompleteGoal(id, now())
+		default:
+			return state.CancelGoal(id, reason, now())
+		}
+	}); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(output, "Goal %s %s\n", id, target)
 	return err
 }
 
@@ -167,7 +227,11 @@ func status(args []string, root string, output io.Writer) error {
 	// an error for a query: report what is known and omit the comparison.
 	revision, _ := repository.Head(root)
 	for _, goal := range state.Goals {
-		if _, err := fmt.Fprintf(output, "Goal %s %s: %s\n", goal.ID, goal.Status, goal.Title); err != nil {
+		heading := fmt.Sprintf("Goal %s %s: %s", goal.ID, goal.Status, goal.Title)
+		if goal.Reason != "" {
+			heading += fmt.Sprintf(" (%s)", goal.Reason)
+		}
+		if _, err := fmt.Fprintln(output, heading); err != nil {
 			return err
 		}
 		for _, item := range state.WorkItems {

@@ -39,8 +39,11 @@ type Goal struct {
 	Description string     `json:"description"`
 	Repository  string     `json:"repository"`
 	Status      GoalStatus `json:"status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	// Reason explains a Goal that was blocked or cancelled. Neither is worth
+	// recording without one: the status alone says a Goal stopped, not why.
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Item struct {
@@ -193,8 +196,20 @@ func (s State) Validate() error {
 	}
 	goals := map[string]Goal{}
 	for _, goal := range s.Goals {
-		if goal.ID == "" || goal.Title == "" || goal.Repository == "" || (goal.Status != GoalActive && goal.Status != GoalBlocked && goal.Status != GoalCompleted && goal.Status != GoalCancelled) {
+		if goal.ID == "" || goal.Title == "" || goal.Repository == "" {
 			return fmt.Errorf("invalid goal %q", goal.ID)
+		}
+		switch goal.Status {
+		case GoalActive, GoalCompleted:
+			if goal.Reason != "" {
+				return fmt.Errorf("goal %q is %s but carries a reason for stopping", goal.ID, goal.Status)
+			}
+		case GoalBlocked, GoalCancelled:
+			if strings.TrimSpace(goal.Reason) == "" {
+				return fmt.Errorf("goal %q is %s without a reason", goal.ID, goal.Status)
+			}
+		default:
+			return fmt.Errorf("invalid status for goal %q", goal.ID)
 		}
 		if _, exists := goals[goal.ID]; exists {
 			return fmt.Errorf("duplicate goal %q", goal.ID)

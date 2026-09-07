@@ -10,15 +10,15 @@
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `goal block` 要求理由並把 Goal 轉為 BLOCKED；`goal unblock` 轉回 ACTIVE
-- [ ] 被擋住的 Goal 底下，既有的 RUNNING 或 VERIFYING 工作維持原狀
-- [ ] Goal 非 ACTIVE 時，其工作無法 `start`、`verify`，也無法到達 DONE，且不被 `next` 選中
-- [ ] Goal 在某次 Verification Run 進行中被擋住，該次驗證跑完仍記錄其 Evidence
-- [ ] `unblock` 之後工作回到可推進的狀態，先前的進度未受損
-- [ ] `goal complete` 在尚有非 DONE 工作時被拒絕
-- [ ] `goal complete` 在全部 Work Item 皆為 DONE 時把 Goal 轉為 COMPLETED
-- [ ] `goal cancel` 要求理由並把 Goal 轉為 CANCELLED
-- [ ] 非 ACTIVE 的 Goal 不接受 `work add`
-- [ ] `make verify` 通過
+- [x] `goal block` 要求理由並把 Goal 轉為 BLOCKED；`goal unblock` 轉回 ACTIVE
+- [x] 被擋住的 Goal 底下，既有的 RUNNING 或 VERIFYING 工作維持原狀
+- [x] Goal 非 ACTIVE 時，其工作無法 `start`、`verify`，也無法到達 DONE，且不被 `next` 選中
+- [x] Goal 在某次 Verification Run 進行中被擋住，該次驗證跑完仍記錄其 Evidence
+- [x] `unblock` 之後工作回到可推進的狀態，先前的進度未受損
+- [x] `goal complete` 在尚有非 DONE 工作時被拒絕
+- [x] `goal complete` 在全部 Work Item 皆為 DONE 時把 Goal 轉為 COMPLETED
+- [x] `goal cancel` 要求理由並把 Goal 轉為 CANCELLED
+- [x] 非 ACTIVE 的 Goal 不接受 `work add`
+- [x] `make verify` 通過

@@ -1149,3 +1149,150 @@ func TestApprovalAheadOfVerificationRecordsButDoesNotComplete(t *testing.T) {
 		t.Fatalf("review approve = %q, %v", output, err)
 	}
 }
+
+func TestGoalLifecycle(t *testing.T) {
+	root, binary := fixture(t)
+	revision := reviewable(t, binary, root)
+
+	for _, arguments := range [][]string{
+		{"goal", "block", "queue"},
+		{"goal", "block"},
+		{"goal", "cancel", "queue"},
+		{"goal", "unblock", "queue"},
+		{"goal", "retire", "queue"},
+		{"goal", "block", "missing", "--reason", "wrong direction"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
+		}
+	}
+
+	output, err := command(binary, root, "goal", "block", "queue", "--reason", "the direction is wrong")
+	if err != nil || !strings.Contains(output, "BLOCKED") {
+		t.Fatalf("goal block = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	// The pause does not disturb the work underneath it.
+	if !strings.Contains(output, "WI-001 REVIEW") || !strings.Contains(output, "the direction is wrong") {
+		t.Fatalf("status = %s", output)
+	}
+	if !strings.Contains(output, "Next: none") {
+		t.Fatalf("next selected work under a blocked goal: %s", output)
+	}
+	for _, arguments := range [][]string{
+		{"start", "WI-002"},
+		{"verify", "WI-001"},
+		{"work", "add", "--goal", "queue", "--story", "specs/stories/c.md"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v ran under a blocked goal: %s", arguments, output)
+		}
+	}
+	// Approving records the judgement but cannot reach DONE while the goal is
+	// paused, and says so.
+	output, err = command(binary, root, "review", "approve", "WI-001")
+	if err != nil {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-001 REVIEW") || !strings.Contains(output, "Not complete") {
+		t.Fatalf("approve completed work under a blocked goal, or did not say why not: %s", output)
+	}
+
+	if output, err := command(binary, root, "goal", "unblock", "queue"); err != nil || !strings.Contains(output, "ACTIVE") {
+		t.Fatalf("goal unblock = %q, %v", output, err)
+	}
+	// Nothing was lost: the same revision is still verified and can complete.
+	output, err = command(binary, root, "review", "approve", "WI-001")
+	if err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review approve after unblock = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest, ok := state.LatestVerification("WI-001"); !ok || latest.Revision != revision {
+		t.Fatalf("the progress made before blocking was lost: %#v, %v", latest, ok)
+	}
+
+	// COMPLETED is a declaration, and it is refused while work is unfinished.
+	if output, err := command(binary, root, "goal", "complete", "queue"); err == nil {
+		t.Fatalf("completed a goal with WI-002 unfinished: %s", output)
+	}
+	mustRun(t, binary, root, "start", "WI-002")
+	if output, err := command(binary, root, "verify", "WI-002"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "review", "approve", "WI-002"); err != nil || !strings.Contains(output, "WI-002 DONE") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "goal", "complete", "queue"); err != nil || !strings.Contains(output, "COMPLETED") {
+		t.Fatalf("goal complete = %q, %v", output, err)
+	}
+	// An ended Goal stays ended.
+	for _, arguments := range [][]string{
+		{"goal", "block", "queue", "--reason", "reconsidered"},
+		{"goal", "cancel", "queue", "--reason", "reconsidered"},
+		{"goal", "unblock", "queue"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v moved a completed goal: %s", arguments, output)
+		}
+	}
+}
+
+func TestGoalCancelEndsAbandonedWork(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+
+	output, err := command(binary, root, "goal", "cancel", "queue", "--reason", "the customer withdrew the request")
+	if err != nil || !strings.Contains(output, "CANCELLED") {
+		t.Fatalf("goal cancel = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "the customer withdrew the request") || !strings.Contains(output, "Next: none") {
+		t.Fatalf("status = %s", output)
+	}
+	if output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md"); err == nil {
+		t.Fatalf("added work to a cancelled goal: %s", output)
+	}
+}
+
+// TestBlockingMidRunStillRecordsTheEvidence proves the line an inactive Goal
+// draws: it stops new work, not the recording of a fact that already happened.
+func TestBlockingMidRunStillRecordsTheEvidence(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	revision := writeVerify(t, root, "verify:\n\t@sleep 2\n")
+
+	running := startVerify(t, binary, root, "WI-001")
+	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "the direction is wrong")
+	if err := running.Wait(); err != nil {
+		t.Fatalf("verification did not finish after the goal was blocked: %v", err)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, ok := state.LatestVerification("WI-001")
+	if !ok {
+		t.Fatal("a run underway when the goal was blocked lost its evidence")
+	}
+	if latest.Result != work.Pass || latest.Revision != revision {
+		t.Fatalf("evidence = %#v, want PASS at %s", latest, revision)
+	}
+	if state.WorkItemStatus("WI-001") != work.Review {
+		t.Fatalf("WI-001 = %s, want REVIEW", state.WorkItemStatus("WI-001"))
+	}
+}
