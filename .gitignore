@@ -3,3 +3,6 @@ graft/
 
 # ForgePilot's own runtime state, created by `forgepilot init` inside a repo.
 .forgepilot/
+
+# archify 產生的視覺檢查證據：可重跑，不進版控
+docs/diagrams/*.visual-check.*

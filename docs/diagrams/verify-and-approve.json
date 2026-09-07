@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "verify 與 review approve 的順序",
+    "output": "docs/diagrams/verify-and-approve.html",
+    "viewBox": [
+      760,
+      380
+    ],
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "verify-order",
+        "label": "verify 的順序",
+        "focus": [
+          "vcmd",
+          "reclaim",
+          "admit",
+          "run"
+        ],
+        "note": "回收孤兒發生在任何拒絕之前：中斷是已經發生的事實（ADR-0009）。"
+      },
+      {
+        "id": "approve-order",
+        "label": "approve 的順序",
+        "focus": [
+          "rcmd",
+          "record",
+          "check",
+          "finish"
+        ],
+        "note": "審查先被記錄，完成與否由四項條件在同一交易內決定（ADR-0008）。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "verify",
+      "label": "forgepilot verify"
+    },
+    {
+      "id": "review",
+      "label": "forgepilot review approve"
+    }
+  ],
+  "mainPath": [
+    "vcmd",
+    "reclaim",
+    "admit",
+    "run"
+  ],
+  "nodes": [
+    {
+      "id": "vcmd",
+      "lane": "verify",
+      "col": 0,
+      "type": "frontend",
+      "label": "verify",
+      "sublabel": "指令",
+      "width": 52
+    },
+    {
+      "id": "reclaim",
+      "lane": "verify",
+      "col": 1,
+      "type": "security",
+      "label": "回收孤兒",
+      "sublabel": "無條件",
+      "width": 52
+    },
+    {
+      "id": "admit",
+      "lane": "verify",
+      "col": 2,
+      "type": "backend",
+      "label": "能否開始",
+      "sublabel": "Gate",
+      "width": 52
+    },
+    {
+      "id": "run",
+      "lane": "verify",
+      "col": 3,
+      "type": "database",
+      "label": "跑並記錄",
+      "sublabel": "Evidence",
+      "width": 52
+    },
+    {
+      "id": "rcmd",
+      "lane": "review",
+      "col": 0,
+      "type": "frontend",
+      "label": "approve",
+      "sublabel": "指令",
+      "width": 52
+    },
+    {
+      "id": "record",
+      "lane": "review",
+      "col": 1,
+      "type": "database",
+      "label": "記錄審查",
+      "sublabel": "先記錄",
+      "width": 52
+    },
+    {
+      "id": "check",
+      "lane": "review",
+      "col": 2,
+      "type": "backend",
+      "label": "四項條件",
+      "sublabel": "同一交易",
+      "width": 52
+    },
+    {
+      "id": "finish",
+      "lane": "review",
+      "col": 3,
+      "type": "database",
+      "label": "完成解鎖",
+      "sublabel": "下游 READY",
+      "width": 52
+    }
+  ],
+  "edges": [
+    {
+      "id": "vcmd-reclaim",
+      "from": "vcmd",
+      "to": "reclaim"
+    },
+    {
+      "id": "reclaim-admit",
+      "from": "reclaim",
+      "to": "admit"
+    },
+    {
+      "id": "admit-run",
+      "from": "admit",
+      "to": "run"
+    },
+    {
+      "id": "rcmd-record",
+      "from": "rcmd",
+      "to": "record"
+    },
+    {
+      "id": "record-check",
+      "from": "record",
+      "to": "check"
+    },
+    {
+      "id": "check-finish",
+      "from": "check",
+      "to": "finish"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "回收先於拒絕",
+      "items": [
+        "中斷是已發生的事實，不受 Gate 約束",
+        "被拒絕的 verify 仍寫下那筆 INTERRUPTED"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "沒有完成指令",
+      "items": [
+        "approve 先記錄審查，完成是條件的結果",
+        "條件在同一交易內檢查（ADR-0008）"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "四項條件",
+      "items": [
+        "同一 revision 的最新 PASS 與 APPROVED",
+        "無未解除 Gate，且 Goal 為 ACTIVE"
+      ]
+    }
+  ]
+}

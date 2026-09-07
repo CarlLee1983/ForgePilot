@@ -14,6 +14,8 @@
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約表（**flag 命名以此為準**）與各階段 exit checklist
 5. `docs/specs/m*/` — 每個 milestone 的 spec 與 ticket，全部已結案
 
+需要先看懂形狀時，[docs/diagrams/](docs/diagrams/README.md) 有四張圖：狀態機、分層、交易邊界與兩條主要流程。
+
 ## 不要「修回去」的事
 
 這些看起來像疏漏，其實是決定。動手前先讀對應的 ADR。

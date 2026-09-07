@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "一次受鎖的原子替換",
+    "output": "docs/diagrams/state-transaction.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "the-transaction",
+        "label": "交易本身",
+        "focus": [
+          "lock",
+          "read",
+          "apply",
+          "rename"
+        ],
+        "note": "鎖涵蓋 read-modify-write 全程；只有 atomic rename 不足以防止 lost update。"
+      },
+      {
+        "id": "why-one",
+        "label": "為什麼是同一次",
+        "focus": [
+          "apply",
+          "snapshot",
+          "impossible"
+        ],
+        "note": "完成與解鎖若分成兩次交易，中間狀態會被讀到。"
+      }
+    ],
+    "viewBox": [
+      820,
+      520
+    ]
+  },
+  "lanes": [
+    {
+      "id": "tx",
+      "label": "storage.Update 的一次交易"
+    },
+    {
+      "id": "data",
+      "label": "同一次替換涵蓋的資料，以及拆開的後果",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "lock",
+    "read",
+    "apply",
+    "rename"
+  ],
+  "nodes": [
+    {
+      "id": "lock",
+      "lane": "tx",
+      "col": 0,
+      "type": "security",
+      "label": "取得鎖",
+      "sublabel": "flock",
+      "width": 52
+    },
+    {
+      "id": "read",
+      "lane": "tx",
+      "col": 1,
+      "type": "database",
+      "label": "讀取驗證",
+      "sublabel": "decode",
+      "width": 52
+    },
+    {
+      "id": "apply",
+      "lane": "tx",
+      "col": 2,
+      "type": "backend",
+      "label": "執行規則",
+      "sublabel": "work",
+      "width": 52
+    },
+    {
+      "id": "rename",
+      "lane": "tx",
+      "col": 3,
+      "type": "database",
+      "label": "原子替換",
+      "sublabel": "rename",
+      "width": 52
+    },
+    {
+      "id": "snapshot",
+      "lane": "data",
+      "col": 1,
+      "type": "database",
+      "label": "單一 snapshot",
+      "sublabel": "四者共用",
+      "width": 110
+    },
+    {
+      "id": "impossible",
+      "lane": "data",
+      "col": 3,
+      "type": "external",
+      "label": "看不到的中間態",
+      "sublabel": "A DONE、B PENDING",
+      "width": 110
+    }
+  ],
+  "edges": [
+    {
+      "id": "lock-read",
+      "from": "lock",
+      "to": "read"
+    },
+    {
+      "id": "read-apply",
+      "from": "read",
+      "to": "apply"
+    },
+    {
+      "id": "apply-rename",
+      "from": "apply",
+      "to": "rename"
+    },
+    {
+      "id": "apply-snapshot",
+      "from": "apply",
+      "to": "snapshot",
+      "label": "四者一起改寫",
+      "variant": "emphasis"
+    },
+    {
+      "id": "snapshot-impossible",
+      "from": "snapshot",
+      "to": "impossible",
+      "label": "拆成兩次才會出現",
+      "variant": "security",
+      "route": "bottom-channel"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "鎖的範圍",
+      "items": [
+        "鎖涵蓋 read-modify-write 全程",
+        "只有 rename 擋不住 lost update"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "一致性邊界",
+      "items": [
+        "四者共用同一次替換（ADR-0001）",
+        "拆成兩次，中間態就會被讀到"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "失敗時",
+      "items": [
+        "留下舊 snapshot 或完整的新 snapshot",
+        "不得留下截斷的 JSON"
+      ]
+    }
+  ]
+}

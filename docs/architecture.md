@@ -6,6 +6,8 @@ MVP 的 M1–M3 與 M4 已依本文件實作。原始專案需求是產品邊界
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
+本文件的視覺化見 [diagrams/](diagrams/README.md)：狀態機、分層與依賴方向、交易邊界，以及 `verify` 與 `review approve` 的順序。圖與本文件衝突時以本文件與程式碼為準。
+
 ## Authority boundaries
 
 | 擁有者 | 責任 |
