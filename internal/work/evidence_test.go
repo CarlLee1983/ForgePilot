@@ -2,6 +2,7 @@ package work
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -377,7 +378,10 @@ func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
 // form is accepted so that two records pointing at the same pull request cannot
 // be written differently, which would make them incomparable.
 func TestPRReferenceMustBeOwnerNameNumber(t *testing.T) {
-	for _, reference := range []string{"carl/forgepilot#1", "carl/forgepilot#123", "a-b.c_d/e-f.g_h#9"} {
+	// Case is preserved and accepted as written: a user copying the name off the
+	// pull request page must not be refused. That two spellings of one pull
+	// request stay distinguishable is the known cost.
+	for _, reference := range []string{"carl/forgepilot#1", "carl/forgepilot#123", "a-b.c_d/e-f.g_h#9", "Carl/ForgePilot#7"} {
 		state, now, revision := reviewFixture(t)
 		if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", reference, now); err != nil {
 			t.Fatalf("rejected %q: %v", reference, err)
@@ -400,6 +404,14 @@ func TestPRReferenceMustBeOwnerNameNumber(t *testing.T) {
 		"carl/forgepilot#123 ",
 		"carl/forge pilot#123",
 		"carl/forgepilot#123#4",
+		"carl/forgepilot#1\ncarl/evil#2",
+		"carl/forgepilot#1\n",
+		"../..#1",
+		".github/.#1",
+		"-carl/forgepilot#1",
+		"carl/-forgepilot#1",
+		"carl/forgepilot#" + strings.Repeat("1", 300),
+		strings.Repeat("a", 300) + "/b#1",
 	}
 	for _, reference := range rejected {
 		state, now, revision := reviewFixture(t)
@@ -446,7 +458,7 @@ func TestPRReferenceChangesNothingAboutCompletionOrStaleness(t *testing.T) {
 	withPR, now, revision := reviewFixture(t)
 	without, _, _ := reviewFixture(t)
 
-	if got, want := withPR.CompletionBlockers("WI-001"), without.CompletionBlockers("WI-001"); len(got) != len(want) {
+	if got, want := withPR.CompletionBlockers("WI-001"), without.CompletionBlockers("WI-001"); !slices.Equal(got, want) {
 		t.Fatalf("blockers differ before review: %v vs %v", got, want)
 	}
 	if withPR.Stale("WI-001", "other") != without.Stale("WI-001", "other") {
@@ -466,17 +478,31 @@ func TestPRReferenceChangesNothingAboutCompletionOrStaleness(t *testing.T) {
 		t.Fatal("staleness differs after review")
 	}
 
+	if got, want := withPR.CompletionBlockers("WI-001"), without.CompletionBlockers("WI-001"); !slices.Equal(got, want) {
+		t.Fatalf("blockers differ after review: %v vs %v", got, want)
+	}
+
 	// A later judgement on the same revision wins even when it names a different
-	// pull request: the PR does not open a second, parallel review track.
-	rejecting, _, rejectingRevision := reviewFixture(t)
-	if _, err := rejecting.RecordReview("WI-001", rejectingRevision, Approved, "carl@example.com", "", "carl/forgepilot#123", now); err != nil {
+	// pull request: the PR does not open a second, parallel review track. The
+	// route runs through a rejection because DONE has no reopen (ADR-0006).
+	replaced, _, replacedRevision := reviewFixture(t)
+	if _, err := replaced.RecordReview("WI-001", replacedRevision, Rejected, "carl@example.com", "not yet", "carl/forgepilot#123", now); err != nil {
 		t.Fatal(err)
 	}
-	if rejecting.WorkItemStatus("WI-001") != Done {
-		t.Fatalf("fixture did not complete: %s", rejecting.WorkItemStatus("WI-001"))
+	if err := replaced.BeginVerification("WI-001", replacedRevision, "/tmp/worktree", now); err != nil {
+		t.Fatal(err)
 	}
-	latest, ok := rejecting.LatestReview("WI-001")
-	if !ok || latest.PR != "carl/forgepilot#123" {
-		t.Fatalf("latest review = %#v", latest)
+	if _, err := replaced.RecordVerification("WI-001", replacedRevision, "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replaced.RecordReview("WI-001", replacedRevision, Approved, "carl@example.com", "", "carl/forgepilot#456", now); err != nil {
+		t.Fatal(err)
+	}
+	latest, ok := replaced.LatestReview("WI-001")
+	if !ok || latest.PR != "carl/forgepilot#456" || latest.Result != Approved {
+		t.Fatalf("the later review on the same revision did not win: %#v", latest)
+	}
+	if replaced.WorkItemStatus("WI-001") != Done {
+		t.Fatalf("a review naming a different PR blocked completion: %s", replaced.WorkItemStatus("WI-001"))
 	}
 }

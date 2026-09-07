@@ -1574,8 +1574,10 @@ func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
 		if err == nil {
 			t.Fatalf("accepted %q: %s", reference, output)
 		}
-		if !strings.Contains(output, "owner/name#number") {
-			t.Fatalf("error %q does not name the accepted form", output)
+		// Distinguish a malformed value from a usage error: the usage line names
+		// the same form, so matching only that would accept either failure.
+		if !strings.Contains(output, "is not a pull request reference") {
+			t.Fatalf("error %q does not say the value is malformed", output)
 		}
 		state, err := storage.Load(root)
 		if err != nil {
@@ -1589,6 +1591,12 @@ func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
 		if state.WorkItemStatus("WI-001") != work.Review {
 			t.Fatalf("a refused review moved the work: %s", state.WorkItemStatus("WI-001"))
 		}
+	}
+
+	// Naming the flag and giving it nothing is invalid input, not a review
+	// without a pull request.
+	if output, err := command(binary, root, "review", "approve", "WI-001", "--pr", ""); err == nil {
+		t.Fatalf("accepted an empty --pr: %s", output)
 	}
 
 	// Rejection carries the pull request too: being sent back has a venue just

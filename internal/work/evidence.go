@@ -373,15 +373,26 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note,
 // form keeps two records that name the same pull request written the same way;
 // a URL and a shorthand for one pull request would be two strings nothing could
 // compare. The number rejects zero and leading zeros so that one pull request
-// has exactly one spelling.
-var prReference = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[1-9][0-9]*$`)
+// has exactly one spelling, and each segment must start with an alphanumeric so
+// that "." and ".." cannot pose as an owner or a repository.
+//
+// Case is preserved and compared as written. Two spellings of one pull request
+// therefore remain possible, since GitHub treats owner and repository names
+// case-insensitively — a known trade-off, taken because the alternative rejects
+// the value a user copied straight off the pull request page.
+var prReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*#[1-9][0-9]*$`)
+
+// maxPRReferenceLength bounds what may be written into the state snapshot. No
+// real reference comes close; the limit exists so that nothing unbounded reaches
+// durable storage.
+const maxPRReferenceLength = 255
 
 // validPRReference reports whether a PR Reference is well formed. Well formed is
 // all this product checks: whether the pull request exists, is open, or has that
 // HEAD is a question about GitHub, and ForgePilot does not ask GitHub anything
-// (ADR-0010).
+// (ADR-0010). The shape is not GitHub's own naming rules either.
 func validPRReference(reference string) bool {
-	return prReference.MatchString(reference)
+	return len(reference) <= maxPRReferenceLength && prReference.MatchString(reference)
 }
 
 // takeEvidenceID hands out the next ID on the single sequence both kinds of

@@ -236,7 +236,7 @@ Human Review Evidence 可以額外攜帶 PR Reference，聲明這次審查發生
 2. **不主動發出網路請求**。development-plan 的「不得加入 network API」讀成嚴格版：既不對外開介面，也不自行 HTTP、不 spawn `gh`。詳見 [ADR-0010](adr/0010-no-outbound-network-requests.md)。推論是 PR review target 的 HEAD 必須是本機 repository 裡真實存在的 commit，`review` 才能記錄。
 3. **PR Reference 只存在 Evidence 上**，Work Item 不設 PR 欄位。理由同 [ADR-0003](adr/0003-no-work-item-target-revision.md)：Work Item 上的識別欄位會立刻產生「誰負責讓它保持正確」的問題，而一件工作經歷多個 PR（第一個被關掉重開）是常見的事。存在 Evidence 上，那是一條時間軸而不是一個被覆寫的欄位。
 4. **只有 Review PR 化，Verification 不變**。verification Evidence 的 `pr` 必須為空，與既有的「review 不得帶 `command`／`exit_code`、verification 不得帶 `reviewer`／`note`」同屬一套嚴格分流規則。
-5. **PR Reference 的形式為 `owner/name#number` 的單一字串**，以嚴格 pattern 驗證。只接受這一種形式——不接受完整 URL、不做正規化。多一種輸入法就多一組解析錯誤與一個「這兩筆是不是同一個 PR」的比較問題。既有的 `repository` 欄位保持不變（本機 state root 路徑），PR Reference 自帶完整識別，因此離開這台機器仍可解讀。
+5. **PR Reference 的形式為 `owner/name#number` 的單一字串**，以嚴格 pattern 驗證：每段須以英數開頭，number 拒絕 0 與前導零，總長上限 255。只接受這一種形式——不接受完整 URL、不做正規化，明確帶了 `--pr` 卻給空值是輸入無效而非「沒有 PR」。大小寫照原樣保存與比較，因此同一個 PR 仍可能有兩種寫法（GitHub 的 owner／repo 名稱大小寫不敏感）；這是刻意接受的代價，另一條路會拒絕使用者從 PR 頁面直接抄下來的合法寫法。多一種輸入法就多一組解析錯誤與一個「這兩筆是不是同一個 PR」的比較問題。既有的 `repository` 欄位保持不變（本機 state root 路徑），PR Reference 自帶完整識別，因此離開這台機器仍可解讀。
 6. **`--pr` 為選填**。不帶就是 M3 那種純 commit review。強制必填會讓 M3 時代合法完成的 DONE 變成讀不進來的 state，正是 [ADR-0006](adr/0006-done-is-terminal.md) 要避免的事；而本機先審、之後才開 PR 是正當流程，強制順序沒有換到任何東西。
 7. **PR 不參與完成判定與 stale 判定**。DONE 的四項條件與 `Stale` 的定義一字不改。詳見 [ADR-0011](adr/0011-pr-identity-does-not-gate-completion.md)。
 8. **格式驗證屬於 domain**。PR Reference 的格式純粹是字串規則，不碰任何外部系統，因此規則放在 `internal/work` 與其他 Evidence 欄位規則同處，`validateEvidence` 才能對載入的既有 state 一併把關；只在 CLI 驗，手改過的 `state.json` 會夾帶非法值進來。

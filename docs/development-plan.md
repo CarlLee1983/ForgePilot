@@ -268,9 +268,9 @@ Schema 升至 v4：Evidence 加入選填的 `pr`。沿用既有升級契約—�
 
 ### M4 Exit checklist
 
-- [x] Evidence 新增選填的 `pr` 欄位，形式限定為 `owner/name#number`，number 拒絕 0 與前導零；URL 與其他寫法一律被拒。
+- [x] Evidence 新增選填的 `pr` 欄位，形式限定為 `owner/name#number`，每段以英數開頭、number 拒絕 0 與前導零、總長上限 255；URL、換行夾帶、`../..` 與其他寫法一律被拒。
 - [x] `review approve` 與 `review reject` 皆接受選填的 `--pr`；不帶時行為與 M3 完全相同。
-- [x] `--pr` 格式非法時整個指令以非零 exit code 失敗，重新讀回 state 時 Evidence 未增長、Work Item 未移動。
+- [x] `--pr` 帶了空值或格式非法時整個指令以非零 exit code 失敗，重新讀回 state 時 Evidence 未增長、Work Item 未移動。
 - [x] 格式規則位於 `internal/work`，`validateEvidence` 對載入的 state 一併把關；手改的 `state.json` 夾帶非法值會被拒讀。
 - [x] verification Evidence 攜帶 PR Reference 時被驗證拒絕，與既有的 reviewer／note 分流同一套規則。
 - [x] 帶 PR 與不帶 PR 的完成判定與 stale 判定結果逐項相同；同一 revision 上標不同 PR 的兩筆 review 仍互相取代（ADR-0011）。

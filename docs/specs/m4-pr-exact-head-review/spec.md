@@ -56,7 +56,7 @@ development-plan 對 M4 的硬約束也正是這件事：Evidence 必須包含 r
 
 **不新增指令。** `review approve` 與 `review reject` 各增加一個選填的 `--pr`。flag 名以 development-plan 的契約表為準（M3 曾自行命名成 `--as`／`--rationale` 後改回文件寫的名字）。不提供 PR 查詢指令，不提供 `--json`。
 
-**PR Reference 是單一字串，形式為 `owner/name#number`。** 只接受這一種形式：不接受完整 URL，不做正規化。多一種輸入法就多一組解析錯誤，以及一個「這兩筆是不是同一個 PR」的比較問題。既有的 `repository` 欄位不變（它存的是本機 state root 路徑，從 Goal 複製而來），PR Reference 自帶完整識別，因此離開這台機器仍可解讀——development-plan 那條「Evidence 必須包含 repository、PR number 與 exact HEAD SHA」由 PR Reference 與既有的完整 SHA 欄位共同滿足。
+**PR Reference 是單一字串，形式為 `owner/name#number`。** 只接受這一種形式：不接受完整 URL，不做正規化。每段須以英數開頭（否則 `.` 與 `..` 可以冒充 owner 或 repository），number 拒絕 0 與前導零，總長上限 255。大小寫照原樣保存與比較——同一個 PR 因此仍可能有兩種寫法，這是刻意接受的代價。多一種輸入法就多一組解析錯誤，以及一個「這兩筆是不是同一個 PR」的比較問題。既有的 `repository` 欄位不變（它存的是本機 state root 路徑，從 Goal 複製而來），PR Reference 自帶完整識別，因此離開這台機器仍可解讀——development-plan 那條「Evidence 必須包含 repository、PR number 與 exact HEAD SHA」由 PR Reference 與既有的完整 SHA 欄位共同滿足。
 
 **格式規則屬於 `internal/work`。** PR Reference 的格式純粹是字串規則，不碰 filesystem、Git 或任何外部系統，因此它與其他 Evidence 欄位規則同處，由既有的 evidence 驗證路徑一併把關。只在 CLI 驗的話，手動改過的 `state.json` 會夾帶非法值進來。`internal/repository` 不需要任何新能力——這次是真的，M3 的偏離源於「身分預設取自 Git 設定」本身就需要讀 Git，而 PR Reference 完全來自使用者輸入。
 

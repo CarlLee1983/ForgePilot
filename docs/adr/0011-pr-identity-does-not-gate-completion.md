@@ -10,4 +10,4 @@ M4 讓 Human Review Evidence 可以攜帶 PR reference，但 DONE 的四項條�
 
 **Consequences:** 同一個 SHA 上、標著不同 PR 的兩筆 review，彼此互相取代（取最新一筆），不會因為 PR 不同而被視為兩條獨立的審查軌跡。標錯 PR 不會讓一次核准失效——它是一筆記錯的識別資料，不是一次無效的審查。
 
-**Falsified if:** `internal/work/evidence.go` 的 `CompletionBlockers` 或 `Stale` 開始讀 Evidence 的 PR 欄位，或 `internal/work/work.go` 的 Item 出現 PR 欄位。屆時必須先回答 ADR-0003 當初回答過的那個問題：誰負責讓那個欄位保持正確。
+**Falsified if:** `internal/work/completion.go` 的 `CompletionBlockers` 或 `internal/work/evidence.go` 的 `Stale` 開始讀 Evidence 的 PR 欄位，或 `internal/work/work.go` 的 Item 出現 PR 欄位。屆時必須先回答 ADR-0003 當初回答過的那個問題：誰負責讓那個欄位保持正確。

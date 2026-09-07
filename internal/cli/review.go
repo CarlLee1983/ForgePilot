@@ -54,6 +54,12 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 			return errors.New("--reason is required")
 		}
 	}
+	// An explicitly empty --pr is not the same as omitting it: the user named a
+	// pull request and gave nothing, which is invalid input rather than a review
+	// without one.
+	if pullRequest, present := values["pr"]; present && strings.TrimSpace(pullRequest[0]) == "" {
+		return errors.New("--pr requires a value of the form owner/name#number")
+	}
 	reviewer, err := decisionMaker(root, values.one("by"))
 	if err != nil {
 		return err
