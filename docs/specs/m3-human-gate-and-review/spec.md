@@ -1,6 +1,6 @@
 # M3 — Human Gate & Review
 
-前置決策已全部定案，見 [architecture.md](../../architecture.md#m3-開工前定案已完成) 與 `docs/adr/0005`–`0008`。本文件是實作規格。
+前置決策已全部定案，見 [architecture.md](../../architecture.md#m3-開工前定案已完成) 與 `docs/adr/0005`–`0008`。本文件是實作規格；拆出的工作見 [issues/](issues/)。
 
 ## Problem Statement
 
