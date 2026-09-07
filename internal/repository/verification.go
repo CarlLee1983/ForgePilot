@@ -40,19 +40,34 @@ func Head(root string) (string, error) {
 	return revision, nil
 }
 
-// EnsureCanonicalCheck reports whether the managed project defines the canonical
-// check at all. A project without one cannot be verified, which is not the same
-// as failing verification, so this is refused rather than recorded as Evidence.
-func EnsureCanonicalCheck(root string) error {
-	if _, err := os.Stat(filepath.Join(root, "Makefile")); err != nil {
-		return fmt.Errorf("managed project has no Makefile, so `%s` cannot be run", CanonicalCommand)
+// EnsureCanonicalCheck reports whether a checkout defines the canonical check at
+// all. A revision without one cannot be verified, which is not the same as
+// failing verification, so this is refused rather than recorded as Evidence.
+//
+// It must be given the isolated checkout, never the user's worktree: a Makefile
+// that is present but gitignored would make the main worktree look verifiable
+// while the committed revision has no canonical check at all.
+func EnsureCanonicalCheck(checkout string) error {
+	found := false
+	for _, name := range []string{"GNUmakefile", "makefile", "Makefile"} {
+		if _, err := os.Stat(filepath.Join(checkout, name)); err == nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("this revision has no makefile, so `%s` cannot be run", CanonicalCommand)
 	}
 	command := exec.Command("make", "-n", "verify")
-	command.Dir = root
-	if output, err := command.CombinedOutput(); err != nil {
-		return fmt.Errorf("managed project does not define `%s`: %s", CanonicalCommand, strings.TrimSpace(string(output)))
+	command.Dir = checkout
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return nil
 	}
-	return nil
+	if strings.Contains(string(output), "No rule to make target") {
+		return fmt.Errorf("this revision does not define `%s`", CanonicalCommand)
+	}
+	return fmt.Errorf("`%s` cannot be run against this revision: %s", CanonicalCommand, strings.TrimSpace(string(output)))
 }
 
 // PruneWorktrees clears registrations left behind by runs that were killed. Git
@@ -68,7 +83,14 @@ func AddWorktree(root, path, revision string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
+	// Clear both halves of a leftover run before pruning: git keeps a
+	// registration whose directory still exists, and removing the directory first
+	// without pruning turns it into a "missing but already registered" failure.
+	_, _ = git(root, "worktree", "remove", "--force", path)
 	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	if _, err := git(root, "worktree", "prune"); err != nil {
 		return err
 	}
 	if _, err := git(root, "worktree", "add", "--detach", path, revision); err != nil {

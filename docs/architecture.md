@@ -160,9 +160,11 @@ Schema v2 相對 v1 只有新增：`schema_version` 改為 2、根層加入 `evi
 
 ## Verification 與 exact revision：M2 起
 
-Verification Evidence 必須至少保存 repository、Work Item、Story、完整 commit SHA、實際 command、exit code 與 timestamp。`result` 有三個值：`PASS`、`FAIL`、`INTERRUPTED`。FAIL 與 INTERRUPTED 同樣 append；既有 Evidence 不覆寫。INTERRUPTED 表示未產生結果，不得視為 FAIL。
+Verification Evidence 必須至少保存 repository、Work Item、Story、完整 commit SHA、實際 command、exit code 與 timestamp。`result` 有三個值：`PASS`、`FAIL`、`INTERRUPTED`。INTERRUPTED 沒有 exit code（欄位為 null）——未產生結果就沒有結果碼，填 0 會被讀成成功。FAIL 與 INTERRUPTED 同樣 append；既有 Evidence 不覆寫。INTERRUPTED 表示未產生結果，不得視為 FAIL。
 
-受管理專案未提供 `make verify` target 時，`verify` 拒絕執行並回傳明確錯誤，不 append 任何 Evidence——那是無法驗證，不是驗證失敗。
+受驗 revision 未提供 `make verify` target 時，`verify` 拒絕執行並回傳明確錯誤，不 append 任何 Evidence——那是無法驗證，不是驗證失敗。此檢查必須在隔離 checkout 內執行：被 gitignore 的 Makefile 會讓主工作樹看起來可驗證，而受驗的 commit 其實沒有 canonical 檢查。
+
+已知限制：只終止 `make` 子程序而 ForgePilot 本身存活時，ForgePilot 收到的是一個 exit code，會記為 FAIL。中斷語意僅涵蓋 ForgePilot 自身被終止的情況。
 
 Canonical verification 固定為 repository 的 `make verify`；不開放任意 shell command template。Domain 接收結果，不直接執行 shell。
 
@@ -173,7 +175,7 @@ HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revisi
 ### M2 開工前定案（已完成）
 
 1. **Dirty worktree policy**：驗證標的只能是 commit。工作樹不乾淨即拒絕執行 `verify`，不記錄任何 Evidence。乾淨採嚴格定義——tracked 檔案無修改、無 staged 變更、且無 untracked 檔案；ignored 檔案不計入。
-2. **隔離方式**：`git worktree add --detach <SHA>` 到 `.forgepilot/worktrees/` 下的暫存目錄執行，不在主工作樹原地驗證。見 [ADR-0002](adr/0002-verify-in-detached-worktree.md)，其中含對受管理專案強加的「`make verify` 必須能在全新 checkout 上執行」契約。
+2. **隔離方式**：`git worktree add --detach <SHA>` 到 `.forgepilot/worktrees/` 下的暫存目錄執行，不在主工作樹原地驗證。canonical 檢查的存在性也在該 checkout 內判斷，不在主工作樹。見 [ADR-0002](adr/0002-verify-in-detached-worktree.md)，其中含對受管理專案強加的「`make verify` 必須能在全新 checkout 上執行」契約。
 3. **Interruption 與 timeout**：Verification Run 期間額外持有 `locks/verify-<work-id>` 的 flock 作為存活標記；不設逾時上限。孤兒 VERIFYING 由下一次 `verify` 的開頭交易回收，append 一筆 INTERRUPTED Evidence 後退回 RUNNING，不推斷 PASS 或 FAIL。見 [ADR-0004](adr/0004-verifying-liveness-via-flock.md)。
 4. **Crash consistency**：Evidence 保存在 `state.json` 內，與 Work Item 共用同一次受鎖的原子替換，因此不存在單邊寫入的中間態。見 [ADR-0001](adr/0001-evidence-in-state-snapshot.md)。
 5. **Stale 觸發**：Stale 定義為最新一筆 Verification Evidence 的 SHA 不等於目前 HEAD。它不造成任何自動 transition；REVIEW → VERIFYING 只由明確的 `verify` 命令推動。`next` 與 `status` 呈現 stale 但不寫入。

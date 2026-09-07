@@ -131,6 +131,12 @@ func save(directory string, state work.State) error {
 		return err
 	}
 	encoded = append(encoded, '\n')
+	return writeFileAtomically(directory, statePath(directory), encoded)
+}
+
+// writeFileAtomically leaves either the previous contents or the complete new
+// contents at the destination, never a truncated file.
+func writeFileAtomically(directory, destination string, encoded []byte) error {
 	temporary, err := os.CreateTemp(directory, ".state-*.tmp")
 	if err != nil {
 		return err
@@ -152,7 +158,7 @@ func save(directory string, state work.State) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryName, statePath(directory)); err != nil {
+	if err := os.Rename(temporaryName, destination); err != nil {
 		return err
 	}
 	if directoryHandle, err := os.Open(directory); err == nil {

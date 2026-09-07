@@ -134,7 +134,9 @@ func next(args []string, root string, output io.Writer) error {
 		_, err = fmt.Fprintln(output, "No READY work.")
 		return err
 	}
-	_, err = fmt.Fprintf(output, "Next: %s\nGoal: %s\nStory: %s\nReason: earliest READY work\n", item.ID, item.GoalID, item.StoryRef)
+	revision, _ := repository.Head(root)
+	_, err = fmt.Fprintf(output, "Next: %s\nGoal: %s\nStory: %s\nVerification: %s\nReason: earliest READY work\n",
+		item.ID, item.GoalID, item.StoryRef, verificationSummary(&state, item.ID, revision))
 	return err
 }
 

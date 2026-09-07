@@ -233,7 +233,9 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 
-	// No canonical check yet: that is not a failure, it is nothing to verify.
+	// A committed revision that defines no canonical check: that is not a
+	// failure, it is nothing to verify.
+	commitAll(t, root, "stories without a canonical check")
 	output, err := command(binary, root, "verify", "WI-001")
 	if err == nil {
 		t.Fatalf("verified a project with no canonical check: %s", output)
@@ -260,7 +262,7 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	if len(state.Evidence) != 1 {
 		t.Fatalf("evidence = %#v", state.Evidence)
 	}
-	if got := state.Evidence[0]; got.Result != work.Pass || got.Revision != revision || got.ExitCode != 0 {
+	if got := state.Evidence[0]; got.Result != work.Pass || got.Revision != revision || got.ExitCode == nil || *got.ExitCode != 0 {
 		t.Fatalf("evidence = %#v, want PASS at %s", got, revision)
 	}
 	if state.WorkItems[0].Status != work.Review {
@@ -295,7 +297,7 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	}
 	// `make` reports its own exit code 2 when a recipe fails, not the recipe's.
 	// Evidence records the exit code of the command ForgePilot actually ran.
-	if got := state.Evidence[1]; got.Result != work.Fail || got.Revision != failed || got.ExitCode != 2 {
+	if got := state.Evidence[1]; got.Result != work.Fail || got.Revision != failed || got.ExitCode == nil || *got.ExitCode != 2 {
 		t.Fatalf("evidence = %#v, want FAIL at %s", got, failed)
 	}
 	if state.Evidence[0].Result != work.Pass {
@@ -521,5 +523,151 @@ func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 	}
 	if len(state.Evidence) != 3 {
 		t.Fatalf("evidence = %#v, want three accumulated records", state.Evidence)
+	}
+}
+
+// TestVerifyRefusesWhenTheRevisionHasNoCanonicalCheck covers the gap between the
+// worktree the preconditions inspect and the checkout the run happens in: a
+// gitignored Makefile leaves the main worktree clean and looking verifiable while
+// the committed revision has no canonical check at all. That is not a failure.
+func TestVerifyRefusesWhenTheRevisionHasNoCanonicalCheck(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forgepilot/\nMakefile\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(passingVerify), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "ignore the makefile")
+
+	output, err := command(binary, root, "verify", "WI-001")
+	if err == nil {
+		t.Fatalf("verified a revision with no canonical check: %s", output)
+	}
+	if strings.Contains(output, "FAIL") {
+		t.Fatalf("a project that cannot be verified was reported as failing: %q", output)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 0 {
+		t.Fatalf("a refused verification left evidence: %#v", state.Evidence)
+	}
+	if state.WorkItems[0].Status != work.Running || state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("a refused verification moved the work item: %#v", state.WorkItems[0])
+	}
+}
+
+// TestRefusedVerifyLeavesStateUntouched pins the ordering the spec requires:
+// preconditions are checked before anything is written, so a command the user
+// sees fail has not quietly reclaimed an orphan or moved the work item.
+func TestRefusedVerifyLeavesStateUntouched(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, "verify:\n\t@sleep 30\n")
+
+	running := startVerify(t, binary, root, "WI-001")
+	if err := running.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.Wait()
+
+	// Dirty the worktree so the next verify must be refused.
+	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("uncommitted\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "verify", "WI-001")
+	if err == nil {
+		t.Fatalf("verified a dirty worktree: %s", output)
+	}
+	after, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("a refused verification wrote to state:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// TestInterruptedEvidenceHasNoExitCode: an interrupted run produced no result, so
+// it has no exit code. Recording a zero there would read as success to anything
+// that treats exit code zero as passing.
+func TestInterruptedEvidenceHasNoExitCode(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, "verify:\n\t@sleep 30\n")
+
+	running := startVerify(t, binary, root, "WI-001")
+	if err := running.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.Wait()
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
+
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range state.Evidence {
+		if record.Result == work.Interrupted && record.ExitCode != nil {
+			t.Fatalf("INTERRUPTED evidence carries exit code %d: %#v", *record.ExitCode, record)
+		}
+		if record.Result == work.Pass && (record.ExitCode == nil || *record.ExitCode != 0) {
+			t.Fatalf("PASS evidence lost its exit code: %#v", record)
+		}
+	}
+}
+
+// TestVerifyRecoversFromLeftoverWorktrees: a killed run leaves both the directory
+// and git's registration behind. The next verify must clear them rather than fail
+// on git's "missing but already registered" error.
+func TestVerifyRecoversFromLeftoverWorktrees(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	revision := writeVerify(t, root, passingVerify)
+
+	// Reproduce both leftovers: a live registration whose directory is intact,
+	// and a stale registration whose directory has been removed by hand.
+	occupied := filepath.Join(root, ".forgepilot", "worktrees", "WI-001-"+revision[:12])
+	if output, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", occupied, revision).CombinedOutput(); err != nil {
+		t.Fatalf("seed worktree: %v: %s", err, output)
+	}
+	orphanedRegistration := filepath.Join(root, ".forgepilot", "worktrees", "stale")
+	if output, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", orphanedRegistration, revision).CombinedOutput(); err != nil {
+		t.Fatalf("seed stale worktree: %v: %s", err, output)
+	}
+	if err := os.RemoveAll(orphanedRegistration); err != nil {
+		t.Fatal(err)
+	}
+
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify with leftover worktrees = %q, %v", output, err)
+	}
+	output, err := exec.Command("git", "-C", root, "worktree", "list").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(output), ".forgepilot") {
+		t.Fatalf("verification worktrees remain registered: %s", output)
 	}
 }

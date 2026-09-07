@@ -46,6 +46,15 @@ func TestVerifiableRejectsWorkThatCannotBeVerified(t *testing.T) {
 
 func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 	state, now := verifiableState(t)
+	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err == nil {
+		t.Fatal("recorded evidence for work that never entered a verification run")
+	}
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", now); err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkItems[0].Status != Verifying || state.WorkItems[0].CurrentRun == nil {
+		t.Fatalf("begin left %#v", state.WorkItems[0])
+	}
 	pass, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +62,7 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 	if pass.ID != "EV-001" || pass.Result != Pass || pass.Type != VerificationEvidence {
 		t.Fatalf("evidence = %#v", pass)
 	}
-	if pass.Revision != "abc123" || pass.Command != "make verify" || pass.ExitCode != 0 {
+	if pass.Revision != "abc123" || pass.Command != "make verify" || pass.ExitCode == nil || *pass.ExitCode != 0 {
 		t.Fatalf("evidence lost the run's identity: %#v", pass)
 	}
 	if pass.WorkItemID != "WI-001" || pass.StoryRef != "specs/stories/a" || pass.Repository != "/repo" {
@@ -63,11 +72,14 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 		t.Fatalf("PASS left work as %s, want REVIEW", state.WorkItems[0].Status)
 	}
 
+	if err := state.BeginVerification("WI-001", "def456", "/tmp/wt", now); err != nil {
+		t.Fatal(err)
+	}
 	fail, err := state.RecordVerification("WI-001", "def456", "make verify", 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fail.ID != "EV-002" || fail.Result != Fail || fail.ExitCode != 2 {
+	if fail.ID != "EV-002" || fail.Result != Fail || fail.ExitCode == nil || *fail.ExitCode != 2 {
 		t.Fatalf("evidence = %#v", fail)
 	}
 	if state.WorkItems[0].Status != Running {
@@ -83,6 +95,9 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 
 func TestValidateRejectsInconsistentEvidence(t *testing.T) {
 	state, now := verifiableState(t)
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", now); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
@@ -99,13 +114,14 @@ func TestValidateRejectsInconsistentEvidence(t *testing.T) {
 	if err := reused.Validate(); err == nil {
 		t.Fatal("accepted a next_evidence_id that would reuse an ID")
 	}
+	zero := 0
 	orphaned := state
-	orphaned.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-404", Revision: "abc", Result: Pass}}
+	orphaned.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-404", Revision: "abc", Result: Pass, ExitCode: &zero}}
 	if err := orphaned.Validate(); err == nil {
 		t.Fatal("accepted evidence for an unknown work item")
 	}
 	unresulted := state
-	unresulted.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-001", Revision: "abc", Result: "MAYBE"}}
+	unresulted.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-001", Revision: "abc", Result: "MAYBE", ExitCode: &zero}}
 	if err := unresulted.Validate(); err == nil {
 		t.Fatal("accepted evidence with an unknown result")
 	}
@@ -118,6 +134,9 @@ func TestLatestVerificationAndStaleness(t *testing.T) {
 	}
 	if state.Stale("WI-001", "abc123") {
 		t.Fatal("never-verified work reported as stale rather than unverified")
+	}
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", now); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
 		t.Fatal(err)
@@ -140,6 +159,9 @@ func TestLatestVerificationAndStaleness(t *testing.T) {
 	if err := state.Start("WI-002", now); err != nil {
 		t.Fatal(err)
 	}
+	if err := state.BeginVerification("WI-002", "def456", "/tmp/wt", now); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := state.RecordVerification("WI-002", "def456", "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
@@ -149,5 +171,37 @@ func TestLatestVerificationAndStaleness(t *testing.T) {
 	}
 	if !state.Stale("WI-001", "def456") {
 		t.Fatal("staleness leaked across work items")
+	}
+}
+
+func TestReclaimRunRecordsAnInterruptionWithoutAnExitCode(t *testing.T) {
+	state, now := verifiableState(t)
+	if _, _, found, err := state.ReclaimRun("WI-001", "make verify", now); err != nil || found {
+		t.Fatalf("reclaimed a run that was never started: %v, %v", found, err)
+	}
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt-abc", now); err != nil {
+		t.Fatal(err)
+	}
+	evidence, abandoned, found, err := state.ReclaimRun("WI-001", "make verify", now)
+	if err != nil || !found {
+		t.Fatalf("ReclaimRun = %v, %v", found, err)
+	}
+	if evidence.Result != Interrupted {
+		t.Fatalf("an abandoned run was recorded as %s", evidence.Result)
+	}
+	if evidence.ExitCode != nil {
+		t.Fatalf("INTERRUPTED evidence carries exit code %d", *evidence.ExitCode)
+	}
+	if evidence.Revision != "abc123" {
+		t.Fatalf("INTERRUPTED evidence lost the interrupted run's revision: %#v", evidence)
+	}
+	if abandoned != "/tmp/wt-abc" {
+		t.Fatalf("abandoned worktree = %q, want the path state recorded", abandoned)
+	}
+	if state.WorkItems[0].Status != Running || state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("reclaim left %#v", state.WorkItems[0])
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

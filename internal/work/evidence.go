@@ -15,10 +15,6 @@ type EvidenceType string
 
 const VerificationEvidence EvidenceType = "verification"
 
-// VerificationCommand names the canonical check in Evidence. The domain records
-// the command; it never runs one.
-const VerificationCommand = "make verify"
-
 // Result is the outcome of a Verification Run. Interrupted means no result was
 // produced; it must never be reported as a failure.
 type Result string
@@ -38,9 +34,12 @@ type Evidence struct {
 	StoryRef   string       `json:"story_ref"`
 	Revision   string       `json:"revision"`
 	Command    string       `json:"command"`
-	ExitCode   int          `json:"exit_code"`
-	Result     Result       `json:"result"`
-	CreatedAt  time.Time    `json:"created_at"`
+	// ExitCode is absent for an INTERRUPTED run: no result was produced, so there
+	// is no exit code. Recording a zero would read as success to anything that
+	// treats zero as passing.
+	ExitCode  *int      `json:"exit_code"`
+	Result    Result    `json:"result"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Verifiable reports whether a Work Item may enter a Verification Run. REVIEW is
@@ -61,6 +60,21 @@ func (s *State) Verifiable(id string) error {
 	return nil
 }
 
+// CanBeginVerification reports whether a new Verification Run may start. It also
+// admits a Work Item left in VERIFYING, because such a run can only be an orphan:
+// the caller reaches this while holding the Work Item's verification lock, so no
+// live runner can exist.
+func (s *State) CanBeginVerification(id string) error {
+	item := s.item(id)
+	if item != nil && item.Status == Verifying && item.CurrentRun != nil {
+		if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
+			return fmt.Errorf("work item %q does not belong to an active goal", id)
+		}
+		return nil
+	}
+	return s.Verifiable(id)
+}
+
 // RecordVerification appends the Evidence for a finished Verification Run and
 // moves the Work Item accordingly. It never overwrites existing Evidence.
 func (s *State) RecordVerification(id, revision, command string, exitCode int, now time.Time) (Evidence, error) {
@@ -68,13 +82,18 @@ func (s *State) RecordVerification(id, revision, command string, exitCode int, n
 	if exitCode != 0 {
 		result = Fail
 	}
-	return s.appendEvidence(id, revision, command, exitCode, result, now)
+	return s.appendEvidence(id, revision, command, &exitCode, result, now)
 }
 
-func (s *State) appendEvidence(id, revision, command string, exitCode int, result Result, now time.Time) (Evidence, error) {
+func (s *State) appendEvidence(id, revision, command string, exitCode *int, result Result, now time.Time) (Evidence, error) {
 	item := s.item(id)
 	if item == nil {
 		return Evidence{}, fmt.Errorf("unknown work item %q", id)
+	}
+	// Only a Verification Run produces Evidence, so only VERIFYING work can leave
+	// it. Without this the domain would offer a jump to REVIEW from any status.
+	if item.Status != Verifying {
+		return Evidence{}, fmt.Errorf("work item %q is %s; only VERIFYING work can record verification evidence", id, item.Status)
 	}
 	goal := s.goal(item.GoalID)
 	if goal == nil {
@@ -134,6 +153,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 		if record.Revision == "" {
 			return fmt.Errorf("evidence %q has no revision", record.ID)
 		}
+		if (record.Result == Interrupted) != (record.ExitCode == nil) {
+			return fmt.Errorf("evidence %q pairs result %q with the wrong exit code", record.ID, record.Result)
+		}
 		if _, ok := items[record.WorkItemID]; !ok {
 			return fmt.Errorf("evidence %q refers to unknown work item %q", record.ID, record.WorkItemID)
 		}
@@ -162,6 +184,9 @@ func (s *State) BeginVerification(id, revision, worktreePath string, now time.Ti
 	if err := s.Verifiable(id); err != nil {
 		return err
 	}
+	if s.item(id).CurrentRun != nil {
+		return fmt.Errorf("work item %q still has an unreclaimed verification run", id)
+	}
 	if revision == "" {
 		return errors.New("a verification run requires a revision")
 	}
@@ -176,19 +201,23 @@ func (s *State) BeginVerification(id, revision, worktreePath string, now time.Ti
 // RUNNING. It must only be called once the caller has established that no live
 // runner remains. INTERRUPTED means no result was produced: it is never a FAIL,
 // and a result is never inferred.
-func (s *State) ReclaimRun(id string, now time.Time) (Evidence, bool, error) {
+func (s *State) ReclaimRun(id, command string, now time.Time) (Evidence, string, bool, error) {
 	item := s.item(id)
 	if item == nil {
-		return Evidence{}, false, fmt.Errorf("unknown work item %q", id)
+		return Evidence{}, "", false, fmt.Errorf("unknown work item %q", id)
 	}
 	if item.CurrentRun == nil {
-		return Evidence{}, false, nil
+		return Evidence{}, "", false, nil
 	}
-	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, VerificationCommand, 0, Interrupted, now)
+	// Take the worktree path from state rather than recomputing it: state holds
+	// where the interrupted run actually ran, which survives changes to the
+	// naming scheme or the layout.
+	abandoned := item.CurrentRun.WorktreePath
+	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, command, nil, Interrupted, now)
 	if err != nil {
-		return Evidence{}, false, err
+		return Evidence{}, "", false, err
 	}
-	return evidence, true, nil
+	return evidence, abandoned, true, nil
 }
 
 // WorkItemStatus reports a Work Item's current status, or an empty status when no

@@ -54,7 +54,13 @@ func Migrate(root string) (bool, error) {
 		if err := state.Validate(); err != nil {
 			return fmt.Errorf("migrated state is invalid: %w", err)
 		}
-		if err := os.WriteFile(backup, contents, 0600); err != nil {
+		if err := validateRepository(state, root); err != nil {
+			return err
+		}
+		// The backup must survive a crash as reliably as the state it protects:
+		// a truncated backup plus a refusal to overwrite it would leave the user
+		// with neither a usable backup nor a way forward.
+		if err := writeFileAtomically(directory, backup, contents); err != nil {
 			return fmt.Errorf("write backup: %w", err)
 		}
 		if err := save(directory, state); err != nil {
