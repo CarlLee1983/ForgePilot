@@ -742,7 +742,7 @@ func TestGateBlocksAdvancementWithoutChangingStatus(t *testing.T) {
 
 	output, err := command(binary, root, "gate", "open", "--work", "WI-001",
 		"--question", "Which cache?", "--option", "redis", "--option", "in-process",
-		"--rationale", "the latency budget is unstated")
+		"--reason", "the latency budget is unstated")
 	if err != nil || !strings.Contains(output, "GATE-001") {
 		t.Fatalf("gate open = %q, %v", output, err)
 	}
@@ -901,7 +901,7 @@ func TestGateResolveAndCancelAreFinalAndVisible(t *testing.T) {
 
 	// Cancelling takes an explicit identity and a required reason.
 	output, err = command(binary, root, "gate", "cancel", "GATE-002",
-		"--reason", "the rows do not exist yet", "--as", "someone@example.com")
+		"--reason", "the rows do not exist yet", "--by", "someone@example.com")
 	if err != nil || !strings.Contains(output, "CANCELLED") {
 		t.Fatalf("gate cancel = %q, %v", output, err)
 	}
@@ -1027,7 +1027,7 @@ func TestReviewRecordsAJudgementBesideTheVerification(t *testing.T) {
 	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
 		t.Fatalf("verify = %q, %v", output, err)
 	}
-	output, err = command(binary, root, "review", "approve", "WI-001", "--as", "someone@example.com", "--note", "reads correct")
+	output, err = command(binary, root, "review", "approve", "WI-001", "--by", "someone@example.com", "--note", "reads correct")
 	if err != nil || !strings.Contains(output, "APPROVED") {
 		t.Fatalf("review approve = %q, %v", output, err)
 	}
@@ -1295,4 +1295,80 @@ func TestBlockingMidRunStillRecordsTheEvidence(t *testing.T) {
 	if state.WorkItemStatus("WI-001") != work.Review {
 		t.Fatalf("WI-001 = %s, want REVIEW", state.WorkItemStatus("WI-001"))
 	}
+}
+
+// TestEndToEndQueueAdvances is the acceptance M1 deferred to M3. Until now the
+// claim "A completes, so B becomes READY" could only be shown with a test
+// fixture that set DONE directly, because no product path reached it. This runs
+// the real one, end to end, in separate processes against a real repository.
+func TestEndToEndQueueAdvances(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	writeVerify(t, root, passingVerify)
+
+	if output, err := command(binary, root, "next"); err != nil || !strings.Contains(output, "Next: WI-001") {
+		t.Fatalf("next = %q, %v", output, err)
+	}
+	mustRun(t, binary, root, "start", "WI-001")
+
+	// A question comes up mid-flight. The work stops moving without losing the
+	// status it had, and comes back to life once the question is answered.
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Should the old rows be backfilled?", "--option", "yes", "--option", "no")
+	if output, err := command(binary, root, "verify", "WI-001"); err == nil {
+		t.Fatalf("verified work with an open gate: %s", output)
+	}
+	output, err := command(binary, root, "status")
+	if err != nil || !strings.Contains(output, "WI-001 RUNNING") || !strings.Contains(output, "Gates: 1 open") {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "no", "--note", "there are no old rows yet")
+
+	revision, err := headRevision(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "review", "approve", "WI-001", "--note", "solves the right problem")
+	if err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+
+	// A fresh process reads back the finished queue.
+	output, err = command(binary, root, "next")
+	if err != nil || !strings.Contains(output, "Next: WI-002") {
+		t.Fatalf("next = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkItemStatus("WI-001") != work.Done || state.WorkItemStatus("WI-002") != work.Ready {
+		t.Fatalf("queue did not advance: %#v", state.WorkItems)
+	}
+	verification, ok := state.LatestVerification("WI-001")
+	if !ok || verification.Result != work.Pass || verification.Revision != revision {
+		t.Fatalf("verification evidence = %#v, %v", verification, ok)
+	}
+	approval, ok := state.LatestReview("WI-001")
+	if !ok || approval.Result != work.Approved || approval.Revision != revision {
+		t.Fatalf("review evidence = %#v, %v", approval, ok)
+	}
+	if resolved := state.GatesFor("WI-001"); len(resolved) != 1 || resolved[0].Choice != "no" {
+		t.Fatalf("gate history = %#v", resolved)
+	}
+	mustRun(t, binary, root, "start", "WI-002")
+}
+
+func headRevision(root string) (string, error) {
+	output, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }

@@ -28,7 +28,7 @@ _Avoid_：Agent 自我測試、臨時指定的 shell command
 **Verification Run**：一次進行中的 Verification。它是短暫的，可能因中斷而結束並且不留下成功或失敗的結論。
 _Avoid_：Evidence、VERIFYING 狀態本身
 
-**Stale**：既有 Evidence 所綁定的 revision 已不是目前的 revision，因而不適用於當下。
+**Stale**：既有 Evidence 所綁定的 revision 已不是目前的 revision，因而不適用於當下。DONE 的工作不標示 stale——它已在某個確切 revision 上完成，重驗的提示對它不對應任何行動。
 _Avoid_：失效、FAIL、需要重做
 
 **Revision Identity**：Evidence 所對應的精確工程版本身分；完成與審查涉及 repository、Story 與 commit，PR review 另涉及 PR 與其 HEAD。

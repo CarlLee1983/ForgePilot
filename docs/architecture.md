@@ -18,7 +18,7 @@ M1 已依本文件實作；M2 以後仍是規劃。原始專案需求是產品�
 
 Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不讀取程式碼後自行判斷正確性，也不替代 ForgeFlowV2 的工程 lifecycle。
 
-Breaking change、architecture trade-off、security-sensitive decision、production operation、destructive action、scope expansion、ambiguous requirement、merge／release authorization 都需要明確 Human Decision。M3 提供 Gate 紀錄；M1／M2 尚不能在產品內完整表示這些決策，不得因尚未實作而視為已獲授權。
+Breaking change、architecture trade-off、security-sensitive decision、production operation、destructive action、scope expansion、ambiguous requirement、merge／release authorization 都需要明確 Human Decision。M3 起這些決策以 Gate 表示並保存；merge／release authorization 仍不在產品範圍內，Gate resolution 不授予該權限。
 
 ## Implementation boundaries
 
@@ -35,7 +35,7 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/carl/forgepilot`
 
 由入口組裝依賴；時間、I/O 與外部執行結果透過明確參數或必要的小介面進入規則。不要為每個 entity 預先建立一組 Save／Get repository interfaces。
 
-單一 JSON snapshot 的一致性邊界涵蓋 Goal 與 Work Item；不能以多次獨立 Save 取代一次受鎖保護的操作。M2／M3 有實際需求時才加入 Evidence 與 Gate 的具體邊界。
+單一 JSON snapshot 的一致性邊界涵蓋 Goal、Work Item、Evidence 與 Gate：四者共用同一次受鎖的原子替換，不能以多次獨立 Save 取代。完成一件工作與解鎖其下游必須落在同一次交易內，否則讀取者會看到「A 已 DONE 但 B 仍 PENDING」的中間狀態。
 
 ## Domain data
 
@@ -47,12 +47,12 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/carl/forgepilot`
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
 | Work Item run | `current_run`（revision、worktree path、started_at；閒置時為 null） | M2 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
-| Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`reason`、`options`（至少兩個）、`status`，以及 resolve／cancel 時的選項或理由、自述決策者與時間 | M3 |
-| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、實際 command、exit code、`result`、timestamp | M2 起 |
+| Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`rationale`（開啟時的說明）、`options`（至少兩個）、`status`、`opened_at`，以及關閉時的 `choice`／`note`（resolve）或 `reason`（cancel）、`decided_by`、`decided_at` | M3 |
+| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、`result`、timestamp；verification 另有 `command` 與 `exit_code`，review 另有 `reviewer` 與 `note` | M2 起 |
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
-Work Item statuses：`PENDING`, `READY`, `RUNNING`, `VERIFYING`, `REVIEW`, `DONE`。M1 可到達的狀態只有前三者，M2 加上 `VERIFYING` 與 `REVIEW`，`DONE` 由 M3 提供。
+Work Item statuses：`PENDING`, `READY`, `RUNNING`, `VERIFYING`, `REVIEW`, `DONE`。M1 可到達的狀態只有前三者，M2 加上 `VERIFYING` 與 `REVIEW`，`DONE` 自 M3 起由 `review approve` 在條件滿足時達成。
 
 沒有 `BLOCKED` 或 `WAITING_HUMAN`：阻擋由「該 Work Item 有沒有未解除的 Gate」表達，不佔用狀態欄。狀態描述工作在生命週期的位置，Gate 是另一個維度的條件；兩處各表達一次同一事實，就會需要「記住進入阻擋前是什麼狀態」這種只為修補覆寫而存在的欄位。詳見 [ADR-0007](adr/0007-blocking-is-not-a-status.md)。Goal 的 `BLOCKED` 保留，它是刻意的不對稱——擋整個 Goal 用 Goal 狀態，擋一件工作用 Gate。
 
@@ -157,7 +157,9 @@ State snapshot 包含 `schema_version`、Goal、Work Item 與必要 ID 配發資
 
 Schema v2 相對 v1 只有新增：`schema_version` 改為 2、根層加入 `evidence` 陣列與 `next_evidence_id`、Work Item 加入 `current_run`。無欄位刪除或語意改變。
 
-`internal/work` 的版本檢查是嚴格相等，因此 M2 binary 同樣拒讀 v1 state。升級不自動發生，必須由使用者明確執行 `forgepilot migrate`：該指令先把 `state.json` 備份為 `state.json.v1.bak`，備份檔已存在時拒絕執行而非覆寫；對已是 v2 的 state 回報「已是最新版本」並以 exit 0 結束，使重複執行安全。不提供 downgrade——v2 的 Evidence 在 v1 無容身之處，要回頭的人手動還原備份。
+`internal/work` 的版本檢查是嚴格相等，因此新版 binary 一律拒讀較舊的 state，舊版 binary 也拒讀較新的。升級不自動發生，必須由使用者明確執行 `forgepilot migrate`：該指令先把 `state.json` 備份為以來源版本命名的 `state.json.v<n>.bak`，備份檔已存在時拒絕執行而非覆寫；對已是最新版本的 state 回報「已是最新版本」並以 exit 0 結束，使重複執行安全。不提供 downgrade——新版的 Evidence 與 Gate 在舊版無容身之處，要回頭的人手動還原備份。
+
+`migrate` 逐版套用升級步驟，因此跳過某一版的使用者只需執行一次即可走到最新，而不是按跳過的版本數重跑。
 
 `worktrees/` 由 ForgePilot 完全掌控：每次 `verify` 前先 `git worktree prune` 清除被強制終止的程序留下的殘骸，結束後一律 `git worktree remove --force`，PASS 與 FAIL 皆刪除。
 
@@ -201,6 +203,20 @@ OPEN Gate 必須阻擋工作推進。Resolve 需保存明確 Decision 與時間�
 6. **完成的達成方式**：不提供獨立的完成指令。`review approve` 在同一交易內檢查條件，滿足就進入 DONE 並解鎖下游。詳見 [ADR-0008](adr/0008-approval-completes-work.md)。
 7. **多筆結果的判定**：同一 revision 各取最新一筆——DONE 要求最新 Verification 為 PASS 且最新 Human Review 為 APPROVED。曾經出現過即算數會讓「重跑以確認 PASS 是否穩定」反過來變成漏洞。
 8. **Goal lifecycle**：提供 `goal block` / `unblock` / `complete` / `cancel`。COMPLETED 是人手動宣告且要求全部 Work Item 皆為 DONE，不由系統推斷——自動標記會產生一個需要退回 ACTIVE 的可逆狀態，與 DONE 不可逆的立場矛盾。Goal 轉為非 ACTIVE 時，底下活躍的工作維持原狀但無法推進；進行中的 Verification Run 跑完仍須記錄其 Evidence，那是已發生的事實。
+
+### M3 schema v3
+
+Schema v3 相對 v2 同樣只有新增：`schema_version` 改為 3、根層加入 `gates` 陣列與 `next_gate_id`、Evidence 加入 review 專用的 `reviewer` 與 `note`、Goal 加入 `reason`（僅 BLOCKED 與 CANCELLED 使用）。無欄位刪除或語意改變。
+
+Gate 與 Work Item 共用同一份 state snapshot 與同一次受鎖的原子替換，理由同 [ADR-0001](adr/0001-evidence-in-state-snapshot.md)：分開存放會產生兩者不一致的中間態。Gate ID 由受鎖操作發出遞增序號，格式 `GATE-001`。
+
+### M3 Human Review Evidence
+
+Human Review 是 Evidence 的第二個 `type`，與 Verification 共用同一個容器與同一條 ID 序列，因此一件工作的歷史是單一時間軸。它綁定 repository、Work Item、Story 與當下的完整 commit SHA，工作樹不乾淨時拒絕記錄。
+
+`result` 為 `APPROVED` 或 `REJECTED`；REJECTED 必須附理由並把工作退回 RUNNING。review 沒有 `command` 也沒有 `exit_code`——它是判斷，不是跑過的命令；verification 則不得攜帶 `reviewer` 或 `note`。兩者以 `type` 分流驗證，避免一種 Evidence 被當成另一種讀。
+
+進入 DONE 的四項條件在 `review approve` 的同一次交易內檢查：同一 revision 的最新 Verification 為 `PASS`、最新 Human Review 為 `APPROVED`、該 Work Item 無未解除 Gate、其 Goal 為 `ACTIVE`。滿足則進入 DONE 並於同一交易重新計算受影響的 PENDING 工作，只有全部依賴皆為 DONE 者轉為 READY。
 
 ### 呈現規則
 

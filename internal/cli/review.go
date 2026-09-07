@@ -29,14 +29,14 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	verb := strings.ToLower(string(result))
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
 		if result == work.Rejected {
-			return errors.New("usage: forgepilot review reject <work-id> --reason <text> [--as <identity>]")
+			return errors.New("usage: forgepilot review reject <work-id> --reason <text> [--by <identity>]")
 		}
-		return errors.New("usage: forgepilot review approve <work-id> [--note <text>] [--as <identity>]")
+		return errors.New("usage: forgepilot review approve <work-id> [--note <text>] [--by <identity>]")
 	}
 	id := args[0]
-	allowed := map[string]bool{"as": false, "note": false}
+	allowed := map[string]bool{"by": false, "note": false}
 	if result == work.Rejected {
-		allowed = map[string]bool{"as": false, "reason": false}
+		allowed = map[string]bool{"by": false, "reason": false}
 	}
 	values, err := flags(args[1:], allowed)
 	if err != nil {
@@ -49,7 +49,7 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 			return errors.New("--reason is required")
 		}
 	}
-	reviewer, err := decisionMaker(root, values.one("as"))
+	reviewer, err := decisionMaker(root, values.one("by"))
 	if err != nil {
 		return err
 	}

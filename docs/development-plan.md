@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1 已完成；M2 以後仍為規劃。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+MVP 的 M1–M3 已完成；M4 仍為規劃。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -25,7 +25,7 @@ M1 通過後才開始 M2；M2 通過後才開始 M3。MVP 完成範圍為 M1–M
 
 - M1 真實 CLI 流程驗收到 A RUNNING、B PENDING 與 process restart。
 - M1 以測試內建立的 dependency fixture 驗證「A 已為 DONE 時，B 可 READY」。Fixture 不提供產品指令或修改使用者 state 的捷徑。
-- M3 才執行真實的 A → verify → review → DONE → B READY 端到端驗收。
+- M3 才執行真實的 A → verify → review → DONE → B READY 端到端驗收。**已完成**：見 `integration_test.go` 的 `TestEndToEndQueueAdvances`，以獨立 process 對真實 Git repository 跑完整條流程。
 
 不加入臨時 `complete`、`set-status` 或測試專用 approve，也不把 RUNNING 宣稱為完成。
 
@@ -202,7 +202,7 @@ Integration fixture 加入 Makefile 與真實 commit。驗收：PASS → REVIEW�
 
 ### M3
 
-開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m3-開工前定案已完成) 與 `docs/adr/0005`–`0008`。剩下的是實作。
+開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m3-開工前定案已完成) 與 `docs/adr/0005`–`0008`。實作已完成，切片與驗收見 [specs/m3-human-gate-and-review/](specs/m3-human-gate-and-review/) 底下的七張 ticket。
 
 其中兩項原本列為必須定案的問題是被消滅而非回答：移除 `WAITING_HUMAN` 之後不存在「恢復規則」，移除 Work Item 的 `BLOCKED` 之後不存在「BLOCKED recovery」。
 
@@ -226,6 +226,22 @@ Schema 升至 v3：新增 Gate 集合與其 ID 配發計數，Evidence 加入 re
 交付切片依序為：schema v3 與 v2→v3 升級；Gate 的開啟、解除、取消與阻擋語意；Human Review Evidence 與 reject；approve 至 DONE 與依賴原子解鎖；Goal lifecycle；`status` 擴充與端到端驗收。
 
 驗收：未解 Gate 不可推進；多 Gate 需全部關閉才解除；cancel 解除阻擋且留下理由；resolve 只接受列出的選項；不同 revision 的 PASS 與 APPROVED 不可組合；同一 revision 上較新的 FAIL 或 REJECTED 勝過較舊的 PASS 或 APPROVED；未 review 不可 DONE；approve 後依賴在同一交易內解鎖；DONE 無任何 reopen 路徑；DONE 工作不標示 stale；Goal 非 ACTIVE 時活躍工作維持原狀但無法推進，而進行中的 Verification Run 跑完仍記錄 Evidence；`goal complete` 在尚有非 DONE 工作時被拒。另完成真實的 A → verify → approve → DONE → B READY 端到端流程，這是 M1 分段驗收時延後至此的項目。
+
+### M3 Exit checklist
+
+- [x] 未解除 Gate 阻擋 `start` 與 `verify`，且不被 `next` 選中；開關 Gate 不改變 Work Item 的狀態。
+- [x] 一件工作可同時掛多個 Gate，全部關閉才解除阻擋；`resolve` 只接受列出的選項，`cancel` 要求理由並在 `status` 中可見。
+- [x] Gate 進入 RESOLVED 或 CANCELLED 後不可再變更；決策連同自述決策者與時間保存，身分明確標示為聲明而非認證。
+- [x] Human Review 綁定完整 commit SHA，與 Verification 共用同一容器與 ID 序列；REJECTED 要求理由並退回 RUNNING；髒工作樹被拒。
+- [x] 未驗證或未審查不可 DONE；不同 revision 的 PASS 與 APPROVED 不可組合；同一 revision 上較新的 FAIL 或 REJECTED 勝過較舊的 PASS 或 APPROVED。
+- [x] 有未解除 Gate 或 Goal 非 ACTIVE 時不完成；approve 與 PASS revision 不符時仍記錄審查、不完成，且 `status` 說明原因。
+- [x] 完成後全部依賴皆 DONE 的下游在同一交易內轉為 READY，仍有其他未完成依賴者不被解鎖；新 process 讀回不存在中間狀態。
+- [x] 產品中不存在完成指令、reopen、Gate 查詢指令、`--json` 或身分認證；DONE 工作不標示 stale 但仍顯示完成時的 revision。
+- [x] Goal 非 ACTIVE 時活躍工作維持原狀但無法推進，進行中的 Verification Run 跑完仍記錄 Evidence；`goal complete` 在尚有非 DONE 工作時被拒。
+- [x] v2 state 被拒讀並指示 migrate；`migrate` 逐版升級、備份、重複執行安全、備份已存在時拒絕、升級不遺失資料。
+- [x] 真實的 A start → verify → approve → DONE → B READY 端到端流程以獨立 process 跑通，同一流程涵蓋 Gate 的阻擋與解除。
+- [x] `make verify` 與 `go test -race ./...` 於本次實際執行並記錄環境與命令。
+- [x] README、architecture 與 CONTEXT 反映實際行為，PR review target 仍清楚標示為未實作。
 
 ### M4
 

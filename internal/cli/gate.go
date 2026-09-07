@@ -28,7 +28,7 @@ func gate(args []string, root string, output io.Writer) error {
 }
 
 func openGate(args []string, root string, output io.Writer) error {
-	values, err := flags(args, map[string]bool{"work": false, "question": false, "option": true, "rationale": false})
+	values, err := flags(args, map[string]bool{"work": false, "question": false, "option": true, "reason": false})
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func openGate(args []string, root string, output io.Writer) error {
 	var opened work.Gate
 	if err := storage.Update(root, func(state *work.State) error {
 		var openErr error
-		opened, openErr = state.OpenGate(values.one("work"), values.one("question"), values.all("option"), values.one("rationale"), now())
+		opened, openErr = state.OpenGate(values.one("work"), values.one("question"), values.all("option"), values.one("reason"), now())
 		return openErr
 	}); err != nil {
 		return err
@@ -50,17 +50,17 @@ func openGate(args []string, root string, output io.Writer) error {
 
 func resolveGate(args []string, root string, output io.Writer) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
-		return errors.New("usage: forgepilot gate resolve <gate-id> --option <option> [--note <text>] [--as <identity>]")
+		return errors.New("usage: forgepilot gate resolve <gate-id> --option <option> [--note <text>] [--by <identity>]")
 	}
 	id := args[0]
-	values, err := flags(args[1:], map[string]bool{"option": false, "note": false, "as": false})
+	values, err := flags(args[1:], map[string]bool{"option": false, "note": false, "by": false})
 	if err != nil {
 		return err
 	}
 	if values.one("option") == "" {
 		return errors.New("--option is required")
 	}
-	decidedBy, err := decisionMaker(root, values.one("as"))
+	decidedBy, err := decisionMaker(root, values.one("by"))
 	if err != nil {
 		return err
 	}
@@ -75,17 +75,17 @@ func resolveGate(args []string, root string, output io.Writer) error {
 
 func cancelGate(args []string, root string, output io.Writer) error {
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
-		return errors.New("usage: forgepilot gate cancel <gate-id> --reason <text> [--as <identity>]")
+		return errors.New("usage: forgepilot gate cancel <gate-id> --reason <text> [--by <identity>]")
 	}
 	id := args[0]
-	values, err := flags(args[1:], map[string]bool{"reason": false, "as": false})
+	values, err := flags(args[1:], map[string]bool{"reason": false, "by": false})
 	if err != nil {
 		return err
 	}
 	if values.one("reason") == "" {
 		return errors.New("--reason is required")
 	}
-	decidedBy, err := decisionMaker(root, values.one("as"))
+	decidedBy, err := decisionMaker(root, values.one("by"))
 	if err != nil {
 		return err
 	}

@@ -6,13 +6,13 @@
 
 **Blocked by:** 05, 06
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 以獨立 process 完成真實的 A start → verify → approve → DONE → B READY 流程
-- [ ] 同一流程中驗證 Gate 會阻擋推進、解除後恢復
-- [ ] README 反映 M1–M3 的實際能力，PR review target 仍清楚標示為未實作
-- [ ] development-plan 的 M3 驗收項目逐項實際確認後才勾選
-- [ ] architecture 與 CONTEXT 的敘述與實際行為一致，特別是狀態集合與 Gate 不佔用狀態欄
-- [ ] `go test -race ./...` 與 `make verify` 於本次實際執行並記錄環境與命令，不沿用先前的紀錄
-- [ ] 檢查整體 diff 無未授權的範圍擴張：沒有完成指令、沒有 reopen、沒有 `--json`、沒有 Gate 查詢指令、沒有身分認證、沒有 PR 整合
-- [ ] 依交付格式回報實際結果，不把未執行的檢查標記為 PASS
+- [x] 以獨立 process 完成真實的 A start → verify → approve → DONE → B READY 流程
+- [x] 同一流程中驗證 Gate 會阻擋推進、解除後恢復
+- [x] README 反映 M1–M3 的實際能力，PR review target 仍清楚標示為未實作
+- [x] development-plan 的 M3 驗收項目逐項實際確認後才勾選
+- [x] architecture 與 CONTEXT 的敘述與實際行為一致，特別是狀態集合與 Gate 不佔用狀態欄
+- [x] `go test -race ./...` 與 `make verify` 於本次實際執行並記錄環境與命令，不沿用先前的紀錄
+- [x] 檢查整體 diff 無未授權的範圍擴張：沒有完成指令、沒有 reopen、沒有 `--json`、沒有 Gate 查詢指令、沒有身分認證、沒有 PR 整合
+- [x] 依交付格式回報實際結果，不把未執行的檢查標記為 PASS
