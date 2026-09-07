@@ -1556,3 +1556,72 @@ func TestOrphanIsReclaimedEvenWhenANewRunIsRefused(t *testing.T) {
 		t.Fatalf("verify = %q, %v", output, err)
 	}
 }
+
+// TestReviewRecordsThePullRequestItHappenedOn covers the M4 addition at the CLI:
+// --pr is optional, stored beside the exact revision it was reviewed at, and a
+// malformed value is invalid input rather than a review with a bad outcome.
+func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
+	root, binary := fixture(t)
+	revision := reviewable(t, binary, root)
+
+	for _, reference := range []string{
+		"https://github.com/carl/forgepilot/pull/7",
+		"carl/forgepilot",
+		"carl/forgepilot#0",
+		"carl/forgepilot#007",
+	} {
+		output, err := command(binary, root, "review", "approve", "WI-001", "--pr", reference)
+		if err == nil {
+			t.Fatalf("accepted %q: %s", reference, output)
+		}
+		if !strings.Contains(output, "owner/name#number") {
+			t.Fatalf("error %q does not name the accepted form", output)
+		}
+		state, err := storage.Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Invalid input writes nothing at all — not even a record that someone
+		// tried.
+		if len(state.Evidence) != 1 {
+			t.Fatalf("a refused review left evidence for %q: %#v", reference, state.Evidence)
+		}
+		if state.WorkItemStatus("WI-001") != work.Review {
+			t.Fatalf("a refused review moved the work: %s", state.WorkItemStatus("WI-001"))
+		}
+	}
+
+	// Rejection carries the pull request too: being sent back has a venue just
+	// as much as being approved does.
+	if output, err := command(binary, root, "review", "reject", "WI-001",
+		"--reason", "the error path is unhandled", "--pr", "carl/forgepilot#7"); err != nil {
+		t.Fatalf("review reject = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Evidence[1]; got.PR != "carl/forgepilot#7" || got.Result != work.Rejected || got.Revision != revision {
+		t.Fatalf("rejection did not record the pull request: %#v", got)
+	}
+
+	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "review", "approve", "WI-001", "--pr", "carl/forgepilot#7"); err != nil {
+		t.Fatalf("review approve = %q, %v", output, err)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := state.Evidence[len(state.Evidence)-1]
+	if approval.PR != "carl/forgepilot#7" || approval.Revision != revision || approval.Result != work.Approved {
+		t.Fatalf("approval = %#v", approval)
+	}
+	// The PR is identification, not a condition: the work completes exactly as
+	// it would have without one (ADR-0011).
+	if state.WorkItemStatus("WI-001") != work.Done {
+		t.Fatalf("work with a PR reference did not complete: %s", state.WorkItemStatus("WI-001"))
+	}
+}

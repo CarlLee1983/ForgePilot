@@ -34,14 +34,14 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
 		if result == work.Rejected {
-			return errors.New("usage: forgepilot review reject <work-id> --reason <text> [--by <identity>]")
+			return errors.New("usage: forgepilot review reject <work-id> --reason <text> [--pr <owner/name#number>] [--by <identity>]")
 		}
-		return errors.New("usage: forgepilot review approve <work-id> [--note <text>] [--by <identity>]")
+		return errors.New("usage: forgepilot review approve <work-id> [--pr <owner/name#number>] [--note <text>] [--by <identity>]")
 	}
 	id := args[0]
-	allowed := map[string]bool{"by": false, "note": false}
+	allowed := map[string]bool{"by": false, "note": false, "pr": false}
 	if result == work.Rejected {
-		allowed = map[string]bool{"by": false, "reason": false}
+		allowed = map[string]bool{"by": false, "reason": false, "pr": false}
 	}
 	values, err := flags(args[1:], allowed)
 	if err != nil {
@@ -75,7 +75,7 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	var unlocked []string
 	if err := storage.Update(root, func(state *work.State) error {
 		var recordErr error
-		evidence, recordErr = state.RecordReview(id, revision, result, reviewer, note, now())
+		evidence, recordErr = state.RecordReview(id, revision, result, reviewer, note, values.one("pr"), now())
 		if recordErr != nil {
 			return recordErr
 		}

@@ -76,26 +76,26 @@ func reviewFixture(t *testing.T) (State, time.Time, string) {
 func TestRecordReviewBindsAJudgementToAnExactRevision(t *testing.T) {
 	state, now, revision := reviewFixture(t)
 
-	if _, err := state.RecordReview("WI-001", revision, Approved, "", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Approved, "", "", "", now); err == nil {
 		t.Fatal("recorded a review with no reviewer")
 	}
-	if _, err := state.RecordReview("WI-001", "", Approved, "carl@example.com", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", "", Approved, "carl@example.com", "", "", now); err == nil {
 		t.Fatal("recorded a review with no revision")
 	}
-	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "", "", now); err == nil {
 		t.Fatal("recorded a rejection with no reason")
 	}
-	if _, err := state.RecordReview("WI-001", revision, Pass, "carl@example.com", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Pass, "carl@example.com", "", "", now); err == nil {
 		t.Fatal("recorded a verification result as a review")
 	}
-	if _, err := state.RecordReview("WI-002", revision, Approved, "carl@example.com", "", now); err == nil {
+	if _, err := state.RecordReview("WI-002", revision, Approved, "carl@example.com", "", "", now); err == nil {
 		t.Fatal("reviewed work that is not in REVIEW")
 	}
 	if len(state.Evidence) != 1 {
 		t.Fatalf("a refused review left evidence: %#v", state.Evidence)
 	}
 
-	evidence, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "reads correct", now)
+	evidence, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "reads correct", "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestRecordReviewBindsAJudgementToAnExactRevision(t *testing.T) {
 
 func TestRejectionReturnsWorkToRunning(t *testing.T) {
 	state, now, revision := reviewFixture(t)
-	evidence, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "the error path is unhandled", now)
+	evidence, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "the error path is unhandled", "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestRejectionReturnsWorkToRunning(t *testing.T) {
 // the given revision.
 func approveAt(t *testing.T, state *State, id, revision string, now time.Time) {
 	t.Helper()
-	if _, err := state.RecordReview(id, revision, Approved, "carl@example.com", "", now); err != nil {
+	if _, err := state.RecordReview(id, revision, Approved, "carl@example.com", "", "", now); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -183,7 +183,7 @@ func TestApprovalCompletesWorkAndUnlocksDependents(t *testing.T) {
 	}
 
 	// DONE is terminal: nothing reviews, verifies or restarts it again.
-	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "changed my mind", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "changed my mind", "", now); err == nil {
 		t.Fatal("reviewed completed work")
 	}
 	if err := state.Verifiable("WI-001"); err == nil {
@@ -246,7 +246,7 @@ func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
 	if got := state.WorkItemStatus("WI-001"); got != Running {
 		t.Fatalf("status after FAIL = %s, want RUNNING", got)
 	}
-	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "", now); err == nil {
 		t.Fatal("approved work whose latest verification failed")
 	}
 
@@ -258,7 +258,7 @@ func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
 	if _, err := state.RecordVerification("WI-001", revision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "found a leak", now); err != nil {
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "found a leak", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if got := state.WorkItemStatus("WI-001"); got != Running {
@@ -344,5 +344,139 @@ func TestV4EvidenceCarriesEmptyPRReference(t *testing.T) {
 	withPR.PR = "carl/forgepilot#123"
 	if err := validateEvidence([]Evidence{withPR}, 2, items); err == nil {
 		t.Fatal("accepted verification evidence carrying a PR reference")
+	}
+}
+
+// TestReviewRecordsThePullRequestItHappenedOn covers the optional PR Reference:
+// present it is stored beside the exact revision, absent the review is exactly
+// what M3 recorded.
+func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
+	state, now, revision := reviewFixture(t)
+	evidence, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "carl/forgepilot#123", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.PR != "carl/forgepilot#123" || evidence.Revision != revision {
+		t.Fatalf("review did not bind the PR to the revision: %#v", evidence)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	bare, _, bareRevision := reviewFixture(t)
+	plain, err := bare.RecordReview("WI-001", bareRevision, Approved, "carl@example.com", "", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.PR != "" {
+		t.Fatalf("a review without --pr carries one anyway: %#v", plain)
+	}
+}
+
+// TestPRReferenceMustBeOwnerNameNumber pins the single accepted form. Only one
+// form is accepted so that two records pointing at the same pull request cannot
+// be written differently, which would make them incomparable.
+func TestPRReferenceMustBeOwnerNameNumber(t *testing.T) {
+	for _, reference := range []string{"carl/forgepilot#1", "carl/forgepilot#123", "a-b.c_d/e-f.g_h#9"} {
+		state, now, revision := reviewFixture(t)
+		if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", reference, now); err != nil {
+			t.Fatalf("rejected %q: %v", reference, err)
+		}
+	}
+	rejected := []string{
+		"https://github.com/carl/forgepilot/pull/123",
+		"github.com/carl/forgepilot#123",
+		"carl/forgepilot/123",
+		"carl/forgepilot",
+		"#123",
+		"carl#123",
+		"/forgepilot#123",
+		"carl/#123",
+		"carl/forgepilot#0",
+		"carl/forgepilot#007",
+		"carl/forgepilot#-1",
+		"carl/forgepilot#12a",
+		" carl/forgepilot#123",
+		"carl/forgepilot#123 ",
+		"carl/forge pilot#123",
+		"carl/forgepilot#123#4",
+	}
+	for _, reference := range rejected {
+		state, now, revision := reviewFixture(t)
+		if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", reference, now); err == nil {
+			t.Fatalf("accepted %q", reference)
+		}
+		// A malformed reference is invalid input, not a review with a bad
+		// outcome: nothing may be written.
+		if len(state.Evidence) != 1 {
+			t.Fatalf("a refused review still appended evidence for %q: %#v", reference, state.Evidence)
+		}
+	}
+}
+
+// TestLoadedEvidenceWithAMalformedPRIsRejected keeps the rule in the domain
+// rather than at the CLI: a hand-edited state.json must not smuggle a value the
+// command line would have refused.
+func TestLoadedEvidenceWithAMalformedPRIsRejected(t *testing.T) {
+	items := map[string]Item{"WI-001": {ID: "WI-001"}}
+	review := Evidence{ID: "EV-001", Type: ReviewEvidence, Repository: "/repo",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		Result: Approved, Reviewer: "carl@example.com", CreatedAt: time.Now().UTC()}
+	if err := validateEvidence([]Evidence{review}, 2, items); err != nil {
+		t.Fatal(err)
+	}
+	good := review
+	good.PR = "carl/forgepilot#123"
+	if err := validateEvidence([]Evidence{good}, 2, items); err != nil {
+		t.Fatal(err)
+	}
+	bad := review
+	bad.PR = "https://github.com/carl/forgepilot/pull/123"
+	if err := validateEvidence([]Evidence{bad}, 2, items); err == nil {
+		t.Fatal("accepted a review carrying a malformed PR reference")
+	}
+}
+
+// TestPRReferenceChangesNothingAboutCompletionOrStaleness is the executable form
+// of ADR-0011. The same commit is the same code whatever pull request it was
+// read under, so the completion conditions and the stale rule must give the same
+// answer with a PR Reference as without one — and two reviews of one revision
+// must still replace each other rather than form separate tracks per PR.
+func TestPRReferenceChangesNothingAboutCompletionOrStaleness(t *testing.T) {
+	withPR, now, revision := reviewFixture(t)
+	without, _, _ := reviewFixture(t)
+
+	if got, want := withPR.CompletionBlockers("WI-001"), without.CompletionBlockers("WI-001"); len(got) != len(want) {
+		t.Fatalf("blockers differ before review: %v vs %v", got, want)
+	}
+	if withPR.Stale("WI-001", "other") != without.Stale("WI-001", "other") {
+		t.Fatal("staleness differs before review")
+	}
+
+	if _, err := withPR.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "carl/forgepilot#123", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := without.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if withPR.WorkItemStatus("WI-001") != Done || without.WorkItemStatus("WI-001") != Done {
+		t.Fatalf("completion differs: %s vs %s", withPR.WorkItemStatus("WI-001"), without.WorkItemStatus("WI-001"))
+	}
+	if withPR.Stale("WI-001", "other") != without.Stale("WI-001", "other") {
+		t.Fatal("staleness differs after review")
+	}
+
+	// A later judgement on the same revision wins even when it names a different
+	// pull request: the PR does not open a second, parallel review track.
+	rejecting, _, rejectingRevision := reviewFixture(t)
+	if _, err := rejecting.RecordReview("WI-001", rejectingRevision, Approved, "carl@example.com", "", "carl/forgepilot#123", now); err != nil {
+		t.Fatal(err)
+	}
+	if rejecting.WorkItemStatus("WI-001") != Done {
+		t.Fatalf("fixture did not complete: %s", rejecting.WorkItemStatus("WI-001"))
+	}
+	latest, ok := rejecting.LatestReview("WI-001")
+	if !ok || latest.PR != "carl/forgepilot#123" {
+		t.Fatalf("latest review = %#v", latest)
 	}
 }

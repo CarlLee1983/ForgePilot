@@ -61,7 +61,7 @@ func TestGoalBlockIsReversibleAndLeavesActiveWorkAlone(t *testing.T) {
 	if err := state.Verifiable("WI-003"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", now); err != nil {
+	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if got := state.WorkItemStatus("WI-001"); got != Done {
@@ -118,7 +118,7 @@ func TestGoalCompleteRequiresEveryWorkItemDone(t *testing.T) {
 		t.Fatalf("error %q does not name the work that is not done", err)
 	}
 
-	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", now); err != nil {
+	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.CompleteGoal("g", now); err == nil {

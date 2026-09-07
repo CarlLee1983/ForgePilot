@@ -3,6 +3,7 @@ package work
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -201,6 +202,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 			if record.Result == Rejected && strings.TrimSpace(record.Note) == "" {
 				return fmt.Errorf("evidence %q rejects without a reason", record.ID)
 			}
+			if record.PR != "" && !validPRReference(record.PR) {
+				return fmt.Errorf("evidence %q carries a malformed PR reference %q", record.ID, record.PR)
+			}
 		default:
 			return fmt.Errorf("evidence %q has unknown type %q", record.ID, record.Type)
 		}
@@ -306,7 +310,7 @@ func (s *State) LatestReview(id string) (Evidence, bool) {
 // returns the Work Item to RUNNING so the Agent goes straight back to fixing it.
 // APPROVED records the judgement and nothing more here; whether it also completes
 // the work is decided by the completion conditions.
-func (s *State) RecordReview(id, revision string, result Result, reviewer, note string, now time.Time) (Evidence, error) {
+func (s *State) RecordReview(id, revision string, result Result, reviewer, note, pullRequest string, now time.Time) (Evidence, error) {
 	item := s.item(id)
 	if item == nil {
 		return Evidence{}, fmt.Errorf("unknown work item %q", id)
@@ -332,6 +336,12 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note 
 	if result == Rejected && strings.TrimSpace(note) == "" {
 		return Evidence{}, errors.New("rejecting work requires a reason")
 	}
+	// A malformed reference is invalid input, not a review with a bad outcome, so
+	// nothing is appended — the same treatment a revision without a canonical
+	// check gets from verification.
+	if pullRequest != "" && !validPRReference(pullRequest) {
+		return Evidence{}, fmt.Errorf("%q is not a pull request reference; expected owner/name#number", pullRequest)
+	}
 	evidence := Evidence{
 		ID:         s.takeEvidenceID(),
 		Type:       ReviewEvidence,
@@ -342,6 +352,7 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note 
 		Result:     result,
 		Reviewer:   reviewer,
 		Note:       note,
+		PR:         pullRequest,
 		CreatedAt:  now,
 	}
 	s.Evidence = append(s.Evidence, evidence)
@@ -356,6 +367,21 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note 
 		s.complete(id, now)
 	}
 	return evidence, nil
+}
+
+// prReference is the single accepted form of a PR Reference. Accepting only one
+// form keeps two records that name the same pull request written the same way;
+// a URL and a shorthand for one pull request would be two strings nothing could
+// compare. The number rejects zero and leading zeros so that one pull request
+// has exactly one spelling.
+var prReference = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[1-9][0-9]*$`)
+
+// validPRReference reports whether a PR Reference is well formed. Well formed is
+// all this product checks: whether the pull request exists, is open, or has that
+// HEAD is a question about GitHub, and ForgePilot does not ask GitHub anything
+// (ADR-0010).
+func validPRReference(reference string) bool {
+	return prReference.MatchString(reference)
 }
 
 // takeEvidenceID hands out the next ID on the single sequence both kinds of
