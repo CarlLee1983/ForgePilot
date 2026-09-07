@@ -2,7 +2,7 @@
 
 ## 文件狀態與範圍
 
-MVP 的 M1–M3 已依本文件實作；M4 仍是規劃。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
+MVP 的 M1–M3 已依本文件實作；M4 的開工前決策已定案，實作尚未開始。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
@@ -48,7 +48,7 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/carl/forgepilot`
 | Work Item run | `current_run`（revision、worktree path、started_at；閒置時為 null） | M2 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
 | Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`rationale`（開啟時的說明）、`options`（至少兩個）、`status`、`opened_at`，以及關閉時的 `choice`／`note`（resolve）或 `reason`（cancel）、`decided_by`、`decided_at` | M3 |
-| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、`result`、timestamp；verification 另有 `command` 與 `exit_code`，review 另有 `reviewer` 與 `note` | M2 起 |
+| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、`result`、timestamp；verification 另有 `command` 與 `exit_code`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起 |
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
@@ -175,7 +175,7 @@ Canonical verification 固定為 repository 的 `make verify`；不開放任意 
 
 Human Review Evidence 同樣綁定 repository、Story 與 exact commit。進入 DONE 必須同時檢查同一 revision 的 PASS 與 APPROVED；只檢查 review SHA 不足夠。
 
-HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revision。新的 review target 必須重新驗證與審查。PR review 至少另綁定 PR number 與 HEAD SHA；M4 才實作。
+HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revision。新的 review target 必須重新驗證與審查。M4 讓 Human Review 額外攜帶 PR Reference，見下方「PR review target：M4 起」。
 
 ### M2 開工前定案（已完成）
 
@@ -225,3 +225,28 @@ Human Review 是 Evidence 的第二個 `type`，與 Verification 共用同一個
 `status` 顯示每件工作的 OPEN Gate 數量。DONE 的工作不標示 stale——stale 的用途是提示需要重驗，對終態工作那個提示是錯的，而沒有行動意義的警示會讓人開始忽略所有警示；仍顯示其完成時的 revision。
 
 `review approve` 當下的 HEAD 與最新 PASS 的 revision 對不上時，審查仍被記錄（先審後驗是正當流程）但不進入 DONE，`status` 必須說出沒有進入 DONE 的原因。
+
+## PR review target：M4 起
+
+Human Review Evidence 可以額外攜帶 PR Reference，聲明這次審查發生在哪個 pull request 上。它是識別資料，不改變任何狀態機行為。
+
+### M4 開工前定案（已完成）
+
+1. **Evidence 斷言的是本機記錄，不是 GitHub 的結論**。`review approve` 仍然是人在本機下的明確指令，ForgePilot 記錄「某人聲稱在 PR X 的這個 HEAD 上核准」。不去 GitHub 讀該 PR 的 review state，因此不繼承外部系統的可用性、授權與 schema。
+2. **不主動發出網路請求**。development-plan 的「不得加入 network API」讀成嚴格版：既不對外開介面，也不自行 HTTP、不 spawn `gh`。詳見 [ADR-0010](adr/0010-no-outbound-network-requests.md)。推論是 PR review target 的 HEAD 必須是本機 repository 裡真實存在的 commit，`review` 才能記錄。
+3. **PR Reference 只存在 Evidence 上**，Work Item 不設 PR 欄位。理由同 [ADR-0003](adr/0003-no-work-item-target-revision.md)：Work Item 上的識別欄位會立刻產生「誰負責讓它保持正確」的問題，而一件工作經歷多個 PR（第一個被關掉重開）是常見的事。存在 Evidence 上，那是一條時間軸而不是一個被覆寫的欄位。
+4. **只有 Review PR 化，Verification 不變**。verification Evidence 的 `pr` 必須為空，與既有的「review 不得帶 `command`／`exit_code`、verification 不得帶 `reviewer`／`note`」同屬一套嚴格分流規則。
+5. **PR Reference 的形式為 `owner/name#number` 的單一字串**，以嚴格 pattern 驗證。只接受這一種形式——不接受完整 URL、不做正規化。多一種輸入法就多一組解析錯誤與一個「這兩筆是不是同一個 PR」的比較問題。既有的 `repository` 欄位保持不變（本機 state root 路徑），PR Reference 自帶完整識別，因此離開這台機器仍可解讀。
+6. **`--pr` 為選填**。不帶就是 M3 那種純 commit review。強制必填會讓 M3 時代合法完成的 DONE 變成讀不進來的 state，正是 [ADR-0006](adr/0006-done-is-terminal.md) 要避免的事；而本機先審、之後才開 PR 是正當流程，強制順序沒有換到任何東西。
+7. **PR 不參與完成判定與 stale 判定**。DONE 的四項條件與 `Stale` 的定義一字不改。詳見 [ADR-0011](adr/0011-pr-identity-does-not-gate-completion.md)。
+8. **格式驗證屬於 domain**。PR Reference 的格式純粹是字串規則，不碰任何外部系統，因此規則放在 `internal/work` 與其他 Evidence 欄位規則同處，`validateEvidence` 才能對載入的既有 state 一併把關；只在 CLI 驗，手改過的 `state.json` 會夾帶非法值進來。
+
+### M4 schema v4
+
+Schema v4 相對 v3 只有新增：`schema_version` 改為 4、Evidence 加入選填的 `pr`。無欄位刪除或語意改變，既有資料不需改寫。
+
+版本檢查是嚴格相等，所以即使升級步驟不動任何資料，仍然必須升版並提供 v3→v4 這一步。該步驟照走完整儀式——備份為 `state.json.v3.bak`、備份已存在時拒絕而非覆寫、對已是最新版本者回報並以 exit 0 結束。不為「這次沒有資料要動」開特例：使用者面對的契約是「升級就是備份加改版號」，而不是「有時候會備份」。
+
+### M4 呈現規則
+
+`status` 在顯示最新一筆 Human Review 時，若該筆帶有 PR Reference 就一併顯示，沒有就什麼都不印。它是描述而非警告，不因缺少 PR 而提示任何事——缺 PR 是合法狀態，不是問題。[ADR-0008](adr/0008-approval-completes-work.md) 要求 `status` 不對未完成的原因沉默，而 PR 不是完成條件之一，因此不在該要求的範圍內。

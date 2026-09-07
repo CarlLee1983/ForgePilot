@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-MVP 的 M1–M3 已完成；M4 仍為規劃。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+MVP 的 M1–M3 已完成；M4 的開工前決策已定案，實作尚未開始。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -245,7 +245,26 @@ Schema 升至 v3：新增 Gate 集合與其 ID 配發計數，Evidence 加入 re
 
 ### M4
 
-實作前另定 PR metadata 的來源、授權與 read-only integration 邊界。Evidence 必須包含 repository、PR number 與 exact HEAD SHA；HEAD 改變即為新 target。不得加入 automatic merge 或 release。
+開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m4-開工前定案已完成) 與 `docs/adr/0010`–`0011`。實作規格見 [specs/m4-pr-exact-head-review/](specs/m4-pr-exact-head-review/)。
+
+原本列為必須定案的「PR metadata 來源、授權與 read-only integration 邊界」三問，答案是同一個：不從外部取得。ForgePilot 不主動發出網路請求（[ADR-0010](adr/0010-no-outbound-network-requests.md)），PR Reference 是使用者輸入的識別字串，因此沒有來源可談、沒有授權要處理，也沒有 integration 邊界要劃。
+
+Evidence 包含 repository、PR number 與 exact HEAD SHA 的硬約束由 PR Reference（`owner/name#number`）與既有的完整 commit SHA 欄位共同滿足。「HEAD 改變即為新 target」由既有的 SHA 比對成立，PR 不參與判定（[ADR-0011](adr/0011-pr-identity-does-not-gate-completion.md)）。不加入 automatic merge 或 release。
+
+M4 不新增指令，只擴充兩個既有指令：
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot review approve <work-id> [--pr <owner/name#number>] [--note <text>] [--by <identity>]` | 同 M3，Evidence 額外記錄 PR Reference |
+| `forgepilot review reject <work-id> --reason <text> [--pr <owner/name#number>] [--by <identity>]` | 同 M3，Evidence 額外記錄 PR Reference |
+
+`--pr` 為選填。格式非法時拒絕整個指令，不 append 任何 Evidence。verification Evidence 不得攜帶 PR Reference。`status` 顯示最新一筆 Human Review 時一併顯示其 PR Reference（若有）。不提供 PR 查詢指令、不提供 `--json`、不提供任何會發出網路請求的能力。
+
+Schema 升至 v4：Evidence 加入選填的 `pr`。沿用既有升級契約——不自動升級，由 `migrate` 備份為 `state.json.v3.bak` 後升級，備份已存在時拒絕；即使升級步驟不動資料，儀式照走。
+
+交付切片依序為：schema v4 與 v3→v4 升級；PR Reference 的格式規則與 Evidence 驗證；`review approve`／`reject` 的 `--pr`；`status` 呈現與端到端驗收。
+
+驗收：在 PR 的 HEAD 上 verify PASS 後 `review approve --pr` 進入 DONE，Evidence 同時保存 PR Reference 與完整 SHA；新增 commit 使 HEAD 改變後，舊的 PASS／APPROVED 保留為歷史但不套用，必須重新 verify 與重新 approve，新的那筆記的是新的 HEAD；`--pr` 格式非法時整個指令被拒且不寫入任何 Evidence；verification Evidence 帶 PR Reference 時被 validation 拒讀；v3 state 被拒讀並指示升級，升級後資料完整。
 
 ## 每階段交付格式
 

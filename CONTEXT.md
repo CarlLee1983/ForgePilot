@@ -31,8 +31,11 @@ _Avoid_：Evidence、VERIFYING 狀態本身
 **Stale**：既有 Evidence 所綁定的 revision 已不是目前的 revision，因而不適用於當下。DONE 的工作不標示 stale——它已在某個確切 revision 上完成，重驗的提示對它不對應任何行動。
 _Avoid_：失效、FAIL、需要重做
 
-**Revision Identity**：Evidence 所對應的精確工程版本身分；完成與審查涉及 repository、Story 與 commit，PR review 另涉及 PR 與其 HEAD。
-_Avoid_：最新版本、branch name
+**Revision Identity**：Evidence 所對應的精確工程版本身分；完成與審查涉及 repository、Story 與完整 commit SHA。PR Reference 附加於審查紀錄上作為識別，不構成版本身分的一部分——同一個 commit 在哪個 PR 下被審查，不改變被審查的內容。
+_Avoid_：最新版本、branch name、PR number 單獨作為版本身分
+
+**PR Reference**：一筆 Human Review 所聲明的 pull request 出處，形式為 `owner/name#number`。它是使用者輸入的識別字串；ForgePilot 只驗格式，不查證該 PR 存在或其 HEAD 為何。
+_Avoid_：經過查證的 PR 狀態、merge authorization、review target 本身
 
 **Actionable Work**：屬於可執行 Goal、處於 READY、依賴已完成且沒有未解決 Gate 的工作。
 _Avoid_：RUNNING 工作、所有未完成工作
