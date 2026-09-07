@@ -34,7 +34,7 @@ M1 通過後才開始 M2，依此類推至 M4；四個階段皆已完成。各�
 1. 固定初始支援 OS 與 filesystem 範圍，選定可跨 process 自動釋放的鎖機制；不宣稱未驗證的跨平台支援。
 2. 固定 Go toolchain 版本與實際 module path；不提交 placeholder module identity。
 
-M1 採 macOS 本機檔案系統與 OS `flock` 程序鎖，Go 1.25.5，module `github.com/carl/forgepilot`。不需要為 M1 預先解決 M2／M3 的全部開放問題。
+M1 採 macOS 本機檔案系統與 OS `flock` 程序鎖，Go 1.25.5，module `github.com/CarlLee1983/ForgePilot`。不需要為 M1 預先解決 M2／M3 的全部開放問題。
 
 ## M1 依賴順序與交付切片
 

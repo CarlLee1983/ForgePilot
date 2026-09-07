@@ -24,7 +24,7 @@ Breaking change、architecture trade-off、security-sensitive decision、product
 
 ## Implementation boundaries
 
-M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/carl/forgepilot`。CLI 只負責參數、呈現與錯誤映射；domain rules 集中管理，不直接呼叫 filesystem、Git 或 subprocess。
+M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/ForgePilot`。CLI 只負責參數、呈現與錯誤映射；domain rules 集中管理，不直接呼叫 filesystem、Git 或 subprocess。
 
 建議從四個 cohesive packages 開始：
 

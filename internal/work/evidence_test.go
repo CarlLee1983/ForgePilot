@@ -388,8 +388,8 @@ func TestPRReferenceMustBeOwnerNameNumber(t *testing.T) {
 		}
 	}
 	rejected := []string{
-		"https://github.com/carl/forgepilot/pull/123",
-		"github.com/carl/forgepilot#123",
+		"https://github.com/CarlLee1983/ForgePilot/pull/123",
+		"github.com/CarlLee1983/ForgePilot#123",
 		"carl/forgepilot/123",
 		"carl/forgepilot",
 		"#123",
@@ -443,7 +443,7 @@ func TestLoadedEvidenceWithAMalformedPRIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := review
-	bad.PR = "https://github.com/carl/forgepilot/pull/123"
+	bad.PR = "https://github.com/CarlLee1983/ForgePilot/pull/123"
 	if err := validateEvidence([]Evidence{bad}, 2, items); err == nil {
 		t.Fatal("accepted a review carrying a malformed PR reference")
 	}

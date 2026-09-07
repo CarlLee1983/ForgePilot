@@ -55,7 +55,7 @@ M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review ap
 需要 Go 1.25.5 或以上。ForgePilot 只用標準函式庫，沒有外部相依。
 
 ```bash
-go install github.com/carl/forgepilot/cmd/forgepilot@latest
+go install github.com/CarlLee1983/ForgePilot/cmd/forgepilot@latest
 ```
 
 或從原始碼建置：

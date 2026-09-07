@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carl/forgepilot/internal/work"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 func TestInitRetryAndFailedWritePreserveState(t *testing.T) {

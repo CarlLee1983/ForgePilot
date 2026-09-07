@@ -4,7 +4,7 @@
 
 ## 這是什麼
 
-管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/carl/forgepilot`、只支援 macOS 本機檔案系統。M1–M4 全部實作完成，roadmap 沒有下一個 milestone。
+管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M4 全部實作完成，roadmap 沒有下一個 milestone。
 
 ## 讀的順序
 

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/carl/forgepilot/internal/work"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 const stateDirectory = ".forgepilot"

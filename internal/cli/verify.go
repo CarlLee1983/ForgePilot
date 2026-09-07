@@ -6,9 +6,9 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/carl/forgepilot/internal/repository"
-	"github.com/carl/forgepilot/internal/storage"
-	"github.com/carl/forgepilot/internal/work"
+	"github.com/CarlLee1983/ForgePilot/internal/repository"
+	"github.com/CarlLee1983/ForgePilot/internal/storage"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 func verify(args []string, root string, output io.Writer) error {

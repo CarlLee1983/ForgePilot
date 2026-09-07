@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/carl/forgepilot/internal/cli"
+	"github.com/CarlLee1983/ForgePilot/internal/cli"
 )
 
 func main() {

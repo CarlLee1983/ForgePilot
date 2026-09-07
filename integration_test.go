@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carl/forgepilot/internal/storage"
-	"github.com/carl/forgepilot/internal/work"
+	"github.com/CarlLee1983/ForgePilot/internal/storage"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 func TestCLIWorkflowAndFailures(t *testing.T) {
@@ -1565,7 +1565,7 @@ func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
 	revision := reviewable(t, binary, root)
 
 	for _, reference := range []string{
-		"https://github.com/carl/forgepilot/pull/7",
+		"https://github.com/CarlLee1983/ForgePilot/pull/7",
 		"carl/forgepilot",
 		"carl/forgepilot#0",
 		"carl/forgepilot#007",
