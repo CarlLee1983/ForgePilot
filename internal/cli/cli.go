@@ -22,7 +22,7 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 
 func run(args []string, cwd string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot <init|goal|work|next|start|status>")
+		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|status>")
 	}
 	if args[0] == "init" {
 		if len(args) != 1 {
@@ -39,6 +39,8 @@ func run(args []string, cwd string, output io.Writer) error {
 		return err
 	}
 	switch args[0] {
+	case "migrate":
+		return migrate(args[1:], root, output)
 	case "goal":
 		return goal(args[1:], root, output)
 	case "work":
@@ -52,6 +54,22 @@ func run(args []string, cwd string, output io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func migrate(args []string, root string, output io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("usage: forgepilot migrate")
+	}
+	upgraded, err := storage.Migrate(root)
+	if err != nil {
+		return err
+	}
+	if !upgraded {
+		_, err = fmt.Fprintf(output, "State is already at schema version %d; nothing to migrate.\n", work.SchemaVersion)
+		return err
+	}
+	_, err = fmt.Fprintf(output, "Migrated state to schema version %d.\n", work.SchemaVersion)
+	return err
 }
 
 func goal(args []string, root string, output io.Writer) error {

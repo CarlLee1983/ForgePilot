@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type GoalStatus string
 
@@ -40,23 +40,37 @@ type Goal struct {
 }
 
 type Item struct {
-	ID        string    `json:"id"`
-	GoalID    string    `json:"goal_id"`
-	StoryRef  string    `json:"story_ref"`
-	Status    Status    `json:"status"`
-	DependsOn []string  `json:"depends_on"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string    `json:"id"`
+	GoalID     string    `json:"goal_id"`
+	StoryRef   string    `json:"story_ref"`
+	Status     Status    `json:"status"`
+	DependsOn  []string  `json:"depends_on"`
+	CurrentRun *Run      `json:"current_run"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Run records a Verification Run that is currently in flight. It is cleared once
+// the run produces Evidence, so a non-nil value after the runner has exited marks
+// an orphan awaiting reclamation.
+type Run struct {
+	Revision     string    `json:"revision"`
+	WorktreePath string    `json:"worktree_path"`
+	StartedAt    time.Time `json:"started_at"`
 }
 
 type State struct {
-	SchemaVersion int    `json:"schema_version"`
-	NextWorkID    int    `json:"next_work_id"`
-	Goals         []Goal `json:"goals"`
-	WorkItems     []Item `json:"work_items"`
+	SchemaVersion  int        `json:"schema_version"`
+	NextWorkID     int        `json:"next_work_id"`
+	NextEvidenceID int        `json:"next_evidence_id"`
+	Goals          []Goal     `json:"goals"`
+	WorkItems      []Item     `json:"work_items"`
+	Evidence       []Evidence `json:"evidence"`
 }
 
-func NewState() State { return State{SchemaVersion: SchemaVersion, NextWorkID: 1} }
+func NewState() State {
+	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1}
+}
 
 func (s *State) AddGoal(id, title, description, repository string, now time.Time) error {
 	if id == "" || title == "" {
@@ -153,11 +167,17 @@ func (s *State) Start(id string, now time.Time) error {
 }
 
 func (s State) Validate() error {
-	if s.SchemaVersion != SchemaVersion {
-		return fmt.Errorf("unsupported schema version %d", s.SchemaVersion)
+	if s.SchemaVersion < SchemaVersion {
+		return fmt.Errorf("state uses schema version %d; run forgepilot migrate to upgrade it to %d", s.SchemaVersion, SchemaVersion)
+	}
+	if s.SchemaVersion > SchemaVersion {
+		return fmt.Errorf("state uses schema version %d, which is newer than this binary supports (%d)", s.SchemaVersion, SchemaVersion)
 	}
 	if s.NextWorkID < 1 {
 		return errors.New("next_work_id must be positive")
+	}
+	if s.NextEvidenceID < 1 {
+		return errors.New("next_evidence_id must be positive")
 	}
 	goals := map[string]Goal{}
 	for _, goal := range s.Goals {

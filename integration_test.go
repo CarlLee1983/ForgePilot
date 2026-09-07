@@ -139,3 +139,52 @@ func mustRun(t *testing.T, binary, directory string, arguments ...string) {
 		t.Fatalf("%v: %v: %s", arguments, err, output)
 	}
 }
+
+func TestMigrateCommandUpgradesLegacyState(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+
+	statePath := filepath.Join(root, ".forgepilot", "state.json")
+	current, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rewind the snapshot to the shape M1 wrote: no v2 fields, schema version 1.
+	legacy := strings.NewReplacer(
+		`"schema_version": 2`, `"schema_version": 1`,
+		`"next_evidence_id": 1,`, "",
+		`"current_run": null,`, "",
+	).Replace(string(current))
+	if strings.Contains(legacy, "next_evidence_id") || strings.Contains(legacy, "current_run") {
+		t.Fatalf("failed to build a v1 snapshot from %s", current)
+	}
+	legacy = strings.Replace(legacy, `,
+  "evidence": []`, "", 1)
+	if err := os.WriteFile(statePath, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := command(binary, root, "status")
+	if err == nil {
+		t.Fatalf("status read a v1 state: %s", output)
+	}
+	if !strings.Contains(output, "migrate") {
+		t.Fatalf("status error %q does not tell the user to migrate", output)
+	}
+
+	if output, err := command(binary, root, "migrate"); err != nil || !strings.Contains(output, "Migrated") {
+		t.Fatalf("migrate = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "status"); err != nil || !strings.Contains(output, "WI-001") {
+		t.Fatalf("status after migrate = %q, %v", output, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".forgepilot", "state.json.v1.bak")); err != nil {
+		t.Fatalf("no backup after migrate: %v", err)
+	}
+	output, err = command(binary, root, "migrate")
+	if err != nil || !strings.Contains(output, "already") {
+		t.Fatalf("second migrate = %q, %v", output, err)
+	}
+}
