@@ -57,6 +57,9 @@ func (s *State) Verifiable(id string) error {
 	if item == nil {
 		return fmt.Errorf("unknown work item %q", id)
 	}
+	if err := s.gateBlock(id); err != nil {
+		return err
+	}
 	if item.Status != Running && item.Status != Review {
 		return fmt.Errorf("work item %q is %s; only RUNNING or REVIEW work can be verified", id, item.Status)
 	}

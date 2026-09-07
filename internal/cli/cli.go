@@ -22,7 +22,7 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 
 func run(args []string, cwd string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|verify|status>")
+		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|verify|gate|status>")
 	}
 	if args[0] == "init" {
 		if len(args) != 1 {
@@ -51,6 +51,8 @@ func run(args []string, cwd string, output io.Writer) error {
 		return start(args[1:], root, output)
 	case "verify":
 		return verify(args[1:], root, output)
+	case "gate":
+		return gate(args[1:], root, output)
 	case "status":
 		return status(args[1:], root, output)
 	default:
@@ -178,6 +180,11 @@ func status(args []string, root string, output io.Writer) error {
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n", item.ID, item.Status, item.StoryRef, note, verificationSummary(&state, item.ID, revision)); err != nil {
 				return err
+			}
+			for _, line := range gateSummary(&state, item.ID) {
+				if _, err := fmt.Fprintf(output, "    %s\n", line); err != nil {
+					return err
+				}
 			}
 		}
 	}

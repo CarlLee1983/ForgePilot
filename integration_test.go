@@ -702,3 +702,130 @@ func TestVerifyRecoversFromLeftoverWorktrees(t *testing.T) {
 		t.Fatalf("verification worktrees remain registered: %s", output)
 	}
 }
+
+func TestGateBlocksAdvancementWithoutChangingStatus(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	writeVerify(t, root, passingVerify)
+
+	// A Gate must offer a real choice, and must attach to work that exists.
+	for _, arguments := range [][]string{
+		{"gate", "open", "--work", "WI-001", "--question", "Which cache?", "--option", "redis"},
+		{"gate", "open", "--work", "WI-001", "--question", "Which cache?"},
+		{"gate", "open", "--work", "WI-404", "--question", "Which cache?", "--option", "redis", "--option", "in-process"},
+		{"gate", "open", "--work", "WI-001", "--option", "redis", "--option", "in-process"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil {
+			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
+		}
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Gates) != 0 {
+		t.Fatalf("a refused gate was recorded: %#v", state.Gates)
+	}
+
+	output, err := command(binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Which cache?", "--option", "redis", "--option", "in-process",
+		"--rationale", "the latency budget is unstated")
+	if err != nil || !strings.Contains(output, "GATE-001") {
+		t.Fatalf("gate open = %q, %v", output, err)
+	}
+
+	// The blocked item keeps the status it had; only its ability to move changes.
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "WI-001 READY") {
+		t.Fatalf("opening a gate changed the work item's status: %s", output)
+	}
+	if !strings.Contains(output, "Gates: 1 open") {
+		t.Fatalf("status does not report the open gate count: %s", output)
+	}
+	if !strings.Contains(output, "Next: WI-002") {
+		t.Fatalf("next still selects gated work: %s", output)
+	}
+
+	output, err = command(binary, root, "start", "WI-001")
+	if err == nil {
+		t.Fatalf("started gated work: %s", output)
+	}
+	if !strings.Contains(output, "GATE-001") {
+		t.Fatalf("error %q does not name the gate that blocks the work", output)
+	}
+
+	// A second Gate on the same item, opened while the first is still open.
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
+		"--question", "Backfill the old rows?", "--option", "yes", "--option", "no")
+	if output, err := command(binary, root, "status"); err != nil || !strings.Contains(output, "Gates: 2 open") {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+
+	// Gating work that is already RUNNING blocks verification, and again leaves
+	// the status alone.
+	mustRun(t, binary, root, "start", "WI-002")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-002",
+		"--question", "Is the schema change reversible?", "--option", "yes", "--option", "no")
+	output, err = command(binary, root, "status")
+	if err != nil || !strings.Contains(output, "WI-002 RUNNING") {
+		t.Fatalf("gating running work changed its status: %q, %v", output, err)
+	}
+	output, err = command(binary, root, "verify", "WI-002")
+	if err == nil {
+		t.Fatalf("verified gated work: %s", output)
+	}
+	if !strings.Contains(output, "GATE-003") {
+		t.Fatalf("error %q does not name the gate that blocks verification", output)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 0 {
+		t.Fatalf("a blocked verification left evidence: %#v", state.Evidence)
+	}
+}
+
+// TestConcurrentGateOpensKeepBothGates proves Gates share the Work Item's locked
+// atomic replacement: two processes opening at once neither lose an update nor
+// hand out the same ID twice.
+func TestConcurrentGateOpensKeepBothGates(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+
+	var group sync.WaitGroup
+	failures := make(chan error, 2)
+	for _, question := range []string{"Which cache?", "Which queue?"} {
+		group.Add(1)
+		go func(question string) {
+			defer group.Done()
+			if output, err := command(binary, root, "gate", "open", "--work", "WI-001",
+				"--question", question, "--option", "a", "--option", "b"); err != nil {
+				failures <- &commandError{err, output}
+			}
+		}(question)
+	}
+	group.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatal(err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Gates) != 2 || state.Gates[0].ID == state.Gates[1].ID {
+		t.Fatalf("gates = %#v", state.Gates)
+	}
+	if state.OpenGateCount("WI-001") != 2 {
+		t.Fatalf("open gate count = %d, want 2", state.OpenGateCount("WI-001"))
+	}
+}

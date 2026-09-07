@@ -146,3 +146,76 @@ func parseGateID(id string) (int, bool) {
 	n, err := strconv.Atoi(strings.TrimPrefix(id, "GATE-"))
 	return n, err == nil && n > 0 && fmt.Sprintf("GATE-%03d", n) == id
 }
+
+// OpenGate attaches a question to a Work Item. It never changes that item's
+// status: while the Gate is open the item simply cannot be advanced, and when
+// the Gate closes there is nothing to restore.
+func (s *State) OpenGate(workItemID, question string, options []string, rationale string, now time.Time) (Gate, error) {
+	item := s.item(workItemID)
+	if item == nil {
+		return Gate{}, fmt.Errorf("unknown work item %q", workItemID)
+	}
+	if item.Status == Done {
+		return Gate{}, fmt.Errorf("work item %q is DONE; a question that could block it can no longer be asked", workItemID)
+	}
+	if s.NextGateID < 1 {
+		s.NextGateID = 1
+	}
+	gate := Gate{
+		ID:         fmt.Sprintf("GATE-%03d", s.NextGateID),
+		WorkItemID: item.ID,
+		Question:   strings.TrimSpace(question),
+		Options:    append([]string(nil), options...),
+		Rationale:  rationale,
+		Status:     GateOpen,
+		OpenedAt:   now,
+	}
+	if gate.Question == "" {
+		return Gate{}, errors.New("a gate requires a question")
+	}
+	if err := validateGateOptions(gate); err != nil {
+		return Gate{}, err
+	}
+	s.NextGateID++
+	s.Gates = append(s.Gates, gate)
+	return gate, nil
+}
+
+// GatesFor returns every Gate ever opened on a Work Item, in the order they were
+// opened. Closed Gates are included: the record of a withdrawn question is what
+// keeps a cancellation from happening quietly.
+func (s *State) GatesFor(workItemID string) []Gate {
+	gates := make([]Gate, 0, len(s.Gates))
+	for _, gate := range s.Gates {
+		if gate.WorkItemID == workItemID {
+			gates = append(gates, gate)
+		}
+	}
+	return gates
+}
+
+// OpenGateCount reports how many questions still block a Work Item.
+func (s *State) OpenGateCount(workItemID string) int {
+	count := 0
+	for _, gate := range s.Gates {
+		if gate.WorkItemID == workItemID && gate.Status == GateOpen {
+			count++
+		}
+	}
+	return count
+}
+
+// gateBlock reports why a Work Item cannot be advanced, naming the open Gates so
+// the user is told what to answer rather than only that something is wrong.
+func (s *State) gateBlock(workItemID string) error {
+	var open []string
+	for _, gate := range s.Gates {
+		if gate.WorkItemID == workItemID && gate.Status == GateOpen {
+			open = append(open, gate.ID)
+		}
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	return fmt.Errorf("work item %q is blocked by open gate(s) %s; resolve or cancel them first", workItemID, strings.Join(open, ", "))
+}

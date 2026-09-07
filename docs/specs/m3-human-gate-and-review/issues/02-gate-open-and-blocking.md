@@ -8,15 +8,15 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `gate open` 配發 Gate ID 並保存問題、選項與可選的理由
-- [ ] 少於兩個選項時被拒絕
-- [ ] 未知的 Work Item、或已 DONE 的 Work Item 被拒絕
-- [ ] 有未解除 Gate 的工作無法 `start` 也無法 `verify`，錯誤訊息指出被 Gate 阻擋
-- [ ] 有未解除 Gate 的工作不被 `next` 選中
-- [ ] 開啟 Gate 不改變 Work Item 的狀態
-- [ ] 同一件 Work Item 可同時掛多個 Gate
-- [ ] `status` 顯示每件工作未解除 Gate 的數量
-- [ ] Gate 與 Work Item 共用同一次受鎖的原子替換，並行開啟不遺失更新或重複配發 ID
-- [ ] `make verify` 通過
+- [x] `gate open` 配發 Gate ID 並保存問題、選項與可選的理由
+- [x] 少於兩個選項時被拒絕
+- [x] 未知的 Work Item、或已 DONE 的 Work Item 被拒絕
+- [x] 有未解除 Gate 的工作無法 `start` 也無法 `verify`，錯誤訊息指出被 Gate 阻擋
+- [x] 有未解除 Gate 的工作不被 `next` 選中
+- [x] 開啟 Gate 不改變 Work Item 的狀態
+- [x] 同一件 Work Item 可同時掛多個 Gate
+- [x] `status` 顯示每件工作未解除 Gate 的數量
+- [x] Gate 與 Work Item 共用同一次受鎖的原子替換，並行開啟不遺失更新或重複配發 ID
+- [x] `make verify` 通過

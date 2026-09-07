@@ -136,7 +136,7 @@ func (s *State) RefreshReady(now time.Time) {
 func (s *State) Next() (Item, bool) {
 	items := make([]Item, 0, len(s.WorkItems))
 	for _, item := range s.WorkItems {
-		if item.Status == Ready && s.dependenciesDone(item.DependsOn) {
+		if item.Status == Ready && s.dependenciesDone(item.DependsOn) && s.OpenGateCount(item.ID) == 0 {
 			if goal := s.goal(item.GoalID); goal != nil && goal.Status == GoalActive {
 				items = append(items, item)
 			}
@@ -158,6 +158,9 @@ func (s *State) Start(id string, now time.Time) error {
 	item := s.item(id)
 	if item == nil {
 		return fmt.Errorf("unknown work item %q", id)
+	}
+	if err := s.gateBlock(id); err != nil {
+		return err
 	}
 	if item.Status != Ready {
 		return fmt.Errorf("work item %q is %s, not READY", id, item.Status)
