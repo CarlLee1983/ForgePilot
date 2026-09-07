@@ -8,11 +8,11 @@ v2 在此建立 Evidence 的容器與 Work Item 的 Verification Run 欄位，�
 
 **Status:** ready-for-agent
 
-- [ ] M2 binary 讀到 v1 state 時拒絕執行，錯誤訊息指出應執行 `migrate`，且不修改既有資料
-- [ ] `migrate` 將 v1 升級為 v2，Goal、Work Item、依賴與 ID 配發計數完整保留
-- [ ] `migrate` 升級前建立備份；備份檔已存在時拒絕執行且不修改 state
-- [ ] `migrate` 對已是 v2 的 state 回報已是最新版本，以 exit 0 結束
-- [ ] v2 包含 Evidence 容器、Evidence ID 配發計數與 Work Item 的 Verification Run 欄位，初始為空
-- [ ] 不提供 downgrade；較舊的 binary 仍拒讀 v2
-- [ ] 既有那個以 `schema_version` 為 2 作為「較新 schema 應被拒讀」的測試 fixture 改用比 v2 更新的版本號，否則該測試會在無人察覺下改為驗證一個合法的 state
-- [ ] `make verify` 通過
+- [x] M2 binary 讀到 v1 state 時拒絕執行，錯誤訊息指出應執行 `migrate`，且不修改既有資料
+- [x] `migrate` 將 v1 升級為 v2，Goal、Work Item、依賴與 ID 配發計數完整保留
+- [x] `migrate` 升級前建立備份；備份檔已存在時拒絕執行且不修改 state
+- [x] `migrate` 對已是 v2 的 state 回報已是最新版本，以 exit 0 結束
+- [x] v2 包含 Evidence 容器、Evidence ID 配發計數與 Work Item 的 Verification Run 欄位，初始為空
+- [x] 不提供 downgrade；較舊的 binary 仍拒讀 v2
+- [x] 既有那個以 `schema_version` 為 2 作為「較新 schema 應被拒讀」的測試 fixture 改用比 v2 更新的版本號，否則該測試會在無人察覺下改為驗證一個合法的 state
+- [x] `make verify` 通過

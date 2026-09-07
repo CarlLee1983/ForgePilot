@@ -8,13 +8,13 @@
 
 **Status:** ready-for-agent
 
-- [ ] 驗證進行中，另一個 process 執行 `status` 顯示該 Work Item 為 VERIFYING
-- [ ] 驗證進行中 `status` 與 `next` 仍可正常執行，不被驗證阻塞
-- [ ] 對同一件正在驗證的 Work Item 再次執行 `verify` 被明確拒絕
-- [ ] 不同的 Work Item 可以同時驗證
-- [ ] 驗證中的 process 被終止後，下一次 `verify` 先 append 一筆 INTERRUPTED Evidence 並將工作退回 RUNNING，然後才進行新的驗證
-- [ ] INTERRUPTED 的 Evidence 帶著當初那次執行的 commit SHA
-- [ ] 任何情況下都不由推斷產生 PASS 或 FAIL
-- [ ] 存活判定使用作業系統在程序死亡時自動釋放的鎖，不使用 pid
-- [ ] 驗證本身在 state 鎖之外執行；state 只在驗證前後各被短暫鎖住一次
-- [ ] `make verify` 通過
+- [x] 驗證進行中，另一個 process 執行 `status` 顯示該 Work Item 為 VERIFYING
+- [x] 驗證進行中 `status` 與 `next` 仍可正常執行，不被驗證阻塞
+- [x] 對同一件正在驗證的 Work Item 再次執行 `verify` 被明確拒絕
+- [x] 不同的 Work Item 可以同時驗證
+- [x] 驗證中的 process 被終止後，下一次 `verify` 先 append 一筆 INTERRUPTED Evidence 並將工作退回 RUNNING，然後才進行新的驗證
+- [x] INTERRUPTED 的 Evidence 帶著當初那次執行的 commit SHA
+- [x] 任何情況下都不由推斷產生 PASS 或 FAIL
+- [x] 存活判定使用作業系統在程序死亡時自動釋放的鎖，不使用 pid
+- [x] 驗證本身在 state 鎖之外執行；state 只在驗證前後各被短暫鎖住一次
+- [x] `make verify` 通過

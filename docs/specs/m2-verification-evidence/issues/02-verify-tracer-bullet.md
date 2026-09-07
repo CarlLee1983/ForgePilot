@@ -10,16 +10,16 @@
 
 **Status:** ready-for-agent
 
-- [ ] `verify` 在乾淨工作樹上解析目前 HEAD，並在以 detach 加完整 SHA 建立的隔離 worktree 中執行受管理專案的 canonical 檢查
-- [ ] 通過時 Work Item 進入 REVIEW，失敗時退回 RUNNING
-- [ ] 每次執行 append 一筆 Evidence，含 repository、Work Item、ForgeFlow Story、完整 commit SHA、實際執行的 command、exit code、result、type、遞增 ID 與 timestamp
-- [ ] 既有 Evidence 永不被覆寫
-- [ ] 工作樹有已修改的 tracked 檔案、staged 變更或未追蹤檔案時拒絕執行且不留 Evidence；ignored 檔案不計入
-- [ ] 受管理專案沒有 canonical 檢查的 target 時拒絕執行且不留 Evidence
-- [ ] Goal 非 ACTIVE、Work Item 不在 RUNNING 或 REVIEW、repository 沒有 HEAD 時皆拒絕執行
-- [ ] 隔離 worktree 在建立前先清除先前留下的殘骸註冊，結束後強制移除；通過與失敗皆移除
-- [ ] 以測試證明隔離 worktree 看不到主工作樹的未提交內容
-- [ ] Integration fixture 加入真實 commit 與 canonical 檢查；另備一個以非零 exit code 結束的版本以驗證失敗路徑
-- [ ] 判斷邏輯留在 domain 純函式中，Git 與 subprocess 的結果以參數傳入，domain 不直接執行外部程式
-- [ ] 隔離目錄不會被主工作樹的建置或測試遞迴掃到
-- [ ] `make verify` 通過
+- [x] `verify` 在乾淨工作樹上解析目前 HEAD，並在以 detach 加完整 SHA 建立的隔離 worktree 中執行受管理專案的 canonical 檢查
+- [x] 通過時 Work Item 進入 REVIEW，失敗時退回 RUNNING
+- [x] 每次執行 append 一筆 Evidence，含 repository、Work Item、ForgeFlow Story、完整 commit SHA、實際執行的 command、exit code、result、type、遞增 ID 與 timestamp
+- [x] 既有 Evidence 永不被覆寫
+- [x] 工作樹有已修改的 tracked 檔案、staged 變更或未追蹤檔案時拒絕執行且不留 Evidence；ignored 檔案不計入
+- [x] 受管理專案沒有 canonical 檢查的 target 時拒絕執行且不留 Evidence
+- [x] Goal 非 ACTIVE、Work Item 不在 RUNNING 或 REVIEW、repository 沒有 HEAD 時皆拒絕執行
+- [x] 隔離 worktree 在建立前先清除先前留下的殘骸註冊，結束後強制移除；通過與失敗皆移除
+- [x] 以測試證明隔離 worktree 看不到主工作樹的未提交內容
+- [x] Integration fixture 加入真實 commit 與 canonical 檢查；另備一個以非零 exit code 結束的版本以驗證失敗路徑
+- [x] 判斷邏輯留在 domain 純函式中，Git 與 subprocess 的結果以參數傳入，domain 不直接執行外部程式
+- [x] 隔離目錄不會被主工作樹的建置或測試遞迴掃到
+- [x] `make verify` 通過

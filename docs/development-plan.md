@@ -186,6 +186,20 @@ M2 新增兩個指令，不新增其他：
 
 Integration fixture 加入 Makefile 與真實 commit。驗收：PASS → REVIEW、FAIL → RUNNING、新 commit 不沿用舊 PASS、髒工作樹被拒、缺少 `make verify` 被拒且不留 Evidence、程序中斷回收為 INTERRUPTED 且不產生假 PASS、隔離 worktree 看不到主樹未提交內容、`git worktree` 殘骸被 prune 清除。另以既有 M1 state fixture 驗證 v1 被拒讀、`migrate` 的備份與重複執行安全，以及備份檔已存在時的拒絕。M2 仍不提供 DONE。
 
+### M2 Exit checklist
+
+- [x] `verify` 與 `migrate` 可穩定執行，且 scope 未越過 M2。
+- [x] PASS → REVIEW、FAIL → RUNNING；Evidence 綁定完整 commit SHA 且只累積不覆寫。
+- [x] 髒工作樹（含未追蹤檔案）與缺少 `make verify` 均被拒絕且不留 Evidence。
+- [x] 驗證在隔離的 detached worktree 執行，並以測試證明它看不到主工作樹的未提交內容。
+- [x] 驗證進行中 `status` 與 `next` 仍可執行；同一 Work Item 不可並行驗證，不同 Work Item 可以。
+- [x] 程序中斷回收為 INTERRUPTED 並退回 RUNNING，不產生假 PASS 或假 FAIL。
+- [x] 新 commit 後舊 PASS 標示為 stale 且不觸發任何 transition；純讀指令不寫入 state。
+- [x] v1 state 被拒讀並指示 migrate；`migrate` 備份、重複執行安全、備份已存在時拒絕、升級不遺失資料。
+- [x] `make verify` 與 `go test -race ./...` 通過，記錄實際環境與命令。
+- [x] README 與 architecture 反映實際行為，未實作事項仍清楚標示。
+- [x] 無未 review 即 DONE 的產品路徑。
+
 ### M3
 
 先定義 Gate resolve／cancel／resume、多 Gate、BLOCKED 建立與 recovery、Human identity、Goal lifecycle 與 DONE／reopen policy，再實作 Gate、Review 與完成流程。
