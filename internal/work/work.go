@@ -23,10 +23,12 @@ const (
 type Status string
 
 const (
-	Pending Status = "PENDING"
-	Ready   Status = "READY"
-	Running Status = "RUNNING"
-	Done    Status = "DONE" // Reserved for M3 fixtures; no M1 command can set it.
+	Pending   Status = "PENDING"
+	Ready     Status = "READY"
+	Running   Status = "RUNNING"
+	Verifying Status = "VERIFYING"
+	Review    Status = "REVIEW"
+	Done      Status = "DONE" // Reserved for M3 fixtures; no command below M3 can set it.
 )
 
 type Goal struct {
@@ -201,7 +203,9 @@ func (s State) Validate() error {
 		if _, ok := goals[item.GoalID]; !ok {
 			return fmt.Errorf("work item %q has unknown goal", item.ID)
 		}
-		if item.Status != Pending && item.Status != Ready && item.Status != Running && item.Status != Done {
+		switch item.Status {
+		case Pending, Ready, Running, Verifying, Review, Done:
+		default:
 			return fmt.Errorf("invalid status for %q", item.ID)
 		}
 		if _, exists := items[item.ID]; exists {
@@ -233,6 +237,9 @@ func (s State) Validate() error {
 				return fmt.Errorf("work item %q has cross-goal dependency", item.ID)
 			}
 		}
+	}
+	if err := validateEvidence(s.Evidence, s.NextEvidenceID, items); err != nil {
+		return err
 	}
 	visiting, visited := map[string]bool{}, map[string]bool{}
 	var visit func(string) error

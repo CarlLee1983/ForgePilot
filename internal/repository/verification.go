@@ -1,0 +1,113 @@
+package repository
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+// CanonicalCommand is the only verification ForgePilot runs. The managed project
+// owns what it means; ForgePilot never accepts an arbitrary command template.
+const CanonicalCommand = "make verify"
+
+// EnsureClean rejects a worktree whose contents are not fully described by HEAD.
+// Untracked files count as dirty: a new but uncommitted implementation file is
+// exactly the content a verification must not silently skip. Ignored files do not.
+func EnsureClean(root string) error {
+	output, err := git(root, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(output) != "" {
+		return fmt.Errorf("worktree is not clean; commit or stash the following before verifying:\n%s", strings.TrimRight(output, "\n"))
+	}
+	return nil
+}
+
+// Head resolves the full commit SHA that a Verification Run will be bound to.
+func Head(root string) (string, error) {
+	output, err := git(root, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve HEAD: %w", err)
+	}
+	revision := strings.TrimSpace(output)
+	if revision == "" {
+		return "", errors.New("repository has no commits to verify")
+	}
+	return revision, nil
+}
+
+// EnsureCanonicalCheck reports whether the managed project defines the canonical
+// check at all. A project without one cannot be verified, which is not the same
+// as failing verification, so this is refused rather than recorded as Evidence.
+func EnsureCanonicalCheck(root string) error {
+	if _, err := os.Stat(filepath.Join(root, "Makefile")); err != nil {
+		return fmt.Errorf("managed project has no Makefile, so `%s` cannot be run", CanonicalCommand)
+	}
+	command := exec.Command("make", "-n", "verify")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("managed project does not define `%s`: %s", CanonicalCommand, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// PruneWorktrees clears registrations left behind by runs that were killed. Git
+// keeps the metadata until asked to prune, so this runs before every new run.
+func PruneWorktrees(root string) error {
+	_, err := git(root, "worktree", "prune")
+	return err
+}
+
+// AddWorktree checks the exact revision out in isolation. Always detached and by
+// full SHA: naming a branch fails because the main worktree already holds it.
+func AddWorktree(root, path, revision string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	if _, err := git(root, "worktree", "add", "--detach", path, revision); err != nil {
+		return fmt.Errorf("create isolated worktree: %w", err)
+	}
+	return nil
+}
+
+// RemoveWorktree always forces: a verification run leaves build output behind,
+// and git refuses to remove a worktree that has untracked files.
+func RemoveWorktree(root, path string) error {
+	if _, err := git(root, "worktree", "remove", "--force", path); err != nil {
+		return os.RemoveAll(path)
+	}
+	return nil
+}
+
+// RunCanonicalCheck executes the managed project's canonical check and reports
+// its exit code. A non-zero code is a verification result, not an error here;
+// err is reserved for being unable to run the check at all.
+func RunCanonicalCheck(directory string) (int, string, error) {
+	command := exec.Command("make", "verify")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), string(output), nil
+	}
+	if err != nil {
+		return 0, string(output), fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
+	}
+	return 0, string(output), nil
+}
+
+func git(root string, arguments ...string) (string, error) {
+	command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
+}

@@ -22,7 +22,7 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 
 func run(args []string, cwd string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|status>")
+		return errors.New("usage: forgepilot <init|migrate|goal|work|next|start|verify|status>")
 	}
 	if args[0] == "init" {
 		if len(args) != 1 {
@@ -49,6 +49,8 @@ func run(args []string, cwd string, output io.Writer) error {
 		return next(args[1:], root, output)
 	case "start":
 		return start(args[1:], root, output)
+	case "verify":
+		return verify(args[1:], root, output)
 	case "status":
 		return status(args[1:], root, output)
 	default:
