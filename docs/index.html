@@ -434,22 +434,25 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
 
     <h3 style="margin-top:52px">怎麼把 agent 接上去</h3>
     <div class="body-text">
-      <p>ForgePilot 沒有 agent 外掛，也不去攔截誰在跑什麼。它就是一個 CLI，所以接法是把規則寫進 agent 每次都會讀的那份指示檔，<code>CLAUDE.md</code>、<code>AGENTS.md</code> 或你的工具用的那一份都行。四條就夠了。</p>
+      <p>ForgePilot 沒有 agent 外掛，也不去攔截誰在跑什麼。它就是一個 CLI，所以接法是把規則寫進 agent 每次都會讀的那份指示檔，<code>CLAUDE.md</code>、<code>AGENTS.md</code> 或你的工具用的那一份都行。四條就夠了，規則本身建議用英文寫，指令與 flag 都是英文，混著中文敘述反而多一層轉換。</p>
     </div>
 
     <div class="term" style="margin-top:22px">
       <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;貼進 AGENTS.md</div>
-<pre><span class="o">## 這個 repo 的工作方式
+<pre><span class="o">## How work is picked up in this repo
 
-1. 開工前先跑 `forgepilot next`，只做它指到的那一件。
-   它說 none 就停下來問人，不要自己找事做。
-2. 認領用 `forgepilot start &lt;work-id&gt;`，不要跳過。
-3. 做完不要說「做完了」。跑 `forgepilot verify &lt;work-id&gt;`，
-   把輸出原樣貼出來，讓證據自己說話。
-4. 遇到需要人決定的事，用 `forgepilot gate open` 寫下問題和
-   選項，然後停在那裡。不要自己挑一個繼續做。
+1. Before starting anything, run `forgepilot next` and work only
+   on the item it names. If it prints none, stop and ask a human.
+   Never pick your own next task.
+2. Claim it with `forgepilot start &lt;work-id&gt;`. Do not skip this.
+3. Never report "done". When you believe the work is finished, run
+   `forgepilot verify &lt;work-id&gt;` and paste the output verbatim.
+   The evidence speaks for the work; your summary does not.
+4. When a decision is not yours to make, run `forgepilot gate open`
+   with the question and the options, then stop and wait. Never
+   pick an option and carry on.
 
-`review approve` 由人執行。</span></pre>
+`review approve` is run by a human, never by you.</span></pre>
     </div>
 
     <div class="body-text" style="margin-top:26px">
