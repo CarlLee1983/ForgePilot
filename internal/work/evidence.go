@@ -255,23 +255,25 @@ func (s *State) BeginVerification(id, revision, worktreePath, logPath string, no
 // RUNNING. It must only be called once the caller has established that no live
 // runner remains. INTERRUPTED means no result was produced: it is never a FAIL,
 // and a result is never inferred.
-func (s *State) ReclaimRun(id, command string, now time.Time) (Evidence, string, bool, error) {
+func (s *State) ReclaimRun(id, command string, now time.Time) (Evidence, string, string, bool, error) {
 	item := s.item(id)
 	if item == nil {
-		return Evidence{}, "", false, fmt.Errorf("unknown work item %q", id)
+		return Evidence{}, "", "", false, fmt.Errorf("unknown work item %q", id)
 	}
 	if item.CurrentRun == nil {
-		return Evidence{}, "", false, nil
+		return Evidence{}, "", "", false, nil
 	}
-	// Take the worktree path from state rather than recomputing it: state holds
-	// where the interrupted run actually ran, which survives changes to the
-	// naming scheme or the layout.
+	// Take the worktree and log paths from state rather than recomputing them:
+	// state holds where the interrupted run actually wrote, which survives
+	// changes to the naming scheme or the layout. See
+	// docs/adr/0012-verification-log-outside-state.md.
 	abandoned := item.CurrentRun.WorktreePath
+	logPath := item.CurrentRun.LogPath
 	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, command, nil, Interrupted, now)
 	if err != nil {
-		return Evidence{}, "", false, err
+		return Evidence{}, "", "", false, err
 	}
-	return evidence, abandoned, true, nil
+	return evidence, abandoned, logPath, true, nil
 }
 
 // WorkItemStatus reports a Work Item's current status, or an empty status when no

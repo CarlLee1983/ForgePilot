@@ -715,6 +715,69 @@ func TestInterruptedEvidenceHasNoExitCode(t *testing.T) {
 	}
 }
 
+// TestInterruptedRunLeavesATruncatedLogThatReclaimReports covers M5-5: a killed
+// run's log is not merely present, it holds what the run produced before it
+// died, and the next verify's reclaim reports exactly that path — the one
+// state recorded on current_run, not one re-derived from today's naming
+// scheme. See docs/adr/0012-verification-log-outside-state.md.
+func TestInterruptedRunLeavesATruncatedLogThatReclaimReports(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	// Produces output before the kill lands, so the log can be checked for it.
+	writeVerify(t, root, "verify:\n\t@echo working before the cut\n\t@sleep 30\n")
+
+	running := startVerify(t, binary, root, "WI-001")
+
+	// Give the recipe's first line a moment to actually reach the log before
+	// the process is killed; startVerify only waits for VERIFYING, not for
+	// output to have been written.
+	deadline := time.Now().Add(5 * time.Second)
+	var logPath string
+	for time.Now().Before(deadline) {
+		state, err := storage.Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logPath = state.WorkItems[0].CurrentRun.LogPath
+		if logPath == "" {
+			t.Fatalf("current_run has no LogPath: %#v", state.WorkItems[0].CurrentRun)
+		}
+		content, err := os.ReadFile(logPath)
+		if err == nil && strings.Contains(string(content), "working before the cut") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if err := running.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.Wait()
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("interrupted run left no log at %s: %v", logPath, err)
+	}
+	if !strings.Contains(string(content), "working before the cut") {
+		t.Fatalf("log = %q, want the output produced before the kill", content)
+	}
+
+	writeVerify(t, root, passingVerify)
+	output, err := command(binary, root, "verify", "WI-001")
+	if err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify after interruption = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "INTERRUPTED") {
+		t.Fatalf("output %q does not report the reclaimed run", output)
+	}
+	if !strings.Contains(output, logPath) {
+		t.Fatalf("output %q does not report the interrupted run's own log path %q", output, logPath)
+	}
+}
+
 // TestVerifyRecoversFromLeftoverWorktrees: a killed run leaves both the directory
 // and git's registration behind. The next verify must clear them rather than fail
 // on git's "missing but already registered" error.
@@ -1661,6 +1724,14 @@ func TestOrphanIsReclaimedEvenWhenANewRunIsRefused(t *testing.T) {
 	slow := writeVerify(t, root, "verify:\n\t@sleep 30\n")
 
 	running := startVerify(t, binary, root, "WI-001")
+	orphaned, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := orphaned.WorkItems[0].CurrentRun.LogPath
+	if logPath == "" {
+		t.Fatalf("current_run has no LogPath: %#v", orphaned.WorkItems[0].CurrentRun)
+	}
 	if err := running.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -1679,6 +1750,12 @@ func TestOrphanIsReclaimedEvenWhenANewRunIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(output, "INTERRUPTED") {
 		t.Fatalf("output %q does not report the run it reclaimed", output)
+	}
+	// The reclaim's report is not withheld just because the new run it made way
+	// for was then refused: the fact and its log path were already settled
+	// before the refusal was even evaluated.
+	if !strings.Contains(output, logPath) {
+		t.Fatalf("output %q does not report the reclaimed run's log path %q even though the new run was refused", output, logPath)
 	}
 
 	state, err := storage.Load(root)

@@ -122,11 +122,11 @@ func runVerification(id, root string, output io.Writer) error {
 // separate question, decided after this and by different rules.
 func reclaimOrphan(id, root string, output io.Writer) error {
 	var reclaimed work.Evidence
-	var abandoned string
+	var abandoned, logFile string
 	var found bool
 	if err := storage.Update(root, func(state *work.State) error {
 		var err error
-		reclaimed, abandoned, found, err = state.ReclaimRun(id, repository.CanonicalCommand, now())
+		reclaimed, abandoned, logFile, found, err = state.ReclaimRun(id, repository.CanonicalCommand, now())
 		return err
 	}); err != nil {
 		return err
@@ -140,7 +140,11 @@ func reclaimOrphan(id, root string, output io.Writer) error {
 	if abandoned != "" {
 		_ = repository.RemoveWorktree(root, abandoned)
 	}
-	_, err := fmt.Fprintf(output, "%s %s at %s (previous run did not finish)\n", reclaimed.ID, reclaimed.Result, reclaimed.Revision)
+	// logFile is the same value beginRun wrote to current_run, not a path
+	// re-derived from today's naming scheme: the streamed output an
+	// interrupted run leaves behind (see docs/adr/0012-verification-log-outside-state.md)
+	// is otherwise unreachable without it.
+	_, err := fmt.Fprintf(output, "%s %s at %s (previous run did not finish, log: %s)\n", reclaimed.ID, reclaimed.Result, reclaimed.Revision, logFile)
 	return err
 }
 

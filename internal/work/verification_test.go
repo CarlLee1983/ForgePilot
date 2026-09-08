@@ -176,13 +176,13 @@ func TestLatestVerificationAndStaleness(t *testing.T) {
 
 func TestReclaimRunRecordsAnInterruptionWithoutAnExitCode(t *testing.T) {
 	state, now := verifiableState(t)
-	if _, _, found, err := state.ReclaimRun("WI-001", "make verify", now); err != nil || found {
+	if _, _, _, found, err := state.ReclaimRun("WI-001", "make verify", now); err != nil || found {
 		t.Fatalf("reclaimed a run that was never started: %v, %v", found, err)
 	}
 	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt-abc", "", now); err != nil {
 		t.Fatal(err)
 	}
-	evidence, abandoned, found, err := state.ReclaimRun("WI-001", "make verify", now)
+	evidence, abandoned, logFile, found, err := state.ReclaimRun("WI-001", "make verify", now)
 	if err != nil || !found {
 		t.Fatalf("ReclaimRun = %v, %v", found, err)
 	}
@@ -197,6 +197,9 @@ func TestReclaimRunRecordsAnInterruptionWithoutAnExitCode(t *testing.T) {
 	}
 	if abandoned != "/tmp/wt-abc" {
 		t.Fatalf("abandoned worktree = %q, want the path state recorded", abandoned)
+	}
+	if logFile != "" {
+		t.Fatalf("log path = %q, want empty since none was given to BeginVerification", logFile)
 	}
 	if state.WorkItems[0].Status != Running || state.WorkItems[0].CurrentRun != nil {
 		t.Fatalf("reclaim left %#v", state.WorkItems[0])
@@ -239,7 +242,7 @@ func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
 		t.Fatal("an orphaned run let verification start past an open gate")
 	}
 	// The fact that a run was interrupted is still recorded.
-	evidence, _, found, err := state.ReclaimRun(item.ID, "make verify", now)
+	evidence, _, _, found, err := state.ReclaimRun(item.ID, "make verify", now)
 	if err != nil || !found {
 		t.Fatalf("ReclaimRun = %#v, %v, %v", evidence, found, err)
 	}
@@ -263,7 +266,7 @@ func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
 	if err := state.CanBeginVerification(item.ID); err == nil {
 		t.Fatal("an orphaned run let verification start under a blocked goal")
 	}
-	if _, _, found, err := state.ReclaimRun(item.ID, "make verify", now); err != nil || !found {
+	if _, _, _, found, err := state.ReclaimRun(item.ID, "make verify", now); err != nil || !found {
 		t.Fatalf("a blocked goal discarded an interrupted run: %v, %v", found, err)
 	}
 	if err := state.Validate(); err != nil {
@@ -294,9 +297,12 @@ func TestLogPathSurvivesTheRunAndVanishesWithIt(t *testing.T) {
 	if err := state.BeginVerification("WI-001", "def456", "/tmp/wt", "/forgepilot/logs/WI-001-def456-2.log", now); err != nil {
 		t.Fatal(err)
 	}
-	evidence, _, found, err := state.ReclaimRun("WI-001", "make verify", now)
+	evidence, _, reclaimedLogPath, found, err := state.ReclaimRun("WI-001", "make verify", now)
 	if err != nil || !found {
 		t.Fatalf("ReclaimRun = %#v, %v, %v", evidence, found, err)
+	}
+	if reclaimedLogPath != "/forgepilot/logs/WI-001-def456-2.log" {
+		t.Fatalf("ReclaimRun log path = %q, want the path state recorded", reclaimedLogPath)
 	}
 	if state.WorkItems[0].CurrentRun != nil {
 		t.Fatalf("LogPath outlived an interrupted run: %#v", state.WorkItems[0].CurrentRun)
