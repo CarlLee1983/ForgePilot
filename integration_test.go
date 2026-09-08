@@ -86,6 +86,58 @@ func TestWorkAddWithoutStoriesDirectoryNamesTheMissingDirectory(t *testing.T) {
 	}
 }
 
+func TestWorkAddHintsWhenTheStoryIsNotCommitted(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	if err != nil {
+		t.Fatalf("work add: %v: %s", err, output)
+	}
+	if !strings.Contains(output, "WI-001 READY") {
+		t.Fatalf("output %q does not show the Work Item being created", output)
+	}
+	if !strings.Contains(output, "specs/stories/a.md") || !strings.Contains(output, "Verification") {
+		t.Fatalf("output %q does not name the story and explain Verification", output)
+	}
+}
+
+func TestWorkAddDoesNotHintWhenTheStoryIsCommittedAndClean(t *testing.T) {
+	root, binary := fixture(t)
+	commitAll(t, root, "seed stories")
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	// An unrelated untracked file must not make the hint misfire: it names the
+	// story `work add` was just given, not the state of the worktree at large.
+	if err := os.WriteFile(filepath.Join(root, "unrelated.txt"), []byte("noise\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	if err != nil {
+		t.Fatalf("work add: %v: %s", err, output)
+	}
+	if strings.Contains(output, "not committed") {
+		t.Fatalf("output %q hints at a story that is already committed and clean", output)
+	}
+}
+
+func TestWorkAddHintsWhenTheStoryIsCommittedButModified(t *testing.T) {
+	root, binary := fixture(t)
+	commitAll(t, root, "seed stories")
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "a.md"), []byte("# story\nmore\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	if err != nil {
+		t.Fatalf("work add: %v: %s", err, output)
+	}
+	if !strings.Contains(output, "specs/stories/a.md") || !strings.Contains(output, "not committed") {
+		t.Fatalf("output %q does not hint at the uncommitted change", output)
+	}
+}
+
 func TestConcurrentAddsKeepBothItems(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")

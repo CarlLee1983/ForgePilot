@@ -33,6 +33,19 @@ func EnsureClean(root, action string) error {
 	return nil
 }
 
+// Uncommitted reports whether the given repository-relative path holds content
+// that HEAD does not describe: untracked, or tracked with changes not yet
+// committed. Unlike EnsureClean, which asks about the whole worktree, this asks
+// about exactly one path, so a dirty file elsewhere in the worktree cannot make
+// this report a false positive for a path that is itself clean.
+func Uncommitted(root, path string) (bool, error) {
+	output, err := git(root, "status", "--porcelain", "--untracked-files=normal", "--", path)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
 // Head resolves the full commit SHA that a Verification Run will be bound to.
 func Head(root string) (string, error) {
 	output, err := git(root, "rev-parse", "HEAD")

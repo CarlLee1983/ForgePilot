@@ -210,7 +210,15 @@ func addWork(args []string, root string, output io.Writer) error {
 	}); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "%s %s\nStory: %s\n", added.ID, added.Status, added.StoryRef)
+	if _, err := fmt.Fprintf(output, "%s %s\nStory: %s\n", added.ID, added.Status, added.StoryRef); err != nil {
+		return err
+	}
+	// Best-effort: work add already succeeded, so a failure to query git here
+	// must not turn a successful command into a failing one. The hint is a
+	// courtesy, not a result the caller depends on.
+	if uncommitted, hintErr := repository.Uncommitted(root, story); hintErr == nil && uncommitted {
+		_, err = fmt.Fprintf(output, "%s is not committed yet; Verification only sees what HEAD describes, so commit it before running verify.\n", story)
+	}
 	return err
 }
 
