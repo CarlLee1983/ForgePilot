@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M4 已全部完成；M5 正在開工前定案階段，尚未開始實作。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M5 已全部完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -340,19 +340,39 @@ Schema 升至 v5：`current_run` 新增 `log path`。沿用既有升級契約—
 
 ### M5 Exit checklist
 
-- [ ] `review approve` 與 `review reject` 的髒工作樹拒絕訊息說「reviewing」；`verify` 維持說「verifying」；兩者拒絕清單格式一致；未追蹤檔案仍判定為髒。
-- [ ] `EnsureClean` 只有一份判準與一份訊息模板，動作字串由呼叫端提供。
-- [ ] `verify` 執行前印出 log 路徑；非 PASS 時 stdout 不再印全文（刻意移除，非退化）；結果行不重複路徑。
-- [ ] PASS、FAIL、INTERRUPTED 皆留下對應該次執行的 log；INTERRUPTED 的 log 為截斷內容，回收孤兒時的輸出附上其路徑。
-- [ ] 同一 revision 重跑多次的 log 不互相覆蓋；由 Work Item ID 與完整 SHA 前綴比對可找到對應 log。
-- [ ] log 目錄開不起來時 `verify` 中止並回報，不留 Evidence。
-- [ ] `.forgepilot/logs/` 不自動清理、不提供清理指令；落在既有 `.gitignore` 範圍內。
-- [ ] Evidence 未新增任何指向 log 的欄位；`current_run` 新增 `log path`。
-- [ ] v4 state 被拒讀並指示 migrate；`migrate` 備份為 `state.json.v4.bak` 後升級、重複執行安全、備份已存在時拒絕、升級不遺失 Goal、Work Item、Evidence 或 Gate。
-- [ ] 兩處版本號 fixture（`internal/storage/storage_test.go`、`internal/work/work_test.go`）調到 v5。
-- [ ] 端到端流程以獨立 process 跑通：PASS 與 FAIL 各自留下對應 log；被 kill 的執行回收為 INTERRUPTED 且輸出附上 log 路徑；同一 revision 重跑兩次產生兩個檔案。
-- [ ] `make verify` 與 `go test -race -count=1 ./...` 實跑通過，記錄實際環境與命令。
-- [ ] README、architecture 與 CONTEXT 反映實際行為。
+- [x] `review approve` 與 `review reject` 的髒工作樹拒絕訊息說「reviewing」；`verify` 維持說「verifying」；兩者拒絕清單格式一致；未追蹤檔案仍判定為髒（`integration_test.go` 的 `TestVerifyRecordsEvidenceAgainstTheCommittedRevision`、`TestRefusedVerifyWritesOnlyTheRunThatEnded`、`TestReviewRecordsAJudgementBesideTheVerification`；端到端實跑中 `verify` 於未 commit 的 `.gitignore` 上重現「verifying」訊息，見下方實跑紀錄）。
+- [x] `EnsureClean` 只有一份判準與一份訊息模板，動作字串由呼叫端提供（`internal/repository/verification.go` 的 `EnsureClean(root, action string)`）。
+- [x] `verify` 執行前印出 log 路徑；非 PASS 時 stdout 不再印全文（刻意移除，非退化）；結果行不重複路徑（`TestVerifyStreamsCanonicalOutputToALog`；端到端實跑中確認 PASS 輸出先印 `Log: ...` 再印結果行，結果行不重複路徑）。
+- [x] PASS、FAIL、INTERRUPTED 皆留下對應該次執行的 log；INTERRUPTED 的 log 為截斷內容，回收孤兒時的輸出附上其路徑（`TestVerifyStreamsCanonicalOutputToALog`、`TestInterruptedRunLeavesATruncatedLogThatReclaimReports`、`TestReclaimRunRecordsAnInterruptionWithoutAnExitCode`）。
+- [x] 同一 revision 重跑多次的 log 不互相覆蓋；由 Work Item ID 與完整 SHA 前綴比對可找到對應 log（`TestVerifyLogsAccumulateAcrossRepeatedRuns`；端到端實跑中 `ls .forgepilot/logs/` 看到檔名為 `WI-001-<short-sha>-<started-at>.log`）。
+- [x] log 目錄開不起來時 `verify` 中止並回報，不留 Evidence（`TestVerifyAbortsWhenTheLogCannotBeCreated`）。
+- [x] `.forgepilot/logs/` 不自動清理、不提供清理指令；落在既有 `.gitignore` 範圍內（產品程式碼未提供清理指令；端到端實跑中 `init` 產生的 `.gitignore` 內容為 `.forgepilot/`，涵蓋 `logs/`）。
+- [x] Evidence 未新增任何指向 log 的欄位；`current_run` 新增 `log path`（`internal/work/verification_test.go` 的 `TestLogPathSurvivesTheRunAndVanishesWithIt`）。
+- [x] v4 state 被拒讀並指示 migrate；`migrate` 備份為 `state.json.v4.bak` 後升級、重複執行安全、備份已存在時拒絕、升級不遺失 Goal、Work Item、Evidence 或 Gate（`internal/work/work_test.go` 的 `TestSchemaVersionErrorsDistinguishOlderFromNewer`；`integration_test.go` 的 `TestMigrateCommandUpgradesLegacyState`；`internal/storage/storage_test.go` 對 `state.json.v4.bak` 的斷言）。
+- [x] 兩處版本號 fixture（`internal/storage/storage_test.go`、`internal/work/work_test.go`）調到 v5（`internal/work/work_test.go:104` 斷言 `SchemaVersion` 為 5；`internal/storage/storage_test.go:336` 以 `"schema_version": 5` 建構 fixture）。
+- [x] 端到端流程以獨立 process 跑通：PASS 與 FAIL 各自留下對應 log；被 kill 的執行回收為 INTERRUPTED 且輸出附上 log 路徑；同一 revision 重跑兩次產生兩個檔案（PASS 與 stdout 呈現於下方「M5 端到端實跑紀錄」；FAIL、INTERRUPTED 與重跑不覆寫由 `TestVerifyStreamsCanonicalOutputToALog`、`TestInterruptedRunLeavesATruncatedLogThatReclaimReports`、`TestVerifyLogsAccumulateAcrossRepeatedRuns` 覆蓋）。
+- [x] `make verify` 與 `go test -race -count=1 ./...` 實跑通過，記錄實際環境與命令（見下方「M5 端到端實跑紀錄」）。
+- [x] README、architecture 與 CONTEXT 反映實際行為（`docs/architecture.md` 文件狀態行改為 M1–M5 已實作）。
+
+### M5 端到端實跑紀錄
+
+環境：macOS 26.5.1（`Darwin 25.5.0 arm64`）、`go1.25.5`、commit `8ce2c12`，實跑前 `git status --porcelain` 為空。
+
+- `make verify`：PASS（`gofmt` 檢查、`go vet ./...`、`go test ./...`、CLI build 均成功）。
+- `go test -race -count=1 ./...`：PASS，涵蓋根套件與 `internal/repository`、`internal/storage`、`internal/work`，未偵測到 race。
+
+端到端流程於獨立 process、臨時 Git repository 上執行，binary 為本次 commit 建置：
+
+```text
+init → goal create g1 → work add WI-001 → next → start WI-001
+→ verify（工作樹因未 commit 的 .gitignore 而 dirty，拒絕訊息含「verifying」）
+→ commit .gitignore
+→ verify（PASS，先印出 Log: <絕對路徑>，log 檔內容為 canonical 檢查完整輸出，結果行 `EV-001 PASS at <sha>` 不重複路徑）
+→ review approve WI-001（`EV-002 APPROVED at <sha>`，WI-001 → DONE）
+→ status（顯示 WI-001 DONE、EV-001 PASS 與 EV-002 APPROVED，log 路徑呈現未與完成流程互相干擾）
+```
+
+log 檔案落在 `.forgepilot/logs/WI-001-<short-sha>-<started-at>.log`，`.gitignore` 內容為 `.forgepilot/`，log 目錄涵蓋在內。
 
 ## 每階段交付格式
 
