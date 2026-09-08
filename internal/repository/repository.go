@@ -17,11 +17,11 @@ const storyLocationRule = "story reference must be located under specs/stories"
 
 func ValidateStory(root, reference string) (string, error) {
 	if reference == "" || filepath.IsAbs(reference) {
-		return "", fmt.Errorf("story reference must be a repository-relative path under specs/stories")
+		return "", fmt.Errorf("%s: reference must be repository-relative, got %q", storyLocationRule, reference)
 	}
 	for _, part := range strings.FieldsFunc(filepath.ToSlash(reference), func(r rune) bool { return r == '/' }) {
 		if part == ".." {
-			return "", fmt.Errorf("story reference must not traverse paths")
+			return "", fmt.Errorf("%s: reference must not traverse with \"..\", got %q", storyLocationRule, reference)
 		}
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
@@ -41,10 +41,10 @@ func ValidateStory(root, reference string) (string, error) {
 	candidate := filepath.Join(root, reference)
 	resolved, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
-		return "", errors.New(storyLocationRule)
+		return "", fmt.Errorf("%s: %q", storyLocationRule, reference)
 	}
 	if !within(base, resolved) {
-		return "", errors.New(storyLocationRule)
+		return "", fmt.Errorf("%s: %q", storyLocationRule, reference)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil || (!info.Mode().IsRegular() && !info.IsDir()) {
