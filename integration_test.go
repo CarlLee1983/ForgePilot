@@ -32,6 +32,16 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
 		}
 	}
+	failWith := func(want string, arguments ...string) {
+		t.Helper()
+		output, err := command(binary, root, arguments...)
+		if err == nil {
+			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
+		}
+		if !strings.Contains(output, want) {
+			t.Fatalf("%v output %q does not contain %q", arguments, output, want)
+		}
+	}
 	run("Initialized", "init")
 	run("Initialized", "init")
 	run("Next: none", "status")
@@ -47,7 +57,7 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 	run("WI-002 PENDING", "status")
 	run("No READY work.", "next")
 	fail("goal", "create", "--id", "queue", "--title", "Again")
-	fail("work", "add", "--goal", "queue", "--story", "specs/stories/missing.md")
+	failWith("story reference must be located under specs/stories", "work", "add", "--goal", "queue", "--story", "specs/stories/missing.md")
 	fail("work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-404")
 	fail("start", "WI-001")
 	state, err := storage.Load(root)
@@ -58,6 +68,22 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	fail("status")
+}
+
+func TestWorkAddWithoutStoriesDirectoryNamesTheMissingDirectory(t *testing.T) {
+	root, binary := fixtureWithoutStories(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	if err == nil {
+		t.Fatalf("unexpectedly succeeded: %s", output)
+	}
+	if !strings.Contains(output, "specs/stories does not exist") || !strings.Contains(output, "ForgePilot expects ForgeFlow Story files") {
+		t.Fatalf("output %q does not name the missing directory", output)
+	}
+	if strings.Contains(output, "lstat") {
+		t.Fatalf("output %q leaks an internal call name", output)
+	}
 }
 
 func TestConcurrentAddsKeepBothItems(t *testing.T) {
@@ -129,6 +155,18 @@ func fixture(t *testing.T) (string, string) {
 	build.Dir = projectRoot(t)
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, output)
+	}
+	return root, binary
+}
+
+// fixtureWithoutStories is fixture minus specs/stories: a repository that has
+// never adopted ForgeFlow, which is the one shape none of the other fixtures
+// exercise since they all pre-create the directory.
+func fixtureWithoutStories(t *testing.T) (string, string) {
+	t.Helper()
+	root, binary := fixture(t)
+	if err := os.RemoveAll(filepath.Join(root, "specs")); err != nil {
+		t.Fatal(err)
 	}
 	return root, binary
 }

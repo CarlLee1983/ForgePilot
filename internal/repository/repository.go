@@ -1,11 +1,19 @@
 package repository
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// storyLocationRule is what a story reference is rejected for whenever the
+// problem is the user's input rather than the repository's setup: escaping
+// specs/stories, or pointing at something that isn't there. Both are the same
+// violation from the caller's side — fix the path — so they share one message
+// instead of leaking which internal check happened to catch it.
+const storyLocationRule = "story reference must be located under specs/stories"
 
 func ValidateStory(root, reference string) (string, error) {
 	if reference == "" || filepath.IsAbs(reference) {
@@ -21,6 +29,9 @@ func ValidateStory(root, reference string) (string, error) {
 		return "", fmt.Errorf("resolve repository root: %w", err)
 	}
 	base, err := filepath.EvalSymlinks(filepath.Join(root, "specs", "stories"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", errors.New("specs/stories does not exist in this repository; ForgePilot expects ForgeFlow Story files to live under specs/stories")
+	}
 	if err != nil {
 		return "", fmt.Errorf("resolve story directory: %w", err)
 	}
@@ -30,10 +41,10 @@ func ValidateStory(root, reference string) (string, error) {
 	candidate := filepath.Join(root, reference)
 	resolved, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
-		return "", fmt.Errorf("story reference %q does not exist", reference)
+		return "", errors.New(storyLocationRule)
 	}
 	if !within(base, resolved) {
-		return "", fmt.Errorf("story reference must remain under specs/stories")
+		return "", errors.New(storyLocationRule)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil || (!info.Mode().IsRegular() && !info.IsDir()) {
