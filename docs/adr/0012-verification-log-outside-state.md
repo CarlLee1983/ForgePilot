@@ -6,6 +6,8 @@
 
 Evidence 上不加欄位，則是為了避開 [ADR-0003](0003-no-work-item-target-revision.md) 與 [ADR-0011](0011-pr-identity-does-not-gate-completion.md) 已經拒絕過兩次的形狀：一個沒有任何規則讀取、卻要有人負責讓它保持正確的路徑欄位。以 run 為鍵之後路徑不必被指向也找得到——Evidence 自帶 Work Item ID 與完整 SHA，`ls .forgepilot/logs/<work-id>-<short-sha>-*` 就是它的輸出。`LogPath` 存在 `current_run` 上是不同的東西：它跟著一次執行生滅，理由與 `WorktreePath` 完全相同——回收孤兒時要知道上一輪實際寫到哪，而不是拿今天的命名規則去猜昨天那一輪。
 
+同一個理由也回答了一個相關但不同的問題：要不要在 Evidence 上加欄位表達「這次執行是事後補跑，還是邊做邊跑」。ForgePilot 觀測得到的只有 revision 與時間；要它判斷使用者是不是事後補跑，等於要它替使用者的意圖背書，而它沒有任何管道取得那個意圖。這個欄位的形狀——沒有規則讀取它，卻要有人負責讓它保持正確——正是 ADR-0003、ADR-0011 與本篇拒絕過的同一種形狀，所以答案一致：不加。
+
 備選是把 Evidence ID 當檔名，run 結束後更名。放棄它的理由是那讓一份檔案的正確名字依賴一次事後更名成功，而 `internal/cli/verify.go` 對收尾動作的承諾恰恰是「不得否決結果」；INTERRUPTED 的更名還要等到下一次 verify 的回收才發生，沒有下一次就永遠停在暫名。
 
 輸出不自動清理，也不提供清理指令：`.forgepilot/` 已被忽略，成長由使用者處理。刪除是一條要有人負責的規則，在有人抱怨體積之前不值得發明。

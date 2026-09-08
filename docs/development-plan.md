@@ -380,7 +380,8 @@ M5 交付完成後用 ForgePilot 自我駕駛的 dogfood（`docs/specs/m5-dogfoo
 的摩擦，拆成獨立的票修補，不併入 M5、不開新 milestone：story 路徑錯誤訊息的改善見
 issue #9，`work add` 的提示改善見 issue #10，ForgeFlow Story 定義與現況不符、
 「是否自我套用 ForgeFlowV2」的未決問題、以及 Evidence 不承諾工作時序這三件事的文件記錄
-見 issue #12。
+見 issue #12；issue #11（事後補跑與邊做邊跑在 state 裡分辨不出來）的關閉結論記在
+[ADR-0012](adr/0012-verification-log-outside-state.md)。
 
 ## 每階段交付格式
 
