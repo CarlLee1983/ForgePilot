@@ -67,7 +67,7 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	// A review must point at content a commit describes, exactly as a
 	// verification must: otherwise the judgement names a revision that never
 	// held what was reviewed.
-	if err := repository.EnsureClean(root); err != nil {
+	if err := repository.EnsureClean(root, "reviewing"); err != nil {
 		return err
 	}
 	revision, err := repository.Head(root)

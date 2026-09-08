@@ -16,13 +16,18 @@ const CanonicalCommand = "make verify"
 // EnsureClean rejects a worktree whose contents are not fully described by HEAD.
 // Untracked files count as dirty: a new but uncommitted implementation file is
 // exactly the content a verification must not silently skip. Ignored files do not.
-func EnsureClean(root string) error {
+//
+// action names what the caller is doing right now ("verifying", "reviewing")
+// so the rejection reads as the command the user actually ran. It plays no
+// part in the judgement itself: the check above is the only thing either
+// caller may lean on.
+func EnsureClean(root, action string) error {
 	output, err := git(root, "status", "--porcelain", "--untracked-files=normal")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(output) != "" {
-		return fmt.Errorf("worktree is not clean; commit or stash the following before verifying:\n%s", strings.TrimRight(output, "\n"))
+		return fmt.Errorf("worktree is not clean; commit or stash the following before %s:\n%s", action, strings.TrimRight(output, "\n"))
 	}
 	return nil
 }

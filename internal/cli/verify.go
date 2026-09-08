@@ -41,7 +41,7 @@ func runVerification(id, root string, output io.Writer) error {
 	if err := state.CanBeginVerification(id); err != nil {
 		return err
 	}
-	if err := repository.EnsureClean(root); err != nil {
+	if err := repository.EnsureClean(root, "verifying"); err != nil {
 		return err
 	}
 	revision, err := repository.Head(root)

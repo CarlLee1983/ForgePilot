@@ -321,6 +321,12 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	if !strings.Contains(output, "clean") {
 		t.Fatalf("error %q does not explain the worktree is not clean", output)
 	}
+	if !strings.Contains(output, "verifying") {
+		t.Fatalf("error %q does not say verifying is what was refused", output)
+	}
+	if !strings.Contains(output, "stray.txt") {
+		t.Fatalf("error %q does not list the file that made the worktree dirty", output)
+	}
 	if err := os.Remove(filepath.Join(root, "stray.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -636,6 +642,9 @@ func TestRefusedVerifyWritesOnlyTheRunThatEnded(t *testing.T) {
 	}
 	if !strings.Contains(output, "clean") {
 		t.Fatalf("error %q does not explain the worktree is not clean", output)
+	}
+	if !strings.Contains(output, "verifying") {
+		t.Fatalf("error %q does not say verifying is what was refused", output)
 	}
 
 	state, err := storage.Load(root)
@@ -1000,6 +1009,16 @@ func TestReviewRecordsAJudgementBesideTheVerification(t *testing.T) {
 	}
 	if !strings.Contains(output, "clean") {
 		t.Fatalf("error %q does not explain the worktree is not clean", output)
+	}
+	// The rejection must name the command actually running, not verify's wording.
+	if !strings.Contains(output, "reviewing") {
+		t.Fatalf("error %q does not say reviewing is what was refused", output)
+	}
+	if strings.Contains(output, "verifying") {
+		t.Fatalf("error %q wrongly points at verifying instead of reviewing", output)
+	}
+	if !strings.Contains(output, "stray.txt") {
+		t.Fatalf("error %q does not list the file that made the worktree dirty", output)
 	}
 	if err := os.Remove(filepath.Join(root, "stray.txt")); err != nil {
 		t.Fatal(err)
