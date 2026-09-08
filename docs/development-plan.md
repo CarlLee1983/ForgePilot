@@ -93,7 +93,7 @@ M1 已依序完成下列切片。
 |---|---|
 | `forgepilot init` | 在 repository root 建立 state；已存在時不覆寫；補齊 ignore entry |
 | `forgepilot goal create --id <id> --title <title> [--description <text>]` | 建立 ACTIVE Goal；repository 綁定 state root；省略 description 時保存空字串 |
-| `forgepilot work add --goal <goal-id> --story <path> [--depends-on <work-id>]` | 驗證後配發 Work Item ID，回傳 ID、Story 與 PENDING／READY；多個依賴可重複傳 flag |
+| `forgepilot work add --goal <goal-id> --story <path> [--depends-on <work-id>]` | 驗證後配發 Work Item ID，回傳 ID、Story 與 PENDING／READY；多個依賴可重複傳 flag；story 尚未提交時多印一行提示 |
 | `forgepilot next` | 跨本機 ACTIVE Goals 選最早 READY 工作，顯示 Goal、Work Item ID、Story 與選取理由 |
 | `forgepilot start <work-id>` | READY → RUNNING；無隱含 Agent spawning 或 claim lease |
 | `forgepilot status` | 顯示 Goals、Work Items、所有 Current Work 與 Next Work |

@@ -10,7 +10,7 @@
 
 1. [CONTEXT.md](CONTEXT.md) — 詞彙。把 Story 與 Work Item 混用是這個 domain 最容易犯的錯
 2. [docs/architecture.md](docs/architecture.md) — 責任邊界、資料模型、狀態規則、各階段的開工前定案
-3. [docs/adr/README.md](docs/adr/README.md) — 11 份不易反轉的決定與其失效條件
+3. [docs/adr/README.md](docs/adr/README.md) — 13 份不易反轉的決定與其失效條件，其中含尚未回答的 proposed 開放問題
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約表（**flag 命名以此為準**）與各階段 exit checklist
 5. `docs/specs/m*/` — 每個 milestone 的 spec 與 ticket，全部已結案
 

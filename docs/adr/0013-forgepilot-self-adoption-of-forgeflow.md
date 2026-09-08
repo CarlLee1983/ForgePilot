@@ -1,7 +1,3 @@
----
-status: proposed
----
-
 # ForgePilot 是否自我套用 ForgeFlowV2
 
 ForgePilot 的定義是「story 由 ForgeFlowV2 管理」，但 ForgePilot 自身的 `work add --story`
