@@ -500,11 +500,55 @@ approval is at 96f3e0b2eef1</span>
   <div class="wrap">
     <div class="section-head">
       <span class="num">05</span>
-      <h2>實際跑起來是什麼樣子</h2>
+      <h2>從一個目標到 DONE，完整走一次</h2>
     </div>
     <div class="body-text">
-      <p>全部是本機的命令列，不需要伺服器，也不需要帳號。狀態存在你 repo 裡的一個 JSON 檔，由程序鎖保護，多個終端機同時用不會打架。</p>
+      <p>假設你要做的是把結帳流程的錯誤處理補起來。這件事會經過四個角色的手，先講清楚誰負責什麼，順序才不會記錯。</p>
     </div>
+
+    <div class="grid two" style="margin-top:8px">
+      <div class="cell">
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"/></svg>
+        <h3>你</h3>
+        <p>決定要做什麼、什麼時候算完成。設 Goal、掛工作、回答 Gate 上的問題、做最後的 review。</p>
+      </div>
+      <div class="cell">
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-book"/></svg>
+        <h3>ForgeFlowV2</h3>
+        <p>定義工程契約。Story 的格式、acceptance criteria、coding standards、什麼樣才算驗證過，都寫在它那邊。它是規範，不是執行者。</p>
+      </div>
+      <div class="cell">
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-bot"/></svg>
+        <h3>agent</h3>
+        <p>讀 Story，照著規範寫程式並 commit。它不挑工作，也不宣布完成。</p>
+      </div>
+      <div class="cell">
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-gate"/></svg>
+        <h3>ForgePilot</h3>
+        <p>派工、擋人、記錄。真正去跑驗證並把結果綁在 commit 上的是它，但跑什麼內容不由它決定。</p>
+      </div>
+    </div>
+
+    <div class="body-text" style="margin-top:40px">
+      <p><strong>你先設目標。</strong> <code>goal create</code> 開一個 Goal，這是要跨好幾件工作才推得動的東西。接著 <code>work add</code> 把工作一件一件掛上去，每一件指向一份 Story，順手寫清楚誰依賴誰。Story 是 ForgeFlowV2 的東西，ForgePilot 只記住它的路徑，不讀內容也不猜格式。依賴還沒完成的工作，一建立就是等待狀態。</p>
+
+      <p><strong>agent 問下一件。</strong> 它跑 <code>next</code>，拿到的是依賴已經清乾淨、確實輪到的那一件，然後 <code>start</code> 認領。它不自己挑，也挑不到還卡著依賴的工作。</p>
+
+      <p><strong>寫程式，然後 commit。</strong> 這一步的順序最常被記反。程式碼寫完要<strong>先 commit，才輪到 verify</strong>，因為驗證是對一個確切的 commit 做的。工作樹只要還有沒提交的東西，連沒被追蹤的檔案都算，<code>verify</code> 會直接拒絕，而且一筆 Evidence 都不寫。那是無法驗證，不是驗證失敗。</p>
+
+      <p><strong>verify。</strong> ForgePilot 把那個 commit checkout 到一個隔離的 worktree，在那裡跑 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 ForgeFlowV2 的工程契約決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS 或 FAIL 連同完整的 commit SHA 記成 Evidence。PASS 之後工作進 REVIEW，FAIL 就退回去繼續改。</p>
+
+      <p><strong>人看過才算完成。</strong> 你 <code>review approve</code>，四項條件同時成立的話，工作在那一刻進 DONE，等著它的下游在同一次交易裡變成可以開始。條件不齊就只記下審查，並告訴你差什麼。</p>
+
+      <p><strong>agent 再問一次 next。</strong> 迴圈就這樣接上了。中間任何時候它遇到不該自己決定的事，<code>gate open</code> 把問題留在佇列上停住，等你回答。</p>
+    </div>
+
+    <div class="body-text" style="margin-top:34px">
+      <p>兩個最常被記反的地方。<strong>commit 在 verify 之前</strong>，不是驗證完才 commit。<strong>verify 通過不等於完成</strong>，那只是進了 REVIEW，還要人點頭。</p>
+      <p class="dim">全部是本機的命令列，不需要伺服器，也不需要帳號。狀態存在你 repo 裡的一個 JSON 檔，由程序鎖保護，多個終端機或多個 agent 同時用不會打架。</p>
+    </div>
+
+    <h3 style="margin-top:46px">同一條路線的指令對照</h3>
     <div class="steps">
       <div class="stepline">
         <span class="k">init</span>
