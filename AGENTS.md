@@ -71,3 +71,17 @@ Commit 格式 `<type>: [ <scope> ] <subject>`，scope 用 milestone 代號（`m4
 ## 這個 repo 的一個細節
 
 `graft/` 被 `.gitignore` 忽略但確實存在。根目錄的 `.ignore` 讓 ripgrep 仍能搜尋那棵樹——它不是殘留檔案，不要刪。
+
+## Agent skills
+
+### Issue tracker
+
+Issue 開在 GitHub Issues（`CarlLee1983/ForgePilot`），一律用 `gh` CLI 操作。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+沿用五個預設角色標籤，標籤字串等同名稱。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context：根目錄 `CONTEXT.md` + `docs/adr/`。See `docs/agents/domain.md`.
