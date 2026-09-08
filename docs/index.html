@@ -340,7 +340,7 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
         <text class="d-t small" x="581" y="85" text-anchor="middle">讀 Story，寫程式</text>
 
         <text class="d-t" x="581" y="271" text-anchor="middle">make verify</text>
-        <text class="d-t small" x="581" y="293" text-anchor="middle">你自己專案的那一套</text>
+        <text class="d-t small" x="581" y="293" text-anchor="middle">repo 自己的 Makefile</text>
 
         <text class="d-t" x="350" y="271" text-anchor="middle">Evidence</text>
         <text class="d-t small" x="350" y="293" text-anchor="middle">結果綁死一個 commit</text>
@@ -495,7 +495,7 @@ approval is at 96f3e0b2eef1</span>
       </div>
       <div class="stepline">
         <span class="k">verify</span>
-        <p>它在一個<strong>隔離的工作區</strong>裡，對確切的那個 commit 跑<em>你自己專案的</em> <code>make verify</code>。那個工作區看不到你還沒提交的東西，所以不會有「在我機器上是好的」。結果連同 commit 編號一起存起來。</p>
+        <p>它在一個<strong>隔離的工作區</strong>裡，對確切的那個 commit 跑<strong>那個 repo 自己 Makefile 裡的 <code>verify</code> target</strong>。連 Makefile 存不存在都是在那份 checkout 裡判斷的，被 gitignore 掉的 Makefile 騙不過它。那個工作區也看不到你還沒提交的東西，所以不會有「在我機器上是好的」。結果連同 commit 編號一起存起來。</p>
       </div>
       <div class="stepline">
         <span class="k">gate</span>
@@ -531,7 +531,7 @@ approval is at 96f3e0b2eef1</span>
       <div>
         <ul class="plain yes">
           <li><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span><b>狀態是一個檔案。</b>程序鎖加上原子替換，跨終端機、跨 session、關掉再開都讀得回同一份事實。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg><span><b>驗證的內容由你定義。</b>它只負責在乾淨且隔離的環境裡跑你的 <code>make verify</code>，然後如實記錄。</span></li>
+          <li><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg><span><b>驗證的內容由你定義。</b>它固定跑 <code>make verify</code>，內容是那個 repo 自己 Makefile 寫的，ForgePilot 只負責在乾淨且隔離的環境裡執行並如實記錄。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-stack"/></svg><span><b>記錄只增不改。</b>通過、退回、被中斷的驗證都並排留著，「測試沒過」跟「人不接受」是兩件不同的事。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg><span><b>每個不易反轉的決定都寫成 ADR，</b>附上它在什麼條件下會失效。你可以不同意，但不會找不到理由。</span></li>
         </ul>
