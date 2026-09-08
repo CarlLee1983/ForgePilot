@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,21 +114,43 @@ func RemoveWorktree(root, path string) error {
 	return nil
 }
 
-// RunCanonicalCheck executes the managed project's canonical check and reports
-// its exit code. A non-zero code is a verification result, not an error here;
-// err is reserved for being unable to run the check at all.
-func RunCanonicalCheck(directory string) (int, string, error) {
+// OpenLog creates the file a Verification Run's output will stream into,
+// creating its directory if needed. It is called before anything about the run
+// is recorded, so a log that cannot be created aborts the command before any
+// state is written or Evidence appended.
+func OpenLog(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fmt.Errorf("create log directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("create log file: %w", err)
+	}
+	return file, nil
+}
+
+// RunCanonicalCheck executes the managed project's canonical check, streaming
+// its combined output to log as it runs, and reports its exit code. A non-zero
+// code is a verification result, not an error here; err is reserved for being
+// unable to run the check at all.
+//
+// Streaming rather than collecting the output and writing it once means an
+// interrupted run still leaves behind whatever it produced before it was
+// killed, and a long run is not silent for its whole duration.
+func RunCanonicalCheck(directory string, log io.Writer) (int, error) {
 	command := exec.Command("make", "verify")
 	command.Dir = directory
-	output, err := command.CombinedOutput()
+	command.Stdout = log
+	command.Stderr = log
+	err := command.Run()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		return exit.ExitCode(), string(output), nil
+		return exit.ExitCode(), nil
 	}
 	if err != nil {
-		return 0, string(output), fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
+		return 0, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
 	}
-	return 0, string(output), nil
+	return 0, nil
 }
 
 func git(root string, arguments ...string) (string, error) {

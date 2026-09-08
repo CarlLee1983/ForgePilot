@@ -752,6 +752,149 @@ func TestVerifyRecoversFromLeftoverWorktrees(t *testing.T) {
 	}
 }
 
+// logPathFromOutput extracts the log path verify prints before it starts the
+// canonical check, so a test can go read what actually ended up in it.
+func logPathFromOutput(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "Log: ") {
+			return strings.TrimPrefix(line, "Log: ")
+		}
+	}
+	t.Fatalf("output %q does not print a log path", output)
+	return ""
+}
+
+// TestVerifyStreamsCanonicalOutputToALog covers the acceptance criteria that
+// PASS and FAIL each leave behind a log containing that run's actual output,
+// the path is printed before the run starts, non-PASS no longer floods stdout
+// with the full text, the log carries no ForgePilot-added header, and the log
+// living under the already-ignored .forgepilot/ does not dirty `git status`.
+func TestVerifyStreamsCanonicalOutputToALog(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+
+	writeVerify(t, root, passingVerify)
+	output, err := command(binary, root, "verify", "WI-001")
+	if err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	passLog := logPathFromOutput(t, output)
+	if !strings.HasPrefix(output, "Log: "+passLog+"\n") {
+		t.Fatalf("output %q does not print the log path before the run starts", output)
+	}
+	if strings.Count(output, passLog) != 1 {
+		t.Fatalf("output %q repeats the log path in the result line", output)
+	}
+	contents, err := os.ReadFile(passLog)
+	if err != nil {
+		t.Fatalf("read PASS log: %v", err)
+	}
+	if !strings.Contains(string(contents), "checked") {
+		t.Fatalf("PASS log %q does not contain the check's output: %q", passLog, contents)
+	}
+
+	writeVerify(t, root, failingVerify)
+	output, err = command(binary, root, "verify", "WI-001")
+	if err != nil || !strings.Contains(output, "FAIL") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	failLog := logPathFromOutput(t, output)
+	if failLog == passLog {
+		t.Fatalf("FAIL run reused the PASS run's log path %q", failLog)
+	}
+	if strings.Contains(output, "broken") {
+		t.Fatalf("stdout %q still carries the failing step's output", output)
+	}
+	contents, err = os.ReadFile(failLog)
+	if err != nil {
+		t.Fatalf("read FAIL log: %v", err)
+	}
+	if !strings.Contains(string(contents), "broken") {
+		t.Fatalf("FAIL log %q does not contain the failing step's output: %q", failLog, contents)
+	}
+	if strings.Contains(string(contents), "ForgePilot") {
+		t.Fatalf("log %q carries a ForgePilot-added header: %q", failLog, contents)
+	}
+
+	gitStatus, err := exec.Command("git", "-C", root, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(gitStatus)) != "" {
+		t.Fatalf("verification logs dirtied git status: %s", gitStatus)
+	}
+}
+
+// TestVerifyLogsAccumulateAcrossRepeatedRuns covers repeated runs against the
+// same revision producing separate, non-overwriting logs, and that no
+// automatic cleanup removes a log a later run did not itself write.
+func TestVerifyLogsAccumulateAcrossRepeatedRuns(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+
+	first, err := command(binary, root, "verify", "WI-001")
+	if err != nil || !strings.Contains(first, "PASS") {
+		t.Fatalf("verify = %q, %v", first, err)
+	}
+	firstLog := logPathFromOutput(t, first)
+
+	second, err := command(binary, root, "verify", "WI-001")
+	if err != nil || !strings.Contains(second, "PASS") {
+		t.Fatalf("verify = %q, %v", second, err)
+	}
+	secondLog := logPathFromOutput(t, second)
+
+	if firstLog == secondLog {
+		t.Fatalf("two runs on the same revision shared one log path %q", firstLog)
+	}
+	if _, err := os.Stat(firstLog); err != nil {
+		t.Fatalf("the earlier run's log was removed: %v", err)
+	}
+	if _, err := os.Stat(secondLog); err != nil {
+		t.Fatalf("the later run's log is missing: %v", err)
+	}
+}
+
+// TestVerifyAbortsWhenTheLogCannotBeCreated covers the log directory being
+// uncreatable aborting the command before any state is written: no Evidence,
+// no status change, no run left in flight.
+func TestVerifyAbortsWhenTheLogCannotBeCreated(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+
+	// A plain file where the log directory needs to be created blocks it.
+	if err := os.WriteFile(filepath.Join(root, ".forgepilot", "logs"), []byte("occupied"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := command(binary, root, "verify", "WI-001")
+	if err == nil {
+		t.Fatalf("verified when the log directory could not be created: %s", output)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 0 {
+		t.Fatalf("a verify that could not open its log left evidence: %#v", state.Evidence)
+	}
+	if state.WorkItems[0].Status != work.Running || state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("a verify that could not open its log changed the work item: %#v", state.WorkItems[0])
+	}
+}
+
 func TestGateBlocksAdvancementWithoutChangingStatus(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
