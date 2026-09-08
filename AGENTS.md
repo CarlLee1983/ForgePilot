@@ -21,6 +21,7 @@
 這些看起來像疏漏，其實是決定。動手前先讀對應的 ADR。
 
 - **Work Item 上沒有 revision 欄位，也沒有 PR 欄位。** 兩者都只存在於 Evidence。看到 Evidence 上有一個沒有任何規則讀取的 `pr`，那是刻意的——ADR-0003、ADR-0011
+- **Evidence 上沒有指向 verification 輸出的欄位。** 輸出以 run 為鍵存在 `.forgepilot/logs/` 底下，`current_run` 才有 `LogPath`——ADR-0012
 - **沒有完成指令。** 沒有 `done`、沒有 `complete <work-id>`、沒有測試專用的 approve。DONE 只能是 `review approve` 在條件滿足時的結果——ADR-0008
 - **DONE 沒有 reopen。** 要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄——ADR-0006
 - **沒有 `WAITING_HUMAN`，Work Item 也沒有 `BLOCKED`。** 阻擋由「有沒有未解除的 Gate」表達，不佔用狀態欄——ADR-0007

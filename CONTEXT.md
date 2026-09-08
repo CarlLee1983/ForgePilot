@@ -25,6 +25,9 @@ _Avoid_：完成宣告、Agent 自評
 **Verification**：對某個確切 revision 執行 repository 自己定義的 canonical 檢查，其結果構成 Evidence。
 _Avoid_：Agent 自我測試、臨時指定的 shell command
 
+**Verification Log**：一次 Verification Run 的原始輸出，以該次執行為鍵保存在 state 之外。它是事後診斷用的材料，不是結論——結論只在 Evidence 裡。
+_Avoid_：Evidence、驗證結果、完成宣告
+
 **Verification Run**：一次進行中的 Verification。它是短暫的，可能因中斷而結束並且不留下成功或失敗的結論。
 _Avoid_：Evidence、VERIFYING 狀態本身
 
