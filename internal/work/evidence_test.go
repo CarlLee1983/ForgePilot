@@ -62,7 +62,7 @@ func reviewFixture(t *testing.T) (State, time.Time, string) {
 	if err := state.Start(first.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.BeginVerification(first.ID, revision, "/tmp/worktree", now); err != nil {
+	if err := state.BeginVerification(first.ID, revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification(first.ID, revision, "make verify", 0, now); err != nil {
@@ -217,7 +217,7 @@ func TestCompletionRequiresAPassAtTheApprovedRevision(t *testing.T) {
 	}
 
 	// Verifying that revision and approving it again does complete the work.
-	if err := state.BeginVerification("WI-001", other, "/tmp/worktree", now); err != nil {
+	if err := state.BeginVerification("WI-001", other, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-001", other, "make verify", 0, now); err != nil {
@@ -238,7 +238,7 @@ func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
 
 	// A newer FAIL on the same revision beats the older PASS: the FAIL returns
 	// the work to RUNNING, so there is nothing to approve.
-	if err := state.BeginVerification("WI-001", revision, "/tmp/worktree", now); err != nil {
+	if err := state.BeginVerification("WI-001", revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-001", revision, "make verify", 1, now); err != nil {
@@ -253,7 +253,7 @@ func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
 
 	// A newer REJECTED on the same revision beats the older APPROVED. Getting
 	// back to REVIEW takes a fresh PASS, and the rejection then holds.
-	if err := state.BeginVerification("WI-001", revision, "/tmp/worktree", now); err != nil {
+	if err := state.BeginVerification("WI-001", revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-001", revision, "make verify", 0, now); err != nil {
@@ -489,7 +489,7 @@ func TestPRReferenceChangesNothingAboutCompletionOrStaleness(t *testing.T) {
 	if _, err := replaced.RecordReview("WI-001", replacedRevision, Rejected, "carl@example.com", "not yet", "carl/forgepilot#123", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := replaced.BeginVerification("WI-001", replacedRevision, "/tmp/worktree", now); err != nil {
+	if err := replaced.BeginVerification("WI-001", replacedRevision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := replaced.RecordVerification("WI-001", replacedRevision, "make verify", 0, now); err != nil {

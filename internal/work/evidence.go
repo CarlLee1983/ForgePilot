@@ -231,8 +231,10 @@ func parseEvidenceID(id string) (int, bool) {
 
 // BeginVerification records that a Verification Run is in flight. The revision is
 // stored so that an interrupted run can still be attributed to the exact commit
-// it was testing.
-func (s *State) BeginVerification(id, revision, worktreePath string, now time.Time) error {
+// it was testing. logPath is recorded the same way as worktreePath: so that
+// reclaiming an orphan later points at where that run actually wrote, not at a
+// path re-derived from today's naming scheme.
+func (s *State) BeginVerification(id, revision, worktreePath, logPath string, now time.Time) error {
 	if err := s.Verifiable(id); err != nil {
 		return err
 	}
@@ -244,7 +246,7 @@ func (s *State) BeginVerification(id, revision, worktreePath string, now time.Ti
 	}
 	item := s.item(id)
 	item.Status = Verifying
-	item.CurrentRun = &Run{Revision: revision, WorktreePath: worktreePath, StartedAt: now}
+	item.CurrentRun = &Run{Revision: revision, WorktreePath: worktreePath, LogPath: logPath, StartedAt: now}
 	item.UpdatedAt = now
 	return nil
 }

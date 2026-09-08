@@ -133,9 +133,12 @@ func reclaimOrphan(id, root string, output io.Writer) error {
 // beginRun marks a new Verification Run in flight. Any abandoned run has already
 // been closed out by reclaimOrphan, so a Work Item is never left with neither an
 // outcome for its old run nor a record of its new one.
+//
+// logPath is left empty for now: schema v5 only gives current_run a place to
+// keep it, streaming output there is a later slice of M5 (issue #2).
 func beginRun(id, root, revision, worktree string, output io.Writer) error {
 	return storage.Update(root, func(state *work.State) error {
-		return state.BeginVerification(id, revision, worktree, now())
+		return state.BeginVerification(id, revision, worktree, "", now())
 	})
 }
 

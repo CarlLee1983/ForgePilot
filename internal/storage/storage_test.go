@@ -62,7 +62,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":5,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":6,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +333,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 4`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 5`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -434,6 +434,105 @@ func TestMigrateUpgradesV3StateAndKeepsEverything(t *testing.T) {
 	}
 
 	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v3.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatal("backup does not hold the original snapshot")
+	}
+
+	// Running it again is safe and says so, so nobody has to remember whether
+	// they already upgraded.
+	if migrated, err := Migrate(root); err != nil || migrated {
+		t.Fatalf("second Migrate = %v, %v", migrated, err)
+	}
+}
+
+// v4State writes an M4-era snapshot: a resolved review carries a PR reference,
+// and one Work Item has a Verification Run in flight without a log path, so a
+// migration that dropped either the PR or the in-flight run would be caught.
+func v4State(t *testing.T, root string) string {
+	t.Helper()
+	canonical, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := `{"schema_version":4,"next_work_id":3,"next_evidence_id":3,"next_gate_id":2,` +
+		`"goals":[{"id":"g","title":"Goal","description":"","repository":"` + canonical +
+		`","status":"ACTIVE","reason":"","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"work_items":[{"id":"WI-001","goal_id":"g","story_ref":"specs/stories/a","status":"REVIEW","depends_on":null,` +
+		`"current_run":null,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"},` +
+		`{"id":"WI-002","goal_id":"g","story_ref":"specs/stories/b","status":"VERIFYING","depends_on":["WI-001"],` +
+		`"current_run":{"revision":"def456","worktree_path":"` + filepath.Join(root, ".forgepilot", "worktrees", "WI-002-def456") +
+		`","started_at":"2026-09-07T00:00:00Z"},"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"evidence":[{"id":"EV-001","type":"verification","repository":"` + canonical +
+		`","work_item_id":"WI-001","story_ref":"specs/stories/a","revision":"abc123","command":"make verify",` +
+		`"exit_code":0,"result":"PASS","reviewer":"","note":"","pr":"","created_at":"2026-09-07T00:00:00Z"},` +
+		`{"id":"EV-002","type":"review","repository":"` + canonical +
+		`","work_item_id":"WI-001","story_ref":"specs/stories/a","revision":"abc123","command":"",` +
+		`"exit_code":null,"result":"APPROVED","reviewer":"carl@example.com","note":"looks good",` +
+		`"pr":"CarlLee1983/ForgePilot#42","created_at":"2026-09-07T00:00:00Z"}],` +
+		`"gates":[{"id":"GATE-001","work_item_id":"WI-001","question":"which?","rationale":"",` +
+		`"options":["a","b"],"status":"RESOLVED","choice":"a","note":"","reason":"",` +
+		`"decided_by":"carl@example.com","opened_at":"2026-09-07T00:00:00Z",` +
+		`"decided_at":"2026-09-07T00:00:00Z"}]}`
+	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+// TestMigrateUpgradesV4StateAndKeepsEverything covers the step this ticket adds:
+// current_run gains a log path, but nothing existing is discarded, including a
+// run that was already in flight before the log path field existed.
+func TestMigrateUpgradesV4StateAndKeepsEverything(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	original := v4State(t, root)
+
+	if _, err := Load(root); err == nil {
+		t.Fatal("read a v4 state without migrating")
+	} else if !strings.Contains(err.Error(), "migrate") {
+		t.Fatalf("error %q does not tell the user to migrate", err)
+	}
+
+	migrated, err := Migrate(root)
+	if err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SchemaVersion != work.SchemaVersion {
+		t.Fatalf("migration did not reach the current schema: %#v", state)
+	}
+	if state.NextWorkID != 3 || state.NextEvidenceID != 3 || state.NextGateID != 2 {
+		t.Fatalf("migration lost counters: %#v", state)
+	}
+	if len(state.Goals) != 1 || len(state.WorkItems) != 2 || len(state.Evidence) != 2 || len(state.Gates) != 1 {
+		t.Fatalf("migration lost data: %#v", state)
+	}
+	if got := state.Evidence[1]; got.Result != work.Approved || got.PR != "CarlLee1983/ForgePilot#42" {
+		t.Fatalf("migration changed review evidence: %#v", got)
+	}
+	// A run already in flight before v5 existed has no log path recorded, and
+	// migration must not invent one: an empty LogPath is the honest fact that
+	// this run's output was never streamed anywhere.
+	run := state.WorkItems[1].CurrentRun
+	if run == nil || run.Revision != "def456" || run.LogPath != "" {
+		t.Fatalf("migration changed the in-flight run: %#v", run)
+	}
+	if got := state.Gates[0]; got.ID != "GATE-001" || got.Choice != "a" {
+		t.Fatalf("migration changed gates: %#v", got)
+	}
+
+	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v4.bak"))
 	if err != nil {
 		t.Fatal(err)
 	}

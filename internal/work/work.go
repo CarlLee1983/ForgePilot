@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 type GoalStatus string
 
@@ -61,9 +61,15 @@ type Item struct {
 // the run produces Evidence, so a non-nil value after the runner has exited marks
 // an orphan awaiting reclamation.
 type Run struct {
-	Revision     string    `json:"revision"`
-	WorktreePath string    `json:"worktree_path"`
-	StartedAt    time.Time `json:"started_at"`
+	Revision     string `json:"revision"`
+	WorktreePath string `json:"worktree_path"`
+	// LogPath records where this run's verification output is being streamed, so
+	// that reclaiming an orphan points at where it actually wrote rather than a
+	// path re-derived from today's naming scheme. It is written when the run
+	// begins and vanishes with the rest of the Run once the run produces
+	// Evidence. See docs/adr/0012-verification-log-outside-state.md.
+	LogPath   string    `json:"log_path"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 type State struct {

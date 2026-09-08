@@ -89,7 +89,7 @@ func TestBlockedGoalStillRecordsAVerificationAlreadyUnderway(t *testing.T) {
 	if err := state.Start(item.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", now); err != nil {
+	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.BlockGoal("g", "the direction is wrong", now); err != nil {

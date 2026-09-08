@@ -112,7 +112,11 @@ func upgrade(contents []byte, from int) (work.State, error) {
 		state.Gates = nil
 	}
 	// v3 → v4 introduces no container, only an optional field on Evidence, so
-	// there is nothing for a step to create and nothing it could discard. The
+	// there is nothing for a step to create and nothing it could discard.
+	// v4 → v5 is the same shape again: log path is a field on the existing Run,
+	// not a new container, and a run already in flight before v5 existed simply
+	// decodes with an empty one — that is the honest fact that its output was
+	// never streamed anywhere, not something a step needs to fill in. The
 	// version bump below is the whole upgrade.
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil

@@ -49,7 +49,7 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err == nil {
 		t.Fatal("recorded evidence for work that never entered a verification run")
 	}
-	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", now); err != nil {
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if state.WorkItems[0].Status != Verifying || state.WorkItems[0].CurrentRun == nil {
@@ -72,7 +72,7 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 		t.Fatalf("PASS left work as %s, want REVIEW", state.WorkItems[0].Status)
 	}
 
-	if err := state.BeginVerification("WI-001", "def456", "/tmp/wt", now); err != nil {
+	if err := state.BeginVerification("WI-001", "def456", "/tmp/wt", "", now); err != nil {
 		t.Fatal(err)
 	}
 	fail, err := state.RecordVerification("WI-001", "def456", "make verify", 2, now)
@@ -95,7 +95,7 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 
 func TestValidateRejectsInconsistentEvidence(t *testing.T) {
 	state, now := verifiableState(t)
-	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", now); err != nil {
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
@@ -135,7 +135,7 @@ func TestLatestVerificationAndStaleness(t *testing.T) {
 	if state.Stale("WI-001", "abc123") {
 		t.Fatal("never-verified work reported as stale rather than unverified")
 	}
-	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", now); err != nil {
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
@@ -159,7 +159,7 @@ func TestLatestVerificationAndStaleness(t *testing.T) {
 	if err := state.Start("WI-002", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.BeginVerification("WI-002", "def456", "/tmp/wt", now); err != nil {
+	if err := state.BeginVerification("WI-002", "def456", "/tmp/wt", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-002", "def456", "make verify", 0, now); err != nil {
@@ -179,7 +179,7 @@ func TestReclaimRunRecordsAnInterruptionWithoutAnExitCode(t *testing.T) {
 	if _, _, found, err := state.ReclaimRun("WI-001", "make verify", now); err != nil || found {
 		t.Fatalf("reclaimed a run that was never started: %v, %v", found, err)
 	}
-	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt-abc", now); err != nil {
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt-abc", "", now); err != nil {
 		t.Fatal(err)
 	}
 	evidence, abandoned, found, err := state.ReclaimRun("WI-001", "make verify", now)
@@ -225,7 +225,7 @@ func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
 	if err := state.Start(item.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", now); err != nil {
+	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	// The runner dies here, leaving an orphan, and then a question is raised.
@@ -254,7 +254,7 @@ func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
 	if err := state.ResolveGate("GATE-001", "redis", "", "carl@example.com", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", now); err != nil {
+	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.BlockGoal("g", "the direction is wrong", now); err != nil {
@@ -268,5 +268,46 @@ func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
 	}
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestLogPathSurvivesTheRunAndVanishesWithIt covers LogPath as a pure value:
+// BeginVerification writes it into current_run the same way it writes
+// WorktreePath, and it disappears whenever the rest of the Run does — on a
+// PASS/FAIL result and on reclaiming an orphan alike. Nothing here touches the
+// filesystem; the value is only ever passed in and read back.
+func TestLogPathSurvivesTheRunAndVanishesWithIt(t *testing.T) {
+	state, now := verifiableState(t)
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/wt", "/forgepilot/logs/WI-001-abc123-1.log", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.WorkItems[0].CurrentRun.LogPath; got != "/forgepilot/logs/WI-001-abc123-1.log" {
+		t.Fatalf("LogPath = %q, want the path passed to BeginVerification", got)
+	}
+	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("LogPath outlived its run: %#v", state.WorkItems[0].CurrentRun)
+	}
+
+	if err := state.BeginVerification("WI-001", "def456", "/tmp/wt", "/forgepilot/logs/WI-001-def456-2.log", now); err != nil {
+		t.Fatal(err)
+	}
+	evidence, _, found, err := state.ReclaimRun("WI-001", "make verify", now)
+	if err != nil || !found {
+		t.Fatalf("ReclaimRun = %#v, %v, %v", evidence, found, err)
+	}
+	if state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("LogPath outlived an interrupted run: %#v", state.WorkItems[0].CurrentRun)
+	}
+
+	// A run may also begin with no log path recorded — that is the honest state
+	// for a run whose output was never streamed anywhere, not an error.
+	if err := state.BeginVerification("WI-001", "ghi789", "/tmp/wt", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.WorkItems[0].CurrentRun.LogPath; got != "" {
+		t.Fatalf("LogPath = %q, want empty when none was given", got)
 	}
 }
