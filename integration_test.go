@@ -97,7 +97,7 @@ func TestWorkAddHintsWhenTheStoryIsNotCommitted(t *testing.T) {
 	if !strings.Contains(output, "WI-001 READY") {
 		t.Fatalf("output %q does not show the Work Item being created", output)
 	}
-	if !strings.Contains(output, "specs/stories/a.md") || !strings.Contains(output, "Verification") {
+	if !strings.Contains(output, "specs/stories/a.md is not committed yet") || !strings.Contains(output, "Verification") {
 		t.Fatalf("output %q does not name the story and explain Verification", output)
 	}
 }
