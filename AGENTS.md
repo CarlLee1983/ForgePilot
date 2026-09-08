@@ -4,7 +4,7 @@
 
 ## 這是什麼
 
-管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5 全部實作完成；roadmap 沒有下一個 milestone，但 dogfood 過程中開出的 issue（見下方 issue tracker）不算已結案。
+管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5 全部實作完成，roadmap 沒有下一個 milestone；後續工作來自 dogfood，開在 issue tracker 上。
 
 ## 讀的順序
 
@@ -12,7 +12,7 @@
 2. [docs/architecture.md](docs/architecture.md) — 責任邊界、資料模型、狀態規則、各階段的開工前定案
 3. [docs/adr/README.md](docs/adr/README.md) — 12 份不易反轉的決定與其失效條件，另有 1 份尚未回答的 proposed 開放問題
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約表（**flag 命名以此為準**）與各階段 exit checklist
-5. `docs/specs/m*/` — 每個 milestone 的 spec 與 ticket，M1–M4 全部已結案；M5 的產物是單一檔案 `docs/specs/m5-dogfood-friction.md`，其衍生的 issue 尚未全部關閉
+5. `docs/specs/` — M1–M4 每個 milestone 一個 `m*/` 目錄，收 spec 與 ticket；M5 之後改以單一檔案記錄（`m5-dogfood-friction.md`），衍生的工作以 issue 追蹤
 
 需要先看懂形狀時，[docs/diagrams/](docs/diagrams/README.md) 有四張圖：狀態機、分層、交易邊界與兩條主要流程。
 
