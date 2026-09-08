@@ -423,13 +423,39 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
           <text x="540" y="44" text-anchor="middle">agent 到不了這裡</text>
         </g>
       </svg>
-      <figcaption>綠點是人和佇列的位置。agent 走到 verify 就交出主導權，剩下兩步不在它手上。</figcaption>
+      <figcaption>綠點是人和佇列的位置。agent 走到 verify 就交出主導權，剩下兩步不該由它代跑。</figcaption>
     </figure>
 
     <div class="body-text" style="margin-top:46px">
       <p>這樣一來，agent 每次開工都得先問一次佇列，它拿到的是一件依賴已經清乾淨、確實輪到它的工作。做完之後它能做的最後一件事是跑驗證，把結果留下來。</p>
       <p>你要看的東西也跟著變少。不必回頭審每一次對話，只要看 <code>status</code> 上有沒有卡住的工作，以及卡住的原因是哪一個。</p>
       <p class="dim">同一份佇列可以同時給好幾個 agent 用。狀態檔有程序鎖，兩個 agent 不會同時認領到同一件工作。</p>
+    </div>
+
+    <h3 style="margin-top:52px">怎麼把 agent 接上去</h3>
+    <div class="body-text">
+      <p>ForgePilot 沒有 agent 外掛，也不去攔截誰在跑什麼。它就是一個 CLI，所以接法是把規則寫進 agent 每次都會讀的那份指示檔，<code>CLAUDE.md</code>、<code>AGENTS.md</code> 或你的工具用的那一份都行。四條就夠了。</p>
+    </div>
+
+    <div class="term" style="margin-top:22px">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;貼進 AGENTS.md</div>
+<pre><span class="o">## 這個 repo 的工作方式
+
+1. 開工前先跑 `forgepilot next`，只做它指到的那一件。
+   它說 none 就停下來問人，不要自己找事做。
+2. 認領用 `forgepilot start &lt;work-id&gt;`，不要跳過。
+3. 做完不要說「做完了」。跑 `forgepilot verify &lt;work-id&gt;`，
+   把輸出原樣貼出來，讓證據自己說話。
+4. 遇到需要人決定的事，用 `forgepilot gate open` 寫下問題和
+   選項，然後停在那裡。不要自己挑一個繼續做。
+
+`review approve` 由人執行。</span></pre>
+    </div>
+
+    <div class="body-text" style="margin-top:26px">
+      <p>第四條最容易被忽略，它也是這套東西真正改變的地方。agent 卡住的時候原本會自己選一條路走下去，現在它把問題留在佇列上，你下次看 <code>status</code> 就會看到。</p>
+      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件，agent 就算跑了 approve，只要 HEAD 跟通過驗證的 commit 對不上，或還有 Gate 開著，工作照樣不會進 DONE，而且那筆審查會用它的 git 身分留在記錄裡，跑不掉。</p>
+      <p>接下來的事跟你手動用一模一樣，<a href="#start">安裝與 init</a> 之後把上面四條貼進去就能開始。</p>
     </div>
   </div>
 </section>
