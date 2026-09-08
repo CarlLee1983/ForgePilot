@@ -2,7 +2,7 @@
 
 ## 文件狀態與範圍
 
-MVP 的 M1–M3 與 M4 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
+MVP 的 M1–M3 與 M4 已依本文件實作；M5 為開工前定案階段，尚未開始實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
@@ -47,7 +47,7 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/Forg
 |---|---|---|
 | Goal | `id`, `title`, `description`, `repository`, `status`, `created_at`, `updated_at` | M1 |
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
-| Work Item run | `current_run`（revision、worktree path、started_at；閒置時為 null） | M2 |
+| Work Item run | `current_run`（revision、worktree path、started_at、log path；閒置時為 null） | M2；`log path` 於 M5 加入（schema v5） |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
 | Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`rationale`（開啟時的說明）、`options`（至少兩個）、`status`、`opened_at`，以及關閉時的 `choice`／`note`（resolve）或 `reason`（cancel）、`decided_by`、`decided_at` | M3 |
 | Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、`result`、timestamp；verification 另有 `command` 與 `exit_code`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起 |
@@ -165,6 +165,23 @@ Schema v2 相對 v1 只有新增：`schema_version` 改為 2、根層加入 `evi
 
 `worktrees/` 由 ForgePilot 完全掌控：每次 `verify` 前先 `git worktree prune` 清除被強制終止的程序留下的殘骸，結束後一律 `git worktree remove --force`，PASS 與 FAIL 皆刪除。
 
+### M5 storage layout 與 schema 升級
+
+```text
+.forgepilot/
+├── state.json
+├── locks/
+│   └── verify-<work-id>
+├── worktrees/
+│   └── <work-id>-<short-sha>/
+└── logs/
+    └── <work-id>-<short-sha>-<started-at>.log
+```
+
+Schema v5 相對 v4 只有新增：`schema_version` 改為 5，Work Item 的 `current_run` 加入 `log path`。無欄位刪除或語意改變。沿用既有升級契約——`migrate` 備份為 `state.json.v4.bak` 後升級，備份已存在時拒絕；已是最新版本者回報並以 exit 0 結束。
+
+`logs/` 由 ForgePilot 寫入、不自動清理，也不提供清理指令；`.forgepilot/` 已被忽略，成長由使用者處理。理由與備選見 [ADR-0012](adr/0012-verification-log-outside-state.md)。
+
 ## Verification 與 exact revision：M2 起
 
 Verification Evidence 必須至少保存 repository、Work Item、Story、完整 commit SHA、實際 command、exit code 與 timestamp。`result` 有三個值：`PASS`、`FAIL`、`INTERRUPTED`。INTERRUPTED 沒有 exit code（欄位為 null）——未產生結果就沒有結果碼，填 0 會被讀成成功。FAIL 與 INTERRUPTED 同樣 append；既有 Evidence 不覆寫。INTERRUPTED 表示未產生結果，不得視為 FAIL。
@@ -190,6 +207,18 @@ HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revisi
 5. **Stale 觸發**：Stale 定義為最新一筆 Verification Evidence 的 SHA 不等於目前 HEAD。它不造成任何自動 transition；REVIEW → VERIFYING 只由明確的 `verify` 命令推動。`next` 與 `status` 呈現 stale 但不寫入。
 
 Revision 只存在於 Evidence 與 `current_run`，Work Item 本身不保存 `target_revision`；該欄位的刪除見 [ADR-0003](adr/0003-no-work-item-target-revision.md)。
+
+M5 起，canonical 檢查的輸出邊執行邊串流寫進 state 之外的 `.forgepilot/logs/`，以那次執行為鍵命名；`current_run` 對應多出的 `log path`，一如既有的 `WorktreePath`。Evidence 不新增任何指向這份輸出的欄位。輸出是診斷材料，不是結論——結論仍只在 Evidence。理由與備選見 [ADR-0012](adr/0012-verification-log-outside-state.md)。
+
+### M5 開工前定案（已完成）
+
+1. **檔名以 run 為鍵**：`<work-id>-<short-sha>-<started-at>.log`，不以 Evidence ID 命名——Evidence ID 在交易結束後才發號，串流開檔當下還不存在。
+2. **串流而非事後一次寫**：canonical runner 把子行程輸出邊執行邊接到檔案，INTERRUPTED 因此第一次留得下截斷輸出；事後一次寫最小，但拿不到中斷時的內容，執行期間也依然無聲。
+3. **開檔失敗即中止**：log 檔開不起來時 `verify` 中止並回報，不靜默降級、不留 Evidence；這發生在準備階段，不受「回收不得否決結果」的承諾約束。
+4. **log 內容不加 header**：純輸出，revision、command、開始時間已在 Evidence 與 `current_run` 上，header 會製造第二份權威。
+5. **保留政策**：PASS 與非 PASS 皆留檔；不自動清理、不提供清理指令。
+
+理由與備選見 [ADR-0012](adr/0012-verification-log-outside-state.md)，不在此重述。
 
 ## Human decision：M3 起
 

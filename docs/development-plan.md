@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M4 已全部完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M4 已全部完成；M5 正在開工前定案階段，尚未開始實作。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -14,8 +14,9 @@ M1–M4 已全部完成。本文件供後續開發拆分工作、驗收與交接
 | M2 — Verification Evidence | Revision resolver、`make verify` runner、PASS／FAIL Evidence、stale detection | Evidence 綁定確切受測 revision，新 revision 不沿用舊 PASS |
 | M3 — Human Gate & Review | Gate、Decision、Human Review、DONE 與依賴解鎖 | 合法完成 A 後 B 可執行；未 review 不可 DONE |
 | M4 — PR exact-head review integration | PR number＋HEAD SHA review target | 新 HEAD 必須重新取得適用 review Evidence |
+| M5 — Verification diagnosability & review clarity | review 拒絕訊息說出當下動作、verification 輸出串流成 state 之外的 log | 非 PASS 執行的輸出可從落地 log 重讀；review 與 verify 的髒工作樹拒絕訊息各自說出正在做的事 |
 
-M1 通過後才開始 M2，依此類推至 M4；四個階段皆已完成。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
+M1 通過後才開始 M2，依此類推至 M5；M1–M4 已完成，M5 開工前定案完成後才開始實作。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
 
 ## M1 驗收衝突的處理
 
@@ -281,6 +282,77 @@ Schema 升至 v4：Evidence 加入選填的 `pr`。沿用既有升級契約—�
 - [x] 兩處版本號 fixture 調到 v4。
 - [x] README、architecture 與 CONTEXT 反映實際行為。
 - [x] `make verify` 與 `go test -race -count=1 ./...` 於 macOS 26.5.1 arm64、go1.25.5 實跑通過，commit `2fc9b92` 之後的工作樹，工作目錄乾淨。
+
+### M5
+
+開工前定案事項記錄於 [architecture.md](architecture.md#m5-開工前定案已完成) 與 [ADR-0012](adr/0012-verification-log-outside-state.md)（verification log）；review 拒絕訊息的修正沒有架構層級的取捨，決定直接記在下方。
+
+M5 收斂兩件獨立的工作，同屬 M5 但彼此不共用程式碼：
+
+1. **review 的乾淨檢查訊息說出當下在做的事**（GitHub issue #1）：`internal/repository` 的 `EnsureClean` 增加一個由呼叫端提供的動作字串（`verifying` / `reviewing`），訊息模板仍只有一份，留在 `EnsureClean` 內。判準不變——未追蹤檔案仍算髒。
+2. **verification 輸出串流成 state 之外的 log**（GitHub issue #2）：理由與備選見 [ADR-0012](adr/0012-verification-log-outside-state.md)。
+
+M5 不新增指令、不新增 flag。
+
+M5 CLI 契約更動：
+
+| 既有指令 | 契約變化 |
+|---|---|
+| `forgepilot verify <work-id>` | 執行前新增一行輸出：log 路徑（`.forgepilot/logs/<work-id>-<short-sha>-<started-at>.log`）。**移除**：非 PASS 時不再把全文印進 stdout——這是刻意的行為移除，不是退化。結果行不重複路徑；孤兒回收（`reclaimOrphan`）報告 INTERRUPTED 時附上該次執行的 log 路徑 |
+| `forgepilot verify <work-id>`（拒絕時） | 髒工作樹拒絕訊息維持說「verifying」，格式不變（列出使工作樹變髒的檔案） |
+| `forgepilot review approve` / `review reject` | 髒工作樹拒絕訊息改說「reviewing」；拒絕清單格式與 verify 路徑一致；判準不變，仍拒絕未追蹤檔案 |
+
+`status` 與 `next` 不變；不提供讀取 log 的新指令，路徑印出來即可用既有工具讀取。
+
+Schema 升至 v5：`current_run` 新增 `log path`。沿用既有升級契約——不自動升級，由 `migrate` 備份為 `state.json.v4.bak` 後升級，備份已存在時拒絕。
+
+交付切片依序為：schema v5 與 v4→v5 升級；`EnsureClean` 的動作參數與呼叫端更新（review 訊息修正，可獨立先交付）；canonical runner 改為串流寫檔；`verify` 的呈現契約更動；孤兒回收訊息更新；端到端驗收。
+
+### M5 驗收矩陣
+
+**review 的乾淨檢查訊息（#1）**
+
+| 驗收 | 對應 issue #1 |
+|---|---|
+| `review approve` 在工作樹不乾淨時的拒絕訊息含「reviewing」，不含「verifying」 | User story 1 |
+| `verify` 在工作樹不乾淨時的拒絕訊息維持含「verifying」 | User story 2 |
+| 兩條路徑的拒絕訊息同樣列出使工作樹變髒的檔案 | User story 3 |
+| 判準不變：未追蹤檔案仍視為髒；不因訊息修正而放寬 | User story 4、Out of Scope |
+| `EnsureClean` 的判準只有一份實作，`internal/repository` 內不分岔 | User story 5 |
+
+**verification 輸出串流成 log（#2）**
+
+| 驗收 | 對應 issue #2 |
+|---|---|
+| PASS 與 FAIL 皆留下 log，內容含該次執行的完整輸出 | User story 1、5 |
+| 執行前印出 log 路徑 | User story 2 |
+| 被中斷（INTERRUPTED）的執行留下截斷的 log；回收孤兒時的輸出附上該 log 路徑 | User story 3、4 |
+| 非 PASS 時 stdout 不再印全文 | User story 6 |
+| 由 Work Item ID 與完整 SHA 的前綴比對可找到對應的 log，不需額外索引 | User story 7 |
+| 同一 revision 上重跑多次產生不同檔案，不互相覆蓋 | User story 8 |
+| log 檔開不起來時 `verify` 中止並說明，不留 Evidence | User story 9 |
+| `.forgepilot/logs/` 不被自動清理，不提供清理指令 | User story 10 |
+| `.forgepilot/logs/` 落在既有 `.gitignore` 範圍內 | User story 11 |
+| v4 state 被拒讀並指示 `forgepilot migrate` | User story 12 |
+| `migrate` 完成 v4→v5 後，既有 Goal 與 Evidence 資料完整 | User story 13 |
+| Evidence 上沒有指向 log 的欄位，此決定記錄於 ADR-0012 | User story 14 |
+| log 路徑存在 `current_run` 的 `log path`，不以命名規則事後推導 | User story 15 |
+
+### M5 Exit checklist
+
+- [ ] `review approve` 與 `review reject` 的髒工作樹拒絕訊息說「reviewing」；`verify` 維持說「verifying」；兩者拒絕清單格式一致；未追蹤檔案仍判定為髒。
+- [ ] `EnsureClean` 只有一份判準與一份訊息模板，動作字串由呼叫端提供。
+- [ ] `verify` 執行前印出 log 路徑；非 PASS 時 stdout 不再印全文（刻意移除，非退化）；結果行不重複路徑。
+- [ ] PASS、FAIL、INTERRUPTED 皆留下對應該次執行的 log；INTERRUPTED 的 log 為截斷內容，回收孤兒時的輸出附上其路徑。
+- [ ] 同一 revision 重跑多次的 log 不互相覆蓋；由 Work Item ID 與完整 SHA 前綴比對可找到對應 log。
+- [ ] log 目錄開不起來時 `verify` 中止並回報，不留 Evidence。
+- [ ] `.forgepilot/logs/` 不自動清理、不提供清理指令；落在既有 `.gitignore` 範圍內。
+- [ ] Evidence 未新增任何指向 log 的欄位；`current_run` 新增 `log path`。
+- [ ] v4 state 被拒讀並指示 migrate；`migrate` 備份為 `state.json.v4.bak` 後升級、重複執行安全、備份已存在時拒絕、升級不遺失 Goal、Work Item、Evidence 或 Gate。
+- [ ] 兩處版本號 fixture（`internal/storage/storage_test.go`、`internal/work/work_test.go`）調到 v5。
+- [ ] 端到端流程以獨立 process 跑通：PASS 與 FAIL 各自留下對應 log；被 kill 的執行回收為 INTERRUPTED 且輸出附上 log 路徑；同一 revision 重跑兩次產生兩個檔案。
+- [ ] `make verify` 與 `go test -race -count=1 ./...` 實跑通過，記錄實際環境與命令。
+- [ ] README、architecture 與 CONTEXT 反映實際行為。
 
 ## 每階段交付格式
 
