@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ForgePilot — 讓「做完了」這句話變貴</title>
-<meta name="description" content="ForgePilot 是 AI 輔助開發的 engineering control plane：它不寫程式，只負責在證據不足的時候，不讓任何人——包括 agent 和你自己——宣告工作完成。">
+<title>ForgePilot，讓「做完了」這句話變貴</title>
+<meta name="description" content="ForgePilot 是 AI 輔助開發的 engineering control plane。它不寫程式，只負責在證據不足的時候擋下「做完了」這句話，不管說的是 agent 還是你自己。">
 <style>
 :root {
   --bg: #fbfaf8;
@@ -199,8 +199,8 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
   <div class="wrap">
     <span class="brand"><svg class="icon" aria-hidden="true"><use href="#i-gate"/></svg>ForgePilot</span>
     <span class="spacer"></span>
-    <a href="#eli5" class="hide-sm">五歲版本</a>
-    <a href="#tickets" class="hide-sm">四張票</a>
+    <a href="#eli5" class="hide-sm">最簡單的講法</a>
+    <a href="#gates" class="hide-sm">四道關卡</a>
     <a href="#how">怎麼用</a>
     <a href="learn/handbook.html">手冊</a>
     <a href="https://github.com/CarlLee1983/ForgePilot">GitHub</a>
@@ -211,9 +211,9 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
   <div class="wrap">
     <p class="eyebrow">Engineering Control Plane</p>
     <h1>讓<em>「做完了」</em>這句話變貴</h1>
-    <p class="lede">ForgePilot 不寫程式，也不取代你的 coding agent。它只做一件事：在證據不足的時候，不讓任何人——包括 agent，包括你自己——宣告工作完成。</p>
+    <p class="lede">ForgePilot 不寫程式，也不取代你的 coding agent。證據不夠的時候，它不讓任何人宣告工作完成，包括 agent，也包括你自己。</p>
     <div class="cta">
-      <a class="btn primary" href="#eli5"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>先聽五歲版本</a>
+      <a class="btn primary" href="#eli5"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>先聽最簡單的講法</a>
       <a class="btn" href="learn/handbook.html"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>完整使用手冊</a>
       <a class="btn" href="https://github.com/CarlLee1983/ForgePilot"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg>原始碼</a>
     </div>
@@ -224,53 +224,53 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
   <div class="wrap">
     <div class="section-head">
       <span class="num">01</span>
-      <h2>五歲版本：走廊上的那幾道門</h2>
+      <h2>用五歲小孩聽得懂的方式講一次</h2>
     </div>
     <div class="body-text">
-      <p>想像一條走廊，走到底就是「這件事做完了」。走廊上有四道門，每一道都需要一張票才打得開，而且票不能自己寫。</p>
-      <p>沒有這條走廊的時候，事情是這樣的：你請一個很會寫程式的幫手做一件事，它做完跟你說「好了」。你問它測試過嗎，它說測過了。你信了，把它接到下一件事上——然後三天後你才發現，它測的是三個版本以前的程式碼。</p>
-      <p class="dim">它沒有騙你。它只是說了一句<strong>沒有成本</strong>的話。「做完了」誰都能說，不需要附上任何東西。</p>
-      <div class="pull">ForgePilot 做的事，就是把那句話變得需要附上四張票。</div>
-      <p>它自己不會寫程式，不會幫你測試，也不會判斷程式碼好不好——那些是你和你的 agent 的事。它只是站在門邊，檢查票，並且在票不齊的時候<strong>說出還缺哪一張</strong>。</p>
-      <p>這聽起來很煩。這正是重點。一個從不擋人的流程，跟沒有流程是同一件事。</p>
+      <p>想像一條走廊，走到底就是「這件事做完了」。走廊上有四道關卡，每一關都要交出一樣東西才過得去，而那樣東西不能自己寫。</p>
+      <p>沒有這條走廊的時候，事情長這樣。你請一個很會寫程式的幫手做一件事，它做完跟你說「好了」。你問它測試過嗎，它說測過了。你信了，把它接到下一件事上。三天後你才發現，它測的是三個版本以前的程式碼。</p>
+      <p class="dim">它沒有騙人。「做完了」這句話誰都能說，說的時候<strong>不需要附上任何東西</strong>，所以它幾乎不用付出什麼。</p>
+      <div class="pull">ForgePilot 做的事，就是讓這句話說出口之前得先交出四樣東西。</div>
+      <p>它自己不寫程式，也不判斷程式碼好不好，那些是你和你的 agent 的事。它站在關卡旁邊清點東西，少了什麼就<strong>直接說出少的是什麼</strong>。</p>
+      <p>聽起來很煩。一個從來不擋人的流程，跟沒有流程差不多。</p>
     </div>
   </div>
 </section>
 
-<section id="tickets">
+<section id="gates">
   <div class="wrap">
     <div class="section-head">
       <span class="num">02</span>
-      <h2>四張票，缺一張就過不去</h2>
+      <h2>四道關卡，少一道就走不到底</h2>
     </div>
     <div class="grid two">
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-seal"/></svg>
         <h3>有人真的看過並且同意</h3>
-        <p>不是自動通過，也不是「沒人反對就算過」。必須有一筆明確記下來的人工審查，寫著誰在什麼時候同意了什麼。</p>
+        <p>要有一筆明確記下來的人工審查，寫著誰在什麼時候同意了什麼。沒人反對不算同意。</p>
         <span class="tag">Human Review</span>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-hash"/></svg>
         <h3>測試通過的，是你正在看的那一版</h3>
-        <p>每次驗證都綁死一個 commit。之後只要再改一行，那張票就自動作廢——不是變成警告，是真的不算數。</p>
+        <p>每次驗證都綁死一個 commit。之後只要再改一行，那次驗證就不算數了，工作重新卡住。</p>
         <span class="tag">Evidence · exact revision</span>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-ask"/></svg>
         <h3>沒有懸著沒人決定的問題</h3>
-        <p>遇到不該自己決定的事，就開一道 Gate 把問題記下來。問題還開著，工作就過不去，而且誰都看得見它開著。</p>
+        <p>遇到不該自己決定的事，開一道 Gate 把問題記下來。問題還開著，工作就過不去，而且誰都看得見它開著。</p>
         <span class="tag">Gate</span>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"/></svg>
         <h3>這個目標本身還在進行中</h3>
-        <p>目標被暫停的時候，底下的工作連驗證都不給跑。暫停就該是真的暫停，不是一個沒人理的標籤。</p>
+        <p>目標被暫停的時候，底下的工作連驗證都不給跑，直到有人把它解除。</p>
         <span class="tag">Goal</span>
       </div>
     </div>
     <div class="body-text" style="margin-top:34px">
-      <p class="dim">四張票同時齊了，工作才進入 DONE——而且在同一個瞬間，等著它的下一件工作自動變成可以開始。中間不存在「A 完成了但 B 還沒被通知」的空檔。</p>
+      <p class="dim">四樣東西同時齊了，工作才進入 DONE。同一個瞬間，等著它的下一件工作變成可以開始，中間沒有「A 完成了但 B 還沒被通知」的空檔。</p>
     </div>
   </div>
 </section>
@@ -279,13 +279,13 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
   <div class="wrap">
     <div class="section-head">
       <span class="num">03</span>
-      <h2>被擋住的時候，它會說出缺哪一張</h2>
+      <h2>被擋下來的時候，它會說出還差什麼</h2>
     </div>
     <div class="split">
       <div class="body-text">
-        <p>最容易讓人愣住的情況是這個：測試明明過了，你也按了同意，工作卻沒有完成。</p>
-        <p>因為在那兩件事之間，你又改了一行程式碼。通過測試的是舊的那一版，你同意的是新的那一版——票對不上。</p>
-        <p>ForgePilot 不會默默吞掉你的同意，也不會假裝沒事讓它過。它<strong>把審查記下來</strong>（那件事真的發生過），然後把兩個版本編號並排印給你看。</p>
+        <p>最容易讓人愣住的是這種情況。測試明明過了，你也按了同意，工作卻沒有完成。</p>
+        <p>因為在那兩件事之間，你又改了一行程式碼。通過測試的是舊的那一版，你同意的是新的那一版，兩邊對不上。</p>
+        <p>ForgePilot 不會默默吞掉你的同意，也不會假裝沒事讓它過。它<strong>把審查記下來</strong>，因為那件事真的發生過，然後把兩個版本編號並排印給你看。</p>
         <p class="dim">再跑一次驗證，兩邊對齊，就過了。</p>
       </div>
       <div class="term">
@@ -312,19 +312,19 @@ approval is at 96f3e0b2eef1</span>
   <div class="wrap">
     <div class="section-head">
       <span class="num">04</span>
-      <h2>怎麼用：一天的形狀</h2>
+      <h2>實際跑起來是什麼樣子</h2>
     </div>
     <div class="body-text">
-      <p>全部是本機的命令列，沒有伺服器、沒有帳號、沒有網路。狀態存在你 repo 裡的一個 JSON 檔，被程序鎖保護著，多個終端機同時用也不會打架。</p>
+      <p>全部是本機的命令列，不需要伺服器，也不需要帳號。狀態存在你 repo 裡的一個 JSON 檔，由程序鎖保護，多個終端機同時用不會打架。</p>
     </div>
     <div class="steps">
       <div class="stepline">
         <span class="k">init</span>
-        <p>在 repo 裡建立狀態檔。它會動到 <code>.gitignore</code>，所以<strong>馬上 commit</strong>——之後每一步都要求工作樹是乾淨的。</p>
+        <p>在 repo 裡建立狀態檔。它會動到 <code>.gitignore</code>，所以<strong>馬上 commit</strong>，因為之後每一步都要求工作樹是乾淨的。</p>
       </div>
       <div class="stepline">
         <span class="k">goal / work add</span>
-        <p>宣告一個要跨多次工作才推得動的目標，然後把工作掛上去，順手寫清楚誰依賴誰。<strong>依賴沒完成的工作，一出生就是等待狀態</strong>，不需要你記得。</p>
+        <p>宣告一個要跨多次工作才推得動的目標，把工作掛上去，順手寫清楚誰依賴誰。<strong>依賴還沒完成的工作，一建立就是等待狀態</strong>，不用你自己記。</p>
       </div>
       <div class="stepline">
         <span class="k">next</span>
@@ -332,23 +332,23 @@ approval is at 96f3e0b2eef1</span>
       </div>
       <div class="stepline">
         <span class="k">start</span>
-        <p>開始。這時候你（或你的 agent）才真正去寫程式——ForgePilot 在這一段完全不插手。</p>
+        <p>開始。這時候你或你的 agent 才真正去寫程式，ForgePilot 在這一段完全不插手。</p>
       </div>
       <div class="stepline">
         <span class="k">verify</span>
-        <p>它在一個<strong>隔離的工作區</strong>裡，對確切的那個 commit 跑<em>你自己專案的</em> <code>make verify</code>。看不到你還沒提交的東西，所以不會有「在我機器上是好的」。結果連同 commit 編號一起存起來。</p>
+        <p>它在一個<strong>隔離的工作區</strong>裡，對確切的那個 commit 跑<em>你自己專案的</em> <code>make verify</code>。那個工作區看不到你還沒提交的東西，所以不會有「在我機器上是好的」。結果連同 commit 編號一起存起來。</p>
       </div>
       <div class="stepline">
         <span class="k">gate</span>
-        <p>做到一半發現有件事不該自己決定？把問題和選項寫下來，工作就停在那裡等人。<strong>反射動作是開一道門，不是自己選一個繼續。</strong></p>
+        <p>做到一半發現有件事不該自己決定，就把問題和選項寫下來，工作停在那裡等人。<strong>它想養成的習慣就是這個，問題交出去，不要自己挑一個繼續做。</strong></p>
       </div>
       <div class="stepline">
         <span class="k">review</span>
-        <p>人看過之後同意或退回，理由留在檔案裡。四張票齊了就完成，同時解鎖下游；不齊就記下來並告訴你差什麼。</p>
+        <p>人看過之後同意或退回，理由留在檔案裡。四樣東西齊了就完成，同時解鎖下游；不齊就把審查記下來，並告訴你還差什麼。</p>
       </div>
       <div class="stepline">
         <span class="k">status</span>
-        <p>把所有東西攤開。<strong>沒有驗證、沒有審查都會被明講出來</strong>，不會用留白帶過——沉默的缺席會被讀成沒問題的結果。</p>
+        <p>把所有東西攤開。<strong>沒有驗證、沒有審查都會被明講出來</strong>，不會用留白帶過。沉默的缺席會被讀成沒問題的結果。</p>
       </div>
     </div>
   </div>
@@ -364,16 +364,16 @@ approval is at 96f3e0b2eef1</span>
       <div>
         <ul class="plain no-list">
           <li><svg class="icon" aria-hidden="true"><use href="#i-bot"/></svg><span><b>不寫程式，也不取代你的 agent。</b>寫程式的還是它們，ForgePilot 只決定哪件事現在可以動，以及它算不算完成。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-offline"/></svg><span><b>不發出任何網路請求。</b>連你標註的 pull request 都不去查證——它只檢查格式，不假裝自己驗過了。</span></li>
+          <li><svg class="icon" aria-hidden="true"><use href="#i-offline"/></svg><span><b>不發出任何網路請求。</b>連你標註的 pull request 都不去查證，它只檢查格式，不假裝自己驗過了。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-block"/></svg><span><b>不驗證身分。</b>審查者的名字來自你的 git 設定，所以每次都明白印上「自稱」兩個字，免得誰把它當成簽章。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg><span><b>完成之後不能反悔。</b>DONE 是終點，沒有重開。要再動就開一件新工作，讓歷史留著。</span></li>
+          <li><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg><span><b>完成之後不能反悔。</b>DONE 是終點，沒有重開。要再動就開一件新工作，把歷史留著。</span></li>
         </ul>
       </div>
       <div>
         <ul class="plain yes">
           <li><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span><b>狀態是一個檔案。</b>程序鎖加上原子替換，跨終端機、跨 session、關掉再開都讀得回同一份事實。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg><span><b>驗證的內容由你定義。</b>它只負責在乾淨且隔離的環境裡跑你的 <code>make verify</code>，然後如實記錄。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-stack"/></svg><span><b>記錄只增不改。</b>通過、退回、被中斷的驗證全部並排留著，因為「測試沒過」跟「人不接受」是兩件不同的事。</span></li>
+          <li><svg class="icon" aria-hidden="true"><use href="#i-stack"/></svg><span><b>記錄只增不改。</b>通過、退回、被中斷的驗證都並排留著，「測試沒過」跟「人不接受」是兩件不同的事。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg><span><b>每個不易反轉的決定都寫成 ADR，</b>附上它在什麼條件下會失效。你可以不同意，但不會找不到理由。</span></li>
         </ul>
       </div>
@@ -389,8 +389,8 @@ approval is at 96f3e0b2eef1</span>
     </div>
     <div class="split">
       <div class="body-text">
-        <p>需要 Go 1.25 以上。目前只宣稱支援 macOS 的本機檔案系統——程序鎖用的是作業系統的 <code>flock</code>，其他平台還沒實際驗證過，所以不亂講。</p>
-        <p>裝好之後，<a href="learn/handbook.html">使用手冊</a>會帶你從 <code>init</code> 一路走到 <code>DONE</code>，包含每一個會擋住你的地方——裡面所有輸出都是真的跑出來貼上去的，不是寫出來的範例。</p>
+        <p>需要 Go 1.25 以上。目前只宣稱支援 macOS 的本機檔案系統，因為程序鎖用的是作業系統的 <code>flock</code>，其他平台還沒實際驗證過。</p>
+        <p>裝好之後，<a href="learn/handbook.html">使用手冊</a>會帶你從 <code>init</code> 一路走到 <code>DONE</code>，包含每一個會擋住你的地方。裡面所有輸出都是真的跑出來貼上去的，不是寫出來的範例。</p>
         <div class="cta" style="margin-top:26px">
           <a class="btn primary" href="learn/handbook.html"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>讀使用手冊</a>
           <a class="btn" href="learn/reference/cli-quick-reference.html"><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg>指令速查表</a>
@@ -423,7 +423,7 @@ approval is at 96f3e0b2eef1</span>
       <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md">詞彙</a>
       <a href="https://github.com/CarlLee1983/ForgePilot">GitHub</a>
     </div>
-    <p>ForgePilot 服務 AI 輔助的軟體工程：管理工作佇列、狀態、人工決策與驗證證據，讓工程工作能跨 agent 與 session 延續。它不取代 ForgeFlow，也不取代你的 coding agent。</p>
+    <p>ForgePilot 服務 AI 輔助的軟體工程，管理工作佇列、狀態、人工決策與驗證證據，讓工程工作能跨 agent 與 session 延續。它不取代 ForgeFlow，也不取代你的 coding agent。</p>
     <p>文件與實際行為不符時以程式碼為準。每一條流程在 <code>integration_test.go</code> 都有一個以獨立 process 對真實 git repository 執行的測試。</p>
   </div>
 </footer>
