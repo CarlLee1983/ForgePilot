@@ -18,8 +18,7 @@
 | [0010](0010-no-outbound-network-requests.md) | 不主動發出網路請求——不自行 HTTP，也不 spawn `gh` | accepted |
 | [0011](0011-pr-identity-does-not-gate-completion.md) | PR identity 不參與完成判定與 stale 判定 | accepted |
 | [0012](0012-verification-log-outside-state.md) | Verification 輸出串流到 state 之外的 log，以 run 為鍵；Evidence 上不加欄位 | accepted |
-
-沒有 `proposed` 的開放問題。若有，它們一樣住在這個目錄，不會被擠進只表達「做完了」的 roadmap 欄位。
+| [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 是否自我套用 ForgeFlowV2——尚未回答的開放問題 | proposed |
 
 ## 什麼時候該加一份
 

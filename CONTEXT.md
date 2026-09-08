@@ -10,7 +10,7 @@ _Avoid_：Story、Work Item
 **Work Item**：歸屬一個 Goal、參照一個 ForgeFlow Story 的工程工作單位，具有自己的狀態與依賴。
 _Avoid_：Story、Task（作為另一種獨立工作物件）
 
-**ForgeFlow Story**：由 ForgeFlowV2 管理的工程契約，包含需求、acceptance criteria 與工程指引。
+**ForgeFlow Story**：由 ForgeFlowV2 管理的工程契約，包含需求、acceptance criteria 與工程指引。ForgePilot 自身尚未接上 ForgeFlowV2——`specs/stories/` 底下目前是為滿足路徑檢查而手寫的臨時契約，取捨見 [ADR-0013](docs/adr/0013-forgepilot-self-adoption-of-forgeflow.md)。
 _Avoid_：ForgePilot requirement、Work Item 的需求副本
 
 **Gate**：依附於單一 Work Item、需要明確 Human Decision 才能解除的工程決策關卡；提出時必須列出至少兩個選項。未解除的 Gate 阻擋該工作推進，但不改變它的狀態。
@@ -19,8 +19,8 @@ _Avoid_：自動核准、驗證失敗、Goal 層級的阻擋
 **Human Decision**：對某個 Gate 所記錄的選擇——選定其列出的選項之一，連同自述的決策者身分。
 _Avoid_：Agent 推測、默認同意、自由作答、經過認證的身分
 
-**Evidence**：針對特定工作與 revision 保存的驗證或審查紀錄；可能成功、失敗，或因中斷而未產生結果。
-_Avoid_：完成宣告、Agent 自評
+**Evidence**：針對特定工作與 revision 保存的驗證或審查紀錄；可能成功、失敗，或因中斷而未產生結果。它綁定的是一個 revision 與一個時間，不表達工作發生的先後。
+_Avoid_：完成宣告、Agent 自評、工作的時序、補跑與當下執行的區別
 
 **Verification**：對某個確切 revision 執行 repository 自己定義的 canonical 檢查，其結果構成 Evidence。
 _Avoid_：Agent 自我測試、臨時指定的 shell command

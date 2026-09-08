@@ -374,6 +374,14 @@ init → goal create g1 → work add WI-001 → next → start WI-001
 
 log 檔案落在 `.forgepilot/logs/WI-001-<short-sha>-<started-at>.log`，`.gitignore` 內容為 `.forgepilot/`，log 目錄涵蓋在內。
 
+## M5 之後的 dogfood 修補
+
+M5 交付完成後用 ForgePilot 自我駕駛的 dogfood（`docs/specs/m5-dogfood-friction.md`）撞到
+的摩擦，拆成獨立的票修補，不併入 M5、不開新 milestone：story 路徑錯誤訊息的改善見
+issue #9，`work add` 的提示改善見 issue #10，ForgeFlow Story 定義與現況不符、
+「是否自我套用 ForgeFlowV2」的未決問題、以及 Evidence 不承諾工作時序這三件事的文件記錄
+見 issue #12。
+
 ## 每階段交付格式
 
 開發者完成後提供：
