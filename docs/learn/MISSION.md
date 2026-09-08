@@ -1,5 +1,7 @@
 # Mission: 用 ForgePilot 管自己的開發
 
+> 教材是一份文件：[handbook.html](handbook.html)，涵蓋 `init` 到 `DONE` 的完整操作。分課的形式已取消。
+
 ## Why
 
 ForgePilot 的 M1–M4 已經實作完成、測試通過、文件齊全，但它**從來沒有管過一件真實的工作**。README 的使用流程是寫出來的，不是用出來的。目標是把它接到真正的開發上——包括它自己的下一段開發——讓佇列裡的第一件 Work Item 是真的，而不是 fixture。

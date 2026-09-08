@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ForgePilot 使用手冊 · 從 init 到 DONE</title>
+<link rel="stylesheet" href="assets/course.css">
+<script src="assets/quiz.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">ForgePilot · Handbook</p>
+  <h1>從 init 到 DONE 的完整操作</h1>
+  <p class="lede">一份就跑得完的手冊：整條流程、每一個會擋住你的地方、<code>status</code> 每一行的意思，以及為什麼它要這樣擋。所有輸出都是實跑貼上來的。</p>
+</header>
+
+<p>這份文件取代原本的分課設計。你已經知道所有名詞與規則——它們定義在 <a href="../../CONTEXT.md">CONTEXT.md</a>、<a href="../architecture.md">architecture.md</a> 與 11 份 <a href="../adr/README.md">ADR</a>，這裡不重講。這裡只回答一件事：<strong>手放在鍵盤上的時候，該打什麼、會看到什麼、被擋住時該怎麼辦</strong>。</p>
+
+<div class="callout go">
+  <span class="label">怎麼用這份文件</span>
+  <p>從頭到尾照著打一遍，大約二十分鐘。<a href="#status">讀懂 status</a> 與 <a href="#refusals">它會拒絕你的地方</a> 兩節可以單獨當參考查。最後有六題<a href="#quiz">自我檢查</a>，考的是「這個情況下會發生什麼」而不是定義。</p>
+</div>
+
+<p class="muted">本文所有輸出都來自 macOS 26.5.1 / Go 1.25.5 上以真實 binary 對真實 git repository 的實跑，只把 git 身分置換成 <code>you@example.com</code>。SHA 是那次實跑的真值，你自己跑會不同。</p>
+
+<h2 id="setup">起手式：兩件會先絆倒你的事</h2>
+
+<p>先講，因為它們會在第一步和第三步各擋你一次，知道會來比撞上去再查快。</p>
+
+<p><strong>一，Story reference 必須落在 <code>specs/stories/</code> 底下，而且檔案要真的存在。</strong> 這條寫死在 <code>internal/repository/repository.go</code>：路徑正規化與 symlink 解析之後仍須落在該目錄內。ForgePilot 自己的 repo <em>沒有</em> 這個目錄（它的規格住在 <code>docs/specs/</code>），所以拿它管自己，第一個動作是建一個。ForgePilot 不讀 Story 的內容也不猜它的 schema，只確認那個路徑存在且在允許範圍內。</p>
+
+<p><strong>二，<code>init</code> 會弄髒工作樹。</strong> 它往 <code>.gitignore</code> 補上 <code>.forgepilot/</code>，而 <code>verify</code> 與 <code>review</code> 都要求嚴格乾淨——tracked 無修改、無 staged、<strong>無 untracked</strong>。不先 commit，之後每一步都會被拒絕，錯誤訊息還指著 <code>init</code> 自己造成的檔案。</p>
+
+<p>受管理的專案還需要一個可執行的 <code>make verify</code> target。ForgePilot 不定義驗證的內容，只負責在乾淨且隔離的環境裡跑它、記下結果綁哪個 revision。</p>
+
+<h2 id="walkthrough">整條流程</h2>
+
+<div class="step">
+  <span class="n">STEP 1</span>
+  <h3>init，然後立刻 commit</h3>
+<pre><code>forgepilot init
+git status --short</code></pre>
+<pre class="out"><code><b>Initialized ForgePilot in /path/to/your/repo</b>
+
+?? .gitignore</code></pre>
+  <p>那個 <code>??</code> 就是第二個擋點的來源。現在就處理掉：</p>
+<pre><code>git add .gitignore specs/ &amp;&amp; git commit -m "chore: adopt forgepilot"</code></pre>
+  <p class="muted">state 住在 <code>.forgepilot/state.json</code>，被程序鎖與原子替換保護，並綁定這個 repository 的身分——把目錄搬走它會拒絕讀，不會默默重綁到別的 repo。</p>
+</div>
+
+<div class="step">
+  <span class="n">STEP 2</span>
+  <h3>宣告一個 Goal</h3>
+  <p>Goal 的 <code>--id</code> 是你自己取的，不是系統配發的；只有 Work Item 的 ID 由受鎖操作發序號。</p>
+<pre><code>forgepilot goal create --id demo --title "示範 Goal"</code></pre>
+<pre class="out"><code><b>Goal demo created</b></code></pre>
+</div>
+
+<div class="step">
+  <span class="n">STEP 3</span>
+  <h3>加兩件有依賴關係的 Work Item</h3>
+  <p>依賴用 Work Item ID，不用 Story 路徑。READY 或 PENDING 在新增當下就決定：全部依賴皆 DONE 則 READY，否則 PENDING。</p>
+<pre><code>forgepilot work add --goal demo --story specs/stories/A-001.md
+forgepilot work add --goal demo --story specs/stories/B-001.md --depends-on WI-001</code></pre>
+<pre class="out"><code><b>WI-001 READY</b>
+Story: specs/stories/A-001.md
+<b>WI-002 PENDING</b>
+Story: specs/stories/B-001.md</code></pre>
+  <p>兩種寫錯 Story 的方式各有各的訊息，兩者都在寫入之前就擋下來：</p>
+<pre class="out"><code>forgepilot: story reference "specs/stories/NOPE.md" does not exist
+forgepilot: story reference must remain under specs/stories</code></pre>
+</div>
+
+<div class="step">
+  <span class="n">STEP 4</span>
+  <h3>問下一件該做什麼，然後開始</h3>
+  <p><code>next</code> 是<strong>純查詢</strong>——不 claim、不 start、不寫入任何東西，而且會說出它為什麼選中這一件。</p>
+<pre><code>forgepilot next</code></pre>
+<pre class="out"><code><b>Next: WI-001</b>
+Goal: demo
+Story: specs/stories/A-001.md
+Verification: not verified
+<b>Reason: earliest READY work</b></code></pre>
+<pre><code>forgepilot start WI-002
+forgepilot start WI-001</code></pre>
+<pre class="out"><code>forgepilot: work item "WI-002" is PENDING, not READY
+<b>WI-001 RUNNING</b></code></pre>
+  <p>第一行是預期中的拒絕：WI-002 卡在依賴上。<code>start</code> 只接受 READY。</p>
+</div>
+
+<div class="step">
+  <span class="n">STEP 5</span>
+  <h3>verify：在隔離的 worktree 跑 make verify</h3>
+  <p>先看它拒絕的樣子。工作樹髒的時候，它<strong>什麼都不寫</strong>——那是「無法驗證」，不是「驗證失敗」，記成 FAIL 會是謊。</p>
+<pre><code>echo scratch &gt; dirty.txt
+forgepilot verify WI-001</code></pre>
+<pre class="out"><code>forgepilot: worktree is not clean; commit or stash the following before verifying:
+?? dirty.txt</code></pre>
+  <p>清乾淨再跑。驗證在一個 detached worktree 裡執行，看不到主工作樹的未提交內容，Evidence 綁定完整的 commit SHA。</p>
+<pre><code>rm dirty.txt
+forgepilot verify WI-001</code></pre>
+<pre class="out"><code><b>EV-001 PASS at 9fda18ae576acbda2813b38a33fa2ebd28cade4c</b>
+<b>WI-001 REVIEW</b></code></pre>
+  <p class="muted">PASS 讓 RUNNING 進入 REVIEW，FAIL 退回 RUNNING。同一個 SHA 重跑不受限制；Evidence 只累積，不覆寫。驗證跑到一半被中斷（Ctrl-C、關終端機、關機）會被誠實記為 INTERRUPTED、工作退回 RUNNING，永遠不會寫成通過或失敗。</p>
+</div>
+
+<div class="step">
+  <span class="n">STEP 6</span>
+  <h3>Gate：把「需要人決定」變成佇列擋得住的東西</h3>
+  <p>遇到自己不該擅自決定的問題，開一個 Gate 而不是選一個繼續。Gate <strong>不改狀態</strong>——阻擋是與狀態正交的另一個維度。</p>
+<pre><code>forgepilot gate open --work WI-001 \
+  --question "要不要先把 Story B 拆小？" \
+  --option "拆成兩件" --option "維持原樣" \
+  --reason "B 的範圍看起來超過一次工作"</code></pre>
+<pre class="out"><code><b>GATE-001 OPEN on WI-001</b>
+要不要先把 Story B 拆小？
+Options: 拆成兩件 | 維持原樣</code></pre>
+  <p>現在試著 approve。它<strong>會成功記下審查</strong>，但工作不會完成，而且最後一行明說少了什麼：</p>
+<pre><code>forgepilot review approve WI-001</code></pre>
+<pre class="out"><code>EV-002 APPROVED at 9fda18ae576a
+<b>WI-001 REVIEW</b>
+Reviewed by: you@example.com (self-asserted; ForgePilot does not authenticate identities)
+<b>Not complete: 1 open gate(s)</b></code></pre>
+  <p>這是整個工具最值得記住的一句話：<strong>approve 是一筆 Evidence，不是一個開關</strong>。審查發生了就該被記錄；完成與否是另外四項條件同時成立的結果。</p>
+<pre><code>forgepilot gate resolve GATE-001 --option "維持原樣" --note "B 還在可控範圍"</code></pre>
+<pre class="out"><code><b>GATE-001 RESOLVED</b>
+Choice: 維持原樣
+Decided by: you@example.com (self-asserted; ForgePilot does not authenticate identities)
+</code></pre>
+  <p class="muted">被取消的 Gate 也會留在 <code>status</code> 裡。一個沒人看得到的取消，等於繞過待決事項的暗門。</p>
+</div>
+
+<div class="step">
+  <span class="n">STEP 7</span>
+  <h3>reject：退回去，理由留在檔案裡</h3>
+<pre><code>forgepilot review reject WI-001 --reason "commit message 沒有交代 why"</code></pre>
+<pre class="out"><code><b>EV-003 REJECTED at 9fda18ae576a</b>
+<b>WI-001 RUNNING</b>
+Reviewed by: you@example.com (self-asserted; ForgePilot does not authenticate identities)</code></pre>
+  <p>REJECTED 讓工作退回 RUNNING。那筆 PASS 沒有消失——它與 REJECTED 並排留著，因為「驗證通過但人不接受」跟「驗證沒過」是兩件不同的事，記錄不該把它們混成一件。</p>
+</div>
+
+<div class="step">
+  <span class="n">STEP 8</span>
+  <h3>改完重跑，然後真的完成</h3>
+<pre><code>git commit -am "docs: explain why"
+forgepilot verify WI-001
+forgepilot review approve WI-001 --pr "CarlLee1983/ForgePilot#12" --note "看過 diff 與 evidence"</code></pre>
+<pre class="out"><code>EV-004 PASS at 26be05c984479e08f91de576a84c2635ebee30aa
+WI-001 REVIEW
+
+EV-005 APPROVED at 26be05c98447
+<b>WI-001 DONE</b>
+Reviewed by: you@example.com (self-asserted; ForgePilot does not authenticate identities)
+<b>WI-002 READY</b></code></pre>
+  <p>完成與解鎖下游在<strong>同一次受鎖交易</strong>裡發生，所以 <code>WI-002 READY</code> 直接印在 approve 的輸出上，不必再跑一次任何指令。分成兩次交易，別的 process 就會讀到「A 已 DONE 但 B 仍 PENDING」的中間狀態。</p>
+  <p class="muted"><code>--pr</code> 是選填的。帶了就記進那筆 Evidence，之後 <code>status</code> 會顯示；沒帶就什麼都不印，也不會有任何提示——缺 PR 是合法狀態，不是待辦事項。DONE 是終態，沒有 reopen；需要再動就開一件新的 Work Item。</p>
+</div>
+
+<div class="step">
+  <span class="n">STEP 9</span>
+  <h3>stale：HEAD 動了，舊的 PASS 就不算數</h3>
+  <p>這是最容易讓人愣住的一段。WI-002 驗證通過後，你又 commit 了一次，然後 approve：</p>
+<pre class="out"><code>  WI-002 REVIEW specs/stories/B-001.md
+    <b>EV-006 PASS at 26be05c98447 (stale; HEAD is now 96f3e0b2eef1)</b></code></pre>
+<pre><code>forgepilot review approve WI-002</code></pre>
+<pre class="out"><code>EV-007 APPROVED at 96f3e0b2eef1
+<b>WI-002 REVIEW</b>
+Reviewed by: you@example.com (self-asserted; ForgePilot does not authenticate identities)
+<b>Not complete: the latest PASS is at revision 26be05c98447 but the approval is at 96f3e0b2eef1</b></code></pre>
+  <p>審查記下來了，工作沒完成，原因寫在最後一行：你審的是新的 HEAD，通過驗證的是舊的那個 commit。<strong>重新 verify 一次</strong>，讓兩者對齊，再 approve：</p>
+<pre><code>forgepilot verify WI-002
+forgepilot review approve WI-002 --note "收尾"</code></pre>
+<pre class="out"><code>EV-009 PASS at 96f3e0b2eef1f08b68659ee7fb468b11792a353d
+WI-002 REVIEW
+
+EV-010 APPROVED at 96f3e0b2eef1
+<b>WI-002 DONE</b></code></pre>
+</div>
+
+<div class="step">
+  <span class="n">STEP 10</span>
+  <h3>Goal 的生命週期</h3>
+  <p>Goal 被 block 之後，底下的工作連 verify 都不行——這是刻意的，暫停就該是真的暫停。</p>
+<pre><code>forgepilot goal block demo --reason "等使用者確認範圍"
+forgepilot verify WI-002
+forgepilot goal unblock demo</code></pre>
+<pre class="out"><code><b>Goal demo BLOCKED</b>
+forgepilot: work item "WI-002" does not belong to an active goal
+<b>Goal demo ACTIVE</b></code></pre>
+  <p>還有工作沒完成時，Goal 不准被宣告完成，而且它會指名是哪一件卡著：</p>
+<pre class="out"><code>forgepilot: goal "demo" still has unfinished work: WI-002 is REVIEW</code></pre>
+  <p>全部 DONE 之後才過得去：</p>
+<pre><code>forgepilot goal complete demo</code></pre>
+<pre class="out"><code><b>Goal demo COMPLETED</b></code></pre>
+</div>
+
+<h2 id="status">讀懂 status 的每一行</h2>
+
+<p><code>status</code> 是唯一一個把所有東西攤開的指令，它的每一行都有測試在盯著。這是一份完成後的完整輸出：</p>
+
+<pre class="out"><code>Goal demo COMPLETED: 示範 Goal
+  WI-001 DONE specs/stories/A-001.md
+    EV-004 PASS at 26be05c98447
+    EV-005 APPROVED at 26be05c98447 by you@example.com (self-asserted) on CarlLee1983/ForgePilot#12: 看過 diff 與 evidence
+    Gates: 0 open
+      GATE-001 RESOLVED 要不要先把 Story B 拆小？ -&gt; 維持原樣 (self-asserted by you@example.com)
+  WI-002 DONE specs/stories/B-001.md
+    EV-009 PASS at 96f3e0b2eef1
+    EV-010 APPROVED at 96f3e0b2eef1 by you@example.com (self-asserted): 收尾
+    Gates: 0 open
+Next: none</code></pre>
+
+<div class="scroll">
+<table>
+<thead><tr><th>你看到的</th><th>它在說什麼</th></tr></thead>
+<tbody>
+<tr><td><code>not verified</code> / <code>not reviewed</code></td><td>刻意講出來的缺席，不是留白。沉默的缺席會被讀成沒問題的結果。</td></tr>
+<tr><td><code>EV-004 PASS at 26be05c98447</code></td><td>最新一筆驗證結果與它綁定的 revision。Evidence 只累積不覆寫，編號連續。</td></tr>
+<tr><td><code>(stale; HEAD is now …)</code></td><td>這筆 PASS 驗的不是現在的 HEAD。它不觸發任何 transition，只是誠實標示。</td></tr>
+<tr><td><code>Not complete: …</code></td><td>審查已記錄但工作沒完成，這行說出還差什麼。這是最該讀的一行。</td></tr>
+<tr><td><code>Gates: N open</code></td><td>擋住這件工作的 Gate 數。底下逐條列出所有開過的 Gate，含已解決與已取消的。</td></tr>
+<tr><td><code>(self-asserted)</code></td><td>身分來自 <code>git config user.email</code> 或 <code>--by</code>，沒有任何認證。這五個字是刻意印出來的，免得誰把它當成經過驗證的簽章。</td></tr>
+<tr><td><code>Next: none</code></td><td>沒有可以<em>開始</em>的工作，不是壞消息——正在跑的不是 READY，卡依賴的也不是。</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>純讀指令（<code>status</code>、<code>next</code>）不寫入 state，驗證進行中也照樣能跑。同一件工作不能並行驗證，不同工作可以。</p>
+
+<h2 id="refusals">它會拒絕你的地方</h2>
+
+<p>整理成一張表，全部是實跑貼上來的訊息。被擋住的時候直接搜這裡。</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>訊息</th><th>怎麼辦</th></tr></thead>
+<tbody>
+<tr><td><code>no .forgepilot state found; run forgepilot init first</code></td><td>還沒 init，或不在那個 repo 裡。<code>help</code> 不需要 state 就能跑。</td></tr>
+<tr><td><code>story reference "…" does not exist</code></td><td>先把 Story 檔案寫出來。Work Item 不該指向不存在的工程契約。</td></tr>
+<tr><td><code>story reference must remain under specs/stories</code></td><td>路徑正規化與 symlink 解析後仍須落在該目錄內。</td></tr>
+<tr><td><code>work item "WI-002" is PENDING, not READY</code></td><td>依賴還沒全部 DONE。<code>start</code> 只接受 READY。</td></tr>
+<tr><td><code>worktree is not clean; commit or stash the following before verifying:</code></td><td>訊息會列出髒的檔案。乾淨採嚴格定義，untracked 也算。不寫任何 Evidence。</td></tr>
+<tr><td><code>this revision has no makefile, so `make verify` cannot be run</code></td><td>受管理的專案得自己提供 canonical verification。同樣不留 Evidence。</td></tr>
+<tr><td><code>work item "WI-002" does not belong to an active goal</code></td><td>Goal 是 BLOCKED 或已結束。先 <code>goal unblock</code>。</td></tr>
+<tr><td><code>goal "demo" still has unfinished work: WI-002 is REVIEW</code></td><td>Goal 完成的宣告要有實質意義，它會指名卡住的那一件。</td></tr>
+<tr><td><code>cannot unblock goal "demo": it is ACTIVE</code></td><td>沒被 block 就不能解除。狀態轉移不接受無意義的操作。</td></tr>
+<tr><td><code>no git user.email is configured; pass --by to state who is deciding</code></td><td>錯誤訊息直接告訴你哪個 flag 能修好它。</td></tr>
+<tr><td><code>--reason is required</code></td><td><code>goal block</code>、<code>review reject</code>、<code>gate cancel</code> 都要理由。理由留在檔案裡，不留在你腦裡。</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>migrate</code> 只在換過 binary 之後才需要。已經是最新的時候它會這樣說，而且成功結束：</p>
+<pre class="out"><code>State is already at schema version 4; nothing to migrate.</code></pre>
+<p class="muted">舊版 state 不會被自動升級——<code>migrate</code> 先備份成 <code>state.json.vN.bak</code> 再升，備份檔已存在時拒絕執行。重複執行是安全的。</p>
+
+<h2 id="why">四項條件，缺一不可</h2>
+
+<p>一件 Work Item 進入 DONE，需要以下四項<strong>同時</strong>成立。<code>status</code> 的 <code>Not complete:</code> 那行永遠在說缺的是哪一項。</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>條件</th><th>不成立時會怎樣</th></tr></thead>
+<tbody>
+<tr><td>有一筆 APPROVED 的 Human Review</td><td>停在 REVIEW。沒有任何指令能繞過人。</td></tr>
+<tr><td>最新一筆 PASS 的 revision 等於審查當下的 HEAD</td><td>審查被記錄，工作不完成，訊息並列兩個 SHA。</td></tr>
+<tr><td>沒有 open 的 Gate</td><td>審查被記錄，工作不完成，訊息報開著的 Gate 數。</td></tr>
+<tr><td>Goal 是 ACTIVE</td><td>連 verify 都不給跑。</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>PR reference <strong>不在</strong>這四項裡。它是描述而非門檻，帶了就記、沒帶就沉默。</p>
+
+<h2 id="quiz">自我檢查</h2>
+
+<p>六題都不考定義，考的是「這個情況下會發生什麼」。知道規則和操作時想得起來是兩件事。</p>
+
+<div class="quiz" data-answer="1">
+  <p class="q">WI-001 正在 RUNNING，這時你在它上面開了一個 Gate。它的狀態變成什麼？</p>
+  <div class="opts">
+    <button>變成 BLOCKED，解除後回到 RUNNING</button>
+    <button>還是 RUNNING，但無法再往前推進</button>
+    <button>退回 READY，等 Gate 被解除</button>
+    <button>變成 WAITING_HUMAN 直到有人決定</button>
+  </div>
+  <p class="why" hidden>開關 Gate 不是 transition。阻擋是與狀態正交的另一個維度，所以狀態欄不動，只是這件工作推不動了。設 <code>BLOCKED</code> 或 <code>WAITING_HUMAN</code> 就會需要「記住進入阻擋前是什麼狀態」這種只為修補覆寫而存在的欄位（<a href="../adr/0007-blocking-is-not-a-status.md">ADR-0007</a>）。</p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">你剛跑完 <code>init</code>，還沒 commit 那個被改動的 <code>.gitignore</code>，直接跑 <code>verify WI-001</code>。會怎樣？</p>
+  <div class="opts">
+    <button>正常執行，因為 ignored 檔案不算數</button>
+    <button>執行但把結果記成 FAIL 的 Evidence</button>
+    <button>拒絕執行，且完全不寫入 Evidence</button>
+    <button>先自動 stash，跑完之後再還原</button>
+  </div>
+  <p class="why" hidden>拒絕，而且什麼都不寫——那是「無法驗證」，不是「驗證失敗」。乾淨採嚴格定義：tracked 無修改、無 staged、且<strong>無 untracked</strong>。把 FAIL 記下來會是謊：沒有任何東西被驗證過。</p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">WI-002 依賴 WI-001。WI-001 剛剛因為 approve 而進入 DONE。WI-002 什麼時候變成 READY？</p>
+  <div class="opts">
+    <button>同一次交易內，approve 的輸出就已經印出來了</button>
+    <button>下一次任何指令讀取 state 的時候</button>
+    <button>下一次執行 next 或 status 的時候</button>
+    <button>需要手動跑一次 refresh 才會更新</button>
+  </div>
+  <p class="why" hidden>完成與解鎖下游落在同一次受鎖的原子替換裡，所以 <code>review approve</code> 直接印出 <code>WI-002 READY</code>。分成兩次交易，讀取者就會看到「A 已 DONE 但 B 仍 PENDING」的中間狀態（<a href="../adr/0001-evidence-in-state-snapshot.md">ADR-0001</a>）。</p>
+</div>
+
+<div class="quiz" data-answer="3">
+  <p class="q">工作有一筆 PASS，但那之後你又 commit 了一次。現在 approve，會發生什麼？</p>
+  <div class="opts">
+    <button>被拒絕，不留任何記錄，要你先重跑 verify</button>
+    <button>直接完成，因為驗證確實通過過</button>
+    <button>自動重跑一次 verify 再決定</button>
+    <button>審查被記下來，但工作不完成，訊息並列兩個 SHA</button>
+  </div>
+  <p class="why" hidden>審查真的發生了就該被記錄——APPROVED 是一筆 Evidence，不是開關。但完成需要「最新 PASS 的 revision 等於審查當下的 HEAD」，所以 <code>Not complete:</code> 那行會把兩個 SHA 並列給你看。修法是重跑一次 <code>verify</code> 讓兩者對齊。</p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="q">你 reject 了一件工作。它那筆已經存在的 PASS Evidence 會怎樣？</p>
+  <div class="opts">
+    <button>被標記為失效，之後不再顯示</button>
+    <button>原封不動留著，與 REJECTED 並排</button>
+    <button>被 REJECTED 覆寫掉</button>
+    <button>連同工作一起退回，下次 verify 時重建</button>
+  </div>
+  <p class="why" hidden>Evidence 只累積不覆寫。「驗證通過但人不接受」與「驗證沒過」是兩件不同的事，把它們混成一件會讓之後讀記錄的人分不出來。工作退回 RUNNING，記錄一筆都不少。</p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">approve 時不帶 <code>--pr</code>，<code>status</code> 之後會怎麼顯示那筆審查？</p>
+  <div class="opts">
+    <button>顯示一行提示，說這筆審查缺少 PR</button>
+    <button>拒絕接受這次 approve</button>
+    <button>正常顯示，關於 PR 的部分什麼都不印</button>
+    <button>顯示為未完成，直到補上 PR</button>
+  </div>
+  <p class="why" hidden>缺 PR 是合法狀態，不是待辦事項。PR reference 是描述而非完成條件，所以沒有就沉默——而 <code>status</code>「不對未完成的原因沉默」的要求只涵蓋真正的完成條件，PR 不在其中。</p>
+</div>
+
+<p class="score"></p>
+
+<h2>還沒被解決的摩擦</h2>
+
+<p>真的拿它管過一段工作之後累積下來的不順手，記在 <a href="learning-records/">learning-records</a>，是未來版本的輸入而不是待辦清單。目前兩項：<strong>Story 目錄的硬性要求</strong>讓一個規格不放在 <code>specs/stories/</code> 的專案（包括 ForgePilot 自己）第一步就得建空目錄；<strong><code>init</code> 弄髒工作樹</strong>讓新使用者的第一次 <code>verify</code> 必定失敗，而錯誤訊息指著 <code>init</code> 自己造成的檔案。</p>
+
+<p>用起來還有哪裡卡，就再記一筆——這是這個工具目前唯一的真實回饋來源。</p>
+
+<footer>
+  <p>速查表：<a href="reference/cli-quick-reference.html">ForgePilot CLI 快速參考</a>（設計成印得出來的一頁）</p>
+  <p>延伸：<a href="../diagrams/work-item-lifecycle.html">狀態機圖</a> · <a href="../../CONTEXT.md">詞彙</a> · <a href="../adr/README.md">11 份 ADR</a> · <a href="RESOURCES.md">來源清單</a></p>
+  <p>文件與實際行為不符時<strong>以程式碼為準</strong>：指令的真實行為在 <code>internal/cli/*.go</code>，每一條流程在 <code>integration_test.go</code> 都有一個以獨立 process 跑真實 git repository 的測試。</p>
+</footer>
+
+</div>
+</body>
+</html>

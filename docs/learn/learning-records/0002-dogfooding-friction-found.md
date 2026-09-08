@@ -7,4 +7,4 @@
 
 **Evidence**：在 scratchpad 的 temporary git repository 上以實際 binary 跑過，兩者都真的擋住了流程。
 
-**Implications**：這兩點是 MISSION 要蒐集的「設計在真實使用中哪裡不順手」清單的第一批項目，也是未來 M5 的候選輸入——例如 `init` 是否該提示使用者 commit，或 `work add` 的錯誤訊息是否該說明 `specs/stories/` 可以是空的。第 1 課刻意把它們寫在前面而不是讓使用者撞。
+**Implications**：這兩點是 MISSION 要蒐集的「設計在真實使用中哪裡不順手」清單的第一批項目，也是未來 M5 的候選輸入——例如 `init` 是否該提示使用者 commit，或 `work add` 的錯誤訊息是否該說明 `specs/stories/` 可以是空的。手冊刻意把它們寫在最前面而不是讓使用者撞。
