@@ -116,12 +116,12 @@ func TestValidateRejectsInconsistentEvidence(t *testing.T) {
 	}
 	zero := 0
 	orphaned := state
-	orphaned.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-404", Revision: "abc", Result: Pass, ExitCode: &zero}}
+	orphaned.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-404", Revision: "abc", CandidateKind: CommitCandidate, Result: Pass, ExitCode: &zero}}
 	if err := orphaned.Validate(); err == nil {
 		t.Fatal("accepted evidence for an unknown work item")
 	}
 	unresulted := state
-	unresulted.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-001", Revision: "abc", Result: "MAYBE", ExitCode: &zero}}
+	unresulted.Evidence = []Evidence{{ID: "EV-001", Type: VerificationEvidence, WorkItemID: "WI-001", Revision: "abc", CandidateKind: CommitCandidate, Result: "MAYBE", ExitCode: &zero}}
 	if err := unresulted.Validate(); err == nil {
 		t.Fatal("accepted evidence with an unknown result")
 	}

@@ -35,13 +35,16 @@ const (
 
 // Evidence is an immutable record binding one outcome to one exact revision.
 type Evidence struct {
-	ID         string       `json:"id"`
-	Type       EvidenceType `json:"type"`
-	Repository string       `json:"repository"`
-	WorkItemID string       `json:"work_item_id"`
-	StoryRef   string       `json:"story_ref"`
-	Revision   string       `json:"revision"`
-	Command    string       `json:"command"`
+	ID              string        `json:"id"`
+	Type            EvidenceType  `json:"type"`
+	Repository      string        `json:"repository"`
+	WorkItemID      string        `json:"work_item_id"`
+	StoryRef        string        `json:"story_ref"`
+	Revision        string        `json:"revision"`
+	CandidateKind   CandidateKind `json:"candidate_kind"`
+	BaseRevision    string        `json:"base_revision"`
+	CandidateDigest string        `json:"candidate_digest"`
+	Command         string        `json:"command"`
 	// ExitCode is absent for an INTERRUPTED run: no result was produced, so there
 	// is no exit code. Recording a zero would read as success to anything that
 	// treats zero as passing.
@@ -60,6 +63,10 @@ type Evidence struct {
 	// and forbidden on Verification Evidence.
 	PR        string    `json:"pr"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+func (evidence Evidence) Candidate() Candidate {
+	return Candidate{Kind: evidence.CandidateKind, Revision: evidence.Revision, BaseRevision: evidence.BaseRevision, Digest: evidence.CandidateDigest}
 }
 
 // Verifiable reports whether a Work Item may enter a Verification Run. REVIEW is
@@ -132,17 +139,27 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 	if revision == "" {
 		return Evidence{}, errors.New("evidence requires a revision")
 	}
+	candidate := item.CurrentRun.Candidate()
+	if candidate.Revision != revision {
+		return Evidence{}, fmt.Errorf("verification result revision %q does not match the running candidate %q", revision, candidate.Revision)
+	}
+	if err := candidate.validate(); err != nil {
+		return Evidence{}, fmt.Errorf("verification candidate: %w", err)
+	}
 	evidence := Evidence{
-		ID:         s.takeEvidenceID(),
-		Type:       VerificationEvidence,
-		Repository: goal.Repository,
-		WorkItemID: item.ID,
-		StoryRef:   item.StoryRef,
-		Revision:   revision,
-		Command:    command,
-		ExitCode:   exitCode,
-		Result:     result,
-		CreatedAt:  now,
+		ID:              s.takeEvidenceID(),
+		Type:            VerificationEvidence,
+		Repository:      goal.Repository,
+		WorkItemID:      item.ID,
+		StoryRef:        item.StoryRef,
+		Revision:        revision,
+		CandidateKind:   candidate.Kind,
+		BaseRevision:    candidate.BaseRevision,
+		CandidateDigest: candidate.Digest,
+		Command:         command,
+		ExitCode:        exitCode,
+		Result:          result,
+		CreatedAt:       now,
 	}
 	s.Evidence = append(s.Evidence, evidence)
 	item.CurrentRun = nil
@@ -170,6 +187,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 		seen[record.ID] = true
 		if record.Revision == "" {
 			return fmt.Errorf("evidence %q has no revision", record.ID)
+		}
+		if err := record.Candidate().validate(); err != nil {
+			return fmt.Errorf("evidence %q has an invalid candidate: %w", record.ID, err)
 		}
 		switch record.Type {
 		case VerificationEvidence:
@@ -235,18 +255,26 @@ func parseEvidenceID(id string) (int, bool) {
 // reclaiming an orphan later points at where that run actually wrote, not at a
 // path re-derived from today's naming scheme.
 func (s *State) BeginVerification(id, revision, worktreePath, logPath string, now time.Time) error {
+	return s.BeginCandidateVerification(id, Candidate{Kind: CommitCandidate, Revision: revision}, worktreePath, logPath, now)
+}
+
+// BeginCandidateVerification fixes the immutable Candidate before the canonical
+// check starts. Later Evidence is derived from this Run value rather than from
+// live repository state.
+func (s *State) BeginCandidateVerification(id string, candidate Candidate, worktreePath, logPath string, now time.Time) error {
 	if err := s.Verifiable(id); err != nil {
 		return err
 	}
 	if s.item(id).CurrentRun != nil {
 		return fmt.Errorf("work item %q still has an unreclaimed verification run", id)
 	}
-	if revision == "" {
-		return errors.New("a verification run requires a revision")
+	if err := candidate.validate(); err != nil {
+		return fmt.Errorf("a verification run requires a valid candidate: %w", err)
 	}
 	item := s.item(id)
 	item.Status = Verifying
-	item.CurrentRun = &Run{Revision: revision, WorktreePath: worktreePath, LogPath: logPath, StartedAt: now}
+	item.CurrentRun = &Run{Revision: candidate.Revision, CandidateKind: candidate.Kind, BaseRevision: candidate.BaseRevision,
+		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, StartedAt: now}
 	item.UpdatedAt = now
 	return nil
 }
@@ -315,6 +343,11 @@ func (s *State) LatestReview(id string) (Evidence, bool) {
 // APPROVED records the judgement and nothing more here; whether it also completes
 // the work is decided by the completion conditions.
 func (s *State) RecordReview(id, revision string, result Result, reviewer, note, pullRequest string, now time.Time) (Evidence, error) {
+	return s.RecordCandidateReview(id, Candidate{Kind: CommitCandidate, Revision: revision}, result, reviewer, note, pullRequest, now)
+}
+
+// RecordCandidateReview binds a Human Review to the exact Candidate it judged.
+func (s *State) RecordCandidateReview(id string, candidate Candidate, result Result, reviewer, note, pullRequest string, now time.Time) (Evidence, error) {
 	item := s.item(id)
 	if item == nil {
 		return Evidence{}, fmt.Errorf("unknown work item %q", id)
@@ -331,8 +364,8 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note,
 	if goal == nil {
 		return Evidence{}, fmt.Errorf("work item %q has unknown goal", id)
 	}
-	if revision == "" {
-		return Evidence{}, errors.New("a review requires a revision")
+	if err := candidate.validate(); err != nil {
+		return Evidence{}, fmt.Errorf("a review requires a valid candidate: %w", err)
 	}
 	if reviewer == "" {
 		return Evidence{}, errors.New("a review requires a reviewer")
@@ -347,17 +380,20 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note,
 		return Evidence{}, fmt.Errorf("%q is not a pull request reference; expected owner/name#number", pullRequest)
 	}
 	evidence := Evidence{
-		ID:         s.takeEvidenceID(),
-		Type:       ReviewEvidence,
-		Repository: goal.Repository,
-		WorkItemID: item.ID,
-		StoryRef:   item.StoryRef,
-		Revision:   revision,
-		Result:     result,
-		Reviewer:   reviewer,
-		Note:       note,
-		PR:         pullRequest,
-		CreatedAt:  now,
+		ID:              s.takeEvidenceID(),
+		Type:            ReviewEvidence,
+		Repository:      goal.Repository,
+		WorkItemID:      item.ID,
+		StoryRef:        item.StoryRef,
+		Revision:        candidate.Revision,
+		CandidateKind:   candidate.Kind,
+		BaseRevision:    candidate.BaseRevision,
+		CandidateDigest: candidate.Digest,
+		Result:          result,
+		Reviewer:        reviewer,
+		Note:            note,
+		PR:              pullRequest,
+		CreatedAt:       now,
 	}
 	s.Evidence = append(s.Evidence, evidence)
 	if result == Rejected {
@@ -371,6 +407,28 @@ func (s *State) RecordReview(id, revision string, result Result, reviewer, note,
 		s.complete(id, now)
 	}
 	return evidence, nil
+}
+
+// ResolveReviewCandidate applies the distinct review targeting contracts. A
+// COMMIT review keeps the legacy clean-HEAD target supplied by the caller. A
+// SNAPSHOT review may only reuse the latest verified immutable snapshot when
+// the current workspace digest still matches it.
+func (s *State) ResolveReviewCandidate(id, expectedVerificationID, currentRevision, currentDigest string) (Candidate, error) {
+	latest, ok := s.LatestVerification(id)
+	if ok && latest.ID != expectedVerificationID {
+		return Candidate{}, errors.New("verification changed while preparing review; retry the review")
+	}
+	if !ok || latest.CandidateKind == CommitCandidate {
+		candidate := Candidate{Kind: CommitCandidate, Revision: currentRevision}
+		return candidate, candidate.validate()
+	}
+	if latest.CandidateKind != SnapshotCandidate {
+		return Candidate{}, fmt.Errorf("latest verification has unknown candidate kind %q", latest.CandidateKind)
+	}
+	if latest.CandidateDigest != currentDigest {
+		return Candidate{}, fmt.Errorf("workspace no longer matches verified snapshot; run forgepilot verify %s --snapshot", id)
+	}
+	return latest.Candidate(), nil
 }
 
 // prReference is the single accepted form of a PR Reference. Accepting only one
@@ -415,6 +473,12 @@ func (s *State) takeEvidenceID() string {
 // is not stale — it is unverified, which callers must present differently: an
 // absent result must never read as an untroubled one.
 func (s *State) Stale(id, revision string) bool {
+	return s.CandidateStale(id, revision, "")
+}
+
+// CandidateStale compares COMMIT Evidence with HEAD and SNAPSHOT Evidence with
+// the deterministic digest of the current workspace candidate.
+func (s *State) CandidateStale(id, revision, digest string) bool {
 	latest, ok := s.LatestVerification(id)
 	if !ok || revision == "" {
 		return false
@@ -424,6 +488,12 @@ func (s *State) Stale(id, revision string) bool {
 	// correspond to no action anyone should take (ADR-0006).
 	if s.WorkItemStatus(id) == Done {
 		return false
+	}
+	if latest.CandidateKind == SnapshotCandidate {
+		if digest == "" {
+			return false
+		}
+		return latest.CandidateDigest != digest
 	}
 	return latest.Revision != revision
 }

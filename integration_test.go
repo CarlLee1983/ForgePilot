@@ -479,11 +479,205 @@ func TestVerifyRunsOutsideTheMainWorktree(t *testing.T) {
 	}
 }
 
+func TestSnapshotVerificationAndReviewUseTheSameWorkingTreeCandidate(t *testing.T) {
+	root, binary := fixture(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forgepilot/\nignored.txt\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "candidate.txt"), []byte("base\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deleted.txt"), []byte("delete me\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@test \"$$(cat candidate.txt)\" = final\n\t@test -f added.txt\n\t@test ! -e deleted.txt\n\t@test ! -e ignored.txt\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	base := commitAll(t, root, "snapshot base")
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+
+	// One path carries both staged and unstaged edits; the candidate must contain
+	// the final workspace contents, not stop at the staged version.
+	if err := os.WriteFile(filepath.Join(root, "candidate.txt"), []byte("staged\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, root, "add", "candidate.txt")
+	if err := os.WriteFile(filepath.Join(root, "candidate.txt"), []byte("final\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "added.txt"), []byte("new\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ignored.txt"), []byte("runtime\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before := gitWorkspaceSurface(t, root)
+
+	output, err := command(binary, root, "verify", "WI-001", "--snapshot")
+	if err != nil {
+		t.Fatalf("snapshot verify = %q, %v", output, err)
+	}
+	for _, want := range []string{"Candidate: SNAPSHOT", "Revision: ", "Base: " + base, "PASS", "WI-001 REVIEW"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("snapshot verify output %q does not contain %q", output, want)
+		}
+	}
+	if after := gitWorkspaceSurface(t, root); after != before {
+		t.Fatalf("snapshot verify changed developer workspace\nwant:\n%s\ngot:\n%s", before, after)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification, ok := state.LatestVerification("WI-001")
+	if !ok || verification.CandidateKind != work.SnapshotCandidate || verification.BaseRevision != base || verification.CandidateDigest == "" {
+		t.Fatalf("snapshot verification evidence = %#v", verification)
+	}
+	if output := gitCommand(t, root, "cat-file", "-t", verification.Revision); strings.TrimSpace(output) != "commit" {
+		t.Fatalf("snapshot revision is not retained as a commit: %q", output)
+	}
+	if output, err := command(binary, root, "status"); err != nil || strings.Contains(output, "stale") {
+		t.Fatalf("unchanged snapshot status = %q, %v", output, err)
+	}
+
+	output, err = command(binary, root, "review", "approve", "WI-001")
+	if err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("snapshot review approve = %q, %v", output, err)
+	}
+	if after := gitWorkspaceSurface(t, root); after != before {
+		t.Fatalf("snapshot review changed developer workspace\nwant:\n%s\ngot:\n%s", before, after)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, ok := state.LatestReview("WI-001")
+	if !ok || review.Revision != verification.Revision || review.CandidateDigest != verification.CandidateDigest || review.CandidateKind != work.SnapshotCandidate {
+		t.Fatalf("review %#v does not bind verified snapshot %#v", review, verification)
+	}
+}
+
+func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
+	root, binary := fixture(t)
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	mustRun(t, binary, root, "verify", "WI-001", "--snapshot")
+
+	assertStale := func(want bool) {
+		t.Helper()
+		output, err := command(binary, root, "status")
+		if err != nil {
+			t.Fatalf("status = %q, %v", output, err)
+		}
+		if got := strings.Contains(output, "stale"); got != want {
+			t.Fatalf("status stale = %v, want %v: %q", got, want, output)
+		}
+	}
+	assertStale(false)
+
+	story := filepath.Join(root, "specs", "stories", "a.md")
+	if err := os.WriteFile(story, []byte("# changed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(true)
+	if err := os.WriteFile(story, []byte("# story\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(false)
+
+	added := filepath.Join(root, "after.txt")
+	if err := os.WriteFile(added, []byte("added\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(true)
+	if err := os.Remove(added); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(false)
+
+	deleted := filepath.Join(root, "specs", "stories", "b.md")
+	if err := os.Remove(deleted); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(true)
+	if err := os.WriteFile(deleted, []byte("# story\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(false)
+
+	if err := os.WriteFile(added, []byte("new candidate\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "review", "approve", "WI-001")
+	if err == nil || !strings.Contains(output, "workspace no longer matches verified snapshot") ||
+		!strings.Contains(output, "verify WI-001 --snapshot") {
+		t.Fatalf("review of changed workspace = %q, %v", output, err)
+	}
+	state, loadErr := storage.Load(root)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(state.Evidence) != 1 || state.WorkItemStatus("WI-001") != work.Review {
+		t.Fatalf("refused review changed state: %#v", state)
+	}
+
+	if output, err = command(binary, root, "verify", "WI-001", "--snapshot"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("reverify snapshot = %q, %v", output, err)
+	}
+	if output, err = command(binary, root, "review", "approve", "WI-001"); err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review after reverify = %q, %v", output, err)
+	}
+}
+
+func gitCommand(t *testing.T, root string, arguments ...string) string {
+	t.Helper()
+	output, err := exec.Command("git", append([]string{"-C", root}, arguments...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", arguments, err, output)
+	}
+	return string(output)
+}
+
+func gitWorkspaceSurface(t *testing.T, root string) string {
+	t.Helper()
+	index, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join([]string{
+		gitCommand(t, root, "status", "--porcelain=v1", "--untracked-files=all"),
+		gitCommand(t, root, "diff", "--binary"),
+		gitCommand(t, root, "diff", "--cached", "--binary"),
+		gitCommand(t, root, "rev-parse", "HEAD"),
+		gitCommand(t, root, "branch", "--show-current"),
+		string(index),
+	}, "\x00")
+}
+
 // startVerify launches a verification in the background and waits until state
 // shows the run in flight, so the test can observe or interrupt it.
 func startVerify(t *testing.T, binary, root, id string) *exec.Cmd {
 	t.Helper()
-	running := exec.Command(binary, "verify", id)
+	return startVerification(t, binary, root, "verify", id)
+}
+
+func startVerification(t *testing.T, binary, root string, arguments ...string) *exec.Cmd {
+	t.Helper()
+	if len(arguments) < 2 || arguments[0] != "verify" {
+		t.Fatalf("startVerification requires verify arguments, got %v", arguments)
+	}
+	workID := arguments[1]
+	running := exec.Command(binary, arguments...)
 	running.Dir = root
 	if err := running.Start(); err != nil {
 		t.Fatal(err)
@@ -493,7 +687,7 @@ func startVerify(t *testing.T, binary, root, id string) *exec.Cmd {
 		state, err := storage.Load(root)
 		if err == nil {
 			for _, item := range state.WorkItems {
-				if item.ID == id && item.CurrentRun != nil && item.Status == work.Verifying {
+				if item.ID == workID && item.CurrentRun != nil && item.Status == work.Verifying {
 					return running
 				}
 			}
@@ -501,8 +695,60 @@ func startVerify(t *testing.T, binary, root, id string) *exec.Cmd {
 		time.Sleep(20 * time.Millisecond)
 	}
 	_ = running.Process.Kill()
-	t.Fatalf("%s never entered VERIFYING", id)
+	t.Fatalf("%v never entered VERIFYING", arguments)
 	return nil
+}
+
+func TestSnapshotVerificationStaysSerializedAndReclaimsInterruptedCandidate(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, "verify:\n\t@echo snapshot started\n\t@sleep 30\n")
+	if err := os.WriteFile(filepath.Join(root, "dirty.txt"), []byte("candidate\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	running := startVerification(t, binary, root, "verify", "WI-001", "--snapshot")
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := state.WorkItems[0].CurrentRun
+	if run == nil || run.CandidateKind != work.SnapshotCandidate || run.CandidateDigest == "" || run.BaseRevision == "" {
+		t.Fatalf("snapshot current run = %#v", run)
+	}
+	interruptedCandidate := run.Candidate()
+	if output, err := command(binary, root, "verify", "WI-001", "--snapshot"); err == nil {
+		t.Fatalf("concurrent snapshot verify succeeded: %s", output)
+	}
+	if err := running.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.Wait()
+
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(passingVerify), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "verify", "WI-001", "--snapshot")
+	if err != nil || !strings.Contains(output, "INTERRUPTED") || !strings.Contains(output, "PASS") {
+		t.Fatalf("snapshot verify after interruption = %q, %v", output, err)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var interrupted *work.Evidence
+	for i := range state.Evidence {
+		if state.Evidence[i].Result == work.Interrupted {
+			interrupted = &state.Evidence[i]
+			break
+		}
+	}
+	if interrupted == nil || interrupted.Candidate() != interruptedCandidate {
+		t.Fatalf("INTERRUPTED evidence %#v does not preserve run candidate %#v", interrupted, interruptedCandidate)
+	}
 }
 
 func TestVerifyIsVisibleConcurrentAndRecoversFromInterruption(t *testing.T) {

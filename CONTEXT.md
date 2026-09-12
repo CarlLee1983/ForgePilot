@@ -19,10 +19,13 @@ _Avoid_：自動核准、驗證失敗、Goal 層級的阻擋
 **Human Decision**：對某個 Gate 所記錄的選擇——選定其列出的選項之一，連同自述的決策者身分。
 _Avoid_：Agent 推測、默認同意、自由作答、經過認證的身分
 
-**Evidence**：針對特定工作與 revision 保存的驗證或審查紀錄；可能成功、失敗，或因中斷而未產生結果。它綁定的是一個 revision 與一個時間，不表達工作發生的先後。
+**Candidate**：Verification 與 Human Review 所共同判斷的 immutable code identity；可以是既有 commit，也可以是從 working tree 固定下來的 snapshot。它不是 Work Item 的狀態或可變 target。
+_Avoid_：branch、working tree 本身、WIP commit、第二套 lifecycle
+
+**Evidence**：針對特定工作與 Candidate 保存的驗證或審查紀錄；可能成功、失敗，或因中斷而未產生結果。它綁定的是一個 immutable revision 與一個時間，不表達工作發生的先後。
 _Avoid_：完成宣告、Agent 自評、工作的時序、補跑與當下執行的區別
 
-**Verification**：對某個確切 revision 執行 repository 自己定義的 canonical 檢查，其結果構成 Evidence。
+**Verification**：對某個確切 Candidate 執行 repository 自己定義的 canonical 檢查，其結果構成 Evidence。
 _Avoid_：Agent 自我測試、臨時指定的 shell command
 
 **Verification Log**：一次 Verification Run 的原始輸出，以該次執行為鍵保存在 state 之外。它是事後診斷用的材料，不是結論——結論只在 Evidence 裡。
@@ -31,10 +34,10 @@ _Avoid_：Evidence、驗證結果、完成宣告
 **Verification Run**：一次進行中的 Verification。它是短暫的，可能因中斷而結束並且不留下成功或失敗的結論。
 _Avoid_：Evidence、VERIFYING 狀態本身
 
-**Stale**：既有 Evidence 所綁定的 revision 已不是目前的 revision，因而不適用於當下。DONE 的工作不標示 stale——它已在某個確切 revision 上完成，重驗的提示對它不對應任何行動。
+**Stale**：既有 Verification Evidence 所綁定的 Candidate 已不符合目前 workspace；commit candidate 比較 HEAD，snapshot candidate 比較自動計算的 digest。DONE 的工作不標示 stale——它已在某個確切 Candidate 上完成，重驗的提示對它不對應任何行動。
 _Avoid_：失效、FAIL、需要重做
 
-**Revision Identity**：Evidence 所對應的精確工程版本身分；完成與審查涉及 repository、Story 與完整 commit SHA。PR Reference 附加於審查紀錄上作為識別，不構成版本身分的一部分——同一個 commit 在哪個 PR 下被審查，不改變被審查的內容。
+**Revision Identity**：Candidate 的 immutable Git revision；一般 candidate 是既有 commit SHA，snapshot candidate 是由 ForgePilot 保留的 snapshot commit SHA。PR Reference 附加於審查紀錄上作為識別，不構成版本身分的一部分。
 _Avoid_：最新版本、branch name、PR number 單獨作為版本身分
 
 **PR Reference**：一筆 Human Review 所聲明的 pull request 出處，形式為 `owner/name#number`。它是使用者輸入的識別字串；ForgePilot 只驗格式，不查證該 PR 存在或其 HEAD 為何。

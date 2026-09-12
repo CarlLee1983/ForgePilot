@@ -118,6 +118,28 @@ func upgrade(contents []byte, from int) (work.State, error) {
 	// decodes with an empty one — that is the honest fact that its output was
 	// never streamed anywhere, not something a step needs to fill in. The
 	// version bump below is the whole upgrade.
+	if from < 6 {
+		// v5 → v6 makes the code identity kind explicit. Every earlier run and
+		// Evidence record targeted HEAD, so its existing revision is a COMMIT
+		// candidate. This is a schema migration, not a reinterpretation at read
+		// time; older and newer binaries continue to reject each other's state.
+		for i := range state.Evidence {
+			if state.Evidence[i].CandidateKind != "" || state.Evidence[i].BaseRevision != "" || state.Evidence[i].CandidateDigest != "" {
+				return work.State{}, fmt.Errorf("state declares schema version %d but already carries candidate identity; refusing to migrate over it", from)
+			}
+			state.Evidence[i].CandidateKind = work.CommitCandidate
+		}
+		for i := range state.WorkItems {
+			run := state.WorkItems[i].CurrentRun
+			if run == nil {
+				continue
+			}
+			if run.CandidateKind != "" || run.BaseRevision != "" || run.CandidateDigest != "" {
+				return work.State{}, fmt.Errorf("state declares schema version %d but an in-flight run already carries candidate identity; refusing to migrate over it", from)
+			}
+			run.CandidateKind = work.CommitCandidate
+		}
+	}
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

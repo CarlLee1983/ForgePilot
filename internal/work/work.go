@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 type GoalStatus string
 
@@ -61,8 +61,11 @@ type Item struct {
 // the run produces Evidence, so a non-nil value after the runner has exited marks
 // an orphan awaiting reclamation.
 type Run struct {
-	Revision     string `json:"revision"`
-	WorktreePath string `json:"worktree_path"`
+	Revision        string        `json:"revision"`
+	CandidateKind   CandidateKind `json:"candidate_kind"`
+	BaseRevision    string        `json:"base_revision"`
+	CandidateDigest string        `json:"candidate_digest"`
+	WorktreePath    string        `json:"worktree_path"`
 	// LogPath records where this run's verification output is being streamed, so
 	// that reclaiming an orphan points at where it actually wrote rather than a
 	// path re-derived from today's naming scheme. It is written when the run
@@ -70,6 +73,10 @@ type Run struct {
 	// Evidence. See docs/adr/0012-verification-log-outside-state.md.
 	LogPath   string    `json:"log_path"`
 	StartedAt time.Time `json:"started_at"`
+}
+
+func (run Run) Candidate() Candidate {
+	return Candidate{Kind: run.CandidateKind, Revision: run.Revision, BaseRevision: run.BaseRevision, Digest: run.CandidateDigest}
 }
 
 type State struct {
@@ -246,6 +253,17 @@ func (s State) Validate() error {
 		case Pending, Ready, Running, Verifying, Review, Done:
 		default:
 			return fmt.Errorf("invalid status for %q", item.ID)
+		}
+		if item.Status == Verifying && item.CurrentRun == nil {
+			return fmt.Errorf("work item %q is VERIFYING without a current run", item.ID)
+		}
+		if item.Status != Verifying && item.CurrentRun != nil {
+			return fmt.Errorf("work item %q is %s but carries a current run", item.ID, item.Status)
+		}
+		if item.CurrentRun != nil {
+			if err := item.CurrentRun.Candidate().validate(); err != nil {
+				return fmt.Errorf("work item %q has an invalid current run candidate: %w", item.ID, err)
+			}
 		}
 		if _, exists := items[item.ID]; exists {
 			return fmt.Errorf("duplicate work item %q", item.ID)

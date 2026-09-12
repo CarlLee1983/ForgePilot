@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M5 已全部完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M5 與 P0-001 Candidate Snapshot 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -15,6 +15,7 @@ M1–M5 已全部完成。本文件供後續開發拆分工作、驗收與交接
 | M3 — Human Gate & Review | Gate、Decision、Human Review、DONE 與依賴解鎖 | 合法完成 A 後 B 可執行；未 review 不可 DONE |
 | M4 — PR exact-head review integration | PR number＋HEAD SHA review target | 新 HEAD 必須重新取得適用 review Evidence |
 | M5 — Verification diagnosability & review clarity | review 拒絕訊息說出當下動作、verification 輸出串流成 state 之外的 log | 非 PASS 執行的輸出可從落地 log 重讀；review 與 verify 的髒工作樹拒絕訊息各自說出正在做的事 |
+| P0-001 — Working Tree Candidate Snapshot | `verify --snapshot`、Candidate identity、snapshot-aware review／stale | 不製造 WIP commit 也能讓 Verification 與 Human Review 判斷完全相同的 immutable candidate |
 
 M1 通過後才開始 M2，依此類推至 M5；M1–M4 已完成，M5 開工前定案完成後才開始實作。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
 
@@ -382,6 +383,32 @@ issue #9，`work add` 的提示改善見 issue #10，ForgeFlow Story 定義與�
 「是否自我套用 ForgeFlowV2」的未決問題、以及 Evidence 不承諾工作時序這三件事的文件記錄
 見 issue #12；issue #11（事後補跑與邊做邊跑在 state 裡分辨不出來）的關閉結論記在
 [ADR-0012](adr/0012-verification-log-outside-state.md)。
+
+## P0-001 — Working Tree Candidate Snapshot
+
+CLI 契約：
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot verify <work-id>` | 保持既有 clean workspace → HEAD → detached worktree → `make verify`，Evidence candidate kind 為 `COMMIT` |
+| `forgepilot verify <work-id> --snapshot` | 從目前 working tree 建立 immutable `SNAPSHOT` candidate，輸出 Candidate、snapshot Revision、Base 與 Log，再執行相同 canonical check |
+| `forgepilot review approve/reject <work-id>` | 最新 Verification 為 `COMMIT` 時保持 clean HEAD；為 `SNAPSHOT` 時重算 workspace digest，相同才把 review 綁回已驗證的 snapshot revision，不同則拒絕且不留 Evidence |
+| `forgepilot status` | `COMMIT` 以 HEAD、`SNAPSHOT` 以 workspace candidate digest 判斷 stale；DONE 仍不標 stale |
+
+Schema 升至 v6：`current_run` 與 Evidence 增加 `candidate_kind`、`base_revision`、`candidate_digest`。`migrate` 將 v5 與更舊版本的既有 revision 明確標成 `COMMIT`，先留下 `state.json.v<n>.bak`；不查 Git、不重寫舊 Evidence 的 revision 或結果。rollback 是還原備份；已建立的 local snapshot refs 可留存。
+
+驗收矩陣：
+
+- Legacy clean-HEAD verification、review、stale 與 completion 行為不變。
+- Snapshot 收進 tracked staged／unstaged 修改、同檔 staged＋unstaged 最終內容、tracked deletion、non-ignored untracked；ignored untracked 排除。
+- capture 前後 branch、HEAD、real index、staging diff、unstaged diff、working files 相同；canonical check 在 snapshot detached worktree 執行，Evidence revision 等於該 checkout。
+- snapshot ref 在命令結束後仍可解析及 checkout，不建立 branch／tag、不發網路請求。
+- 同一 workspace fresh；修改、新增、刪除使 digest 改變並呈現 stale；review 拒絕變更後的 workspace，re-verify 新 snapshot 後可 review。
+- PASS＋APPROVED 綁同一 snapshot revision 時仍由既有 completion invariant 進 DONE。
+- 同 Work Item 的 snapshot verification 仍由既有 flock serialization；中斷後 append `INTERRUPTED` 並保存原 run candidate。
+- v5 migration 保存 Goal、Work Item、Evidence、Gate 與 in-flight run，並將舊 candidate 明確標成 `COMMIT`。
+
+Snapshot retention／GC、cloud／GitHub integration、network request、自動 commit／PR、ForgeFlowV2 readiness 與其他 CLI 擴充不在 P0-001。
 
 ## 每階段交付格式
 

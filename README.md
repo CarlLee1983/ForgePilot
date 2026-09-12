@@ -26,7 +26,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 ## 目前狀態
 
-**M1–M4 已全部實作並通過 `make verify`。**
+**M1–M5 與 P0-001 Candidate Snapshot 已實作。**
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
@@ -35,6 +35,8 @@ M2 加上 `forgepilot verify`：在隔離的 detached worktree 對確切的 comm
 M3 接上工作真正能完成的那條線：`gate` 讓需要人判斷的問題被記錄下來並確實擋住工作，`review` 記錄人對某個確切 revision 的 APPROVED／REJECTED，`goal` 讓 Goal 能被暫停、取消或宣告完成。條件滿足時 `review approve` 在同一次交易內讓工作進入 DONE 並解鎖下游依賴——佇列因此第一次會前進。
 
 M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review approve` 與 `review reject` 接受選填的 `--pr owner/name#number`，該值連同確切的 commit SHA 一起存進 Evidence。ForgePilot **不去 GitHub 查證**那個 PR——它不發出任何網路請求（[ADR-0010](docs/adr/0010-no-outbound-network-requests.md)），只驗格式。PR 是識別資料，不參與完成或 stale 的判定（[ADR-0011](docs/adr/0011-pr-identity-does-not-gate-completion.md)）；「HEAD 一變就是新的 review target」由既有的 SHA 比對成立。
+
+P0-001 新增 `forgepilot verify WI-001 --snapshot`：不需要先製造 WIP commit，就能把 staged、unstaged、tracked deletion 與 non-ignored untracked content 固定成 immutable local Candidate，再讓 Verification 與 Human Review 綁定同一個 snapshot revision。既有不帶 flag 的 clean-HEAD verification 完全保留。
 
 初始支援平台是 macOS 的本機檔案系統，使用 Go 1.25.5。state 由程序鎖與原子替換保護；其他平台尚未宣稱支援。
 
@@ -45,7 +47,7 @@ M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review ap
 | [Domain vocabulary](CONTEXT.md) | 統一核心名詞，避免把 Story 與 Work Item 混用 |
 | [Architecture](docs/architecture.md) | 責任邊界、資料模型、狀態規則、持久化與 revision 契約 |
 | [Development plan](docs/development-plan.md) | Milestone、開發順序、CLI 契約、測試與驗收清單 |
-| [Decision records](docs/adr/README.md) | 不易反轉的決定與其失效條件，共 11 份 |
+| [Decision records](docs/adr/README.md) | 不易反轉的決定與其失效條件 |
 | [架構圖](docs/diagrams/README.md) | 狀態機、分層、交易邊界與兩條主要流程的視覺化 |
 | [專案導覽](docs/show-me-forgepilot.html) | 一頁講完問題、核心概念、四個 milestone 與關鍵決定 |
 | [AGENTS.md](AGENTS.md) | 接手這個 repo 的 Agent 該先知道的事：邊界、地雷與工作方式 |
@@ -87,7 +89,7 @@ forgepilot status
 
 此時保存的是 `WI-001 = RUNNING`、`WI-002 = PENDING`。重新啟動 CLI 後，`status` 應呈現相同狀態。`next` 只選取 READY 工作，不負責續接已在 RUNNING 的工作。
 
-Agent 完成實作並 commit 之後：
+Agent 可以選擇驗證已提交 revision：
 
 ```bash
 forgepilot verify WI-001
@@ -96,6 +98,16 @@ forgepilot verify WI-001
 ForgePilot 會確認工作樹乾淨、解析目前的 HEAD，在 `.forgepilot/worktrees/` 底下建立該 commit 的 detached worktree，於其中執行你的專案所定義的 `make verify`，然後保存 Evidence。通過則 `WI-001` 進入 REVIEW，失敗則退回 RUNNING 讓 Agent 繼續修。
 
 因為驗證跑在隔離的 checkout，**你的 `make verify` 必須能在全新 checkout 上執行**——需要 `.env`、本機已安裝依賴或既有 build cache 的專案會失敗。這與 CI 的要求相同。工作樹不乾淨（含未追蹤檔案）時 `verify` 會拒絕執行，因為 commit 無法描述未提交的內容。
+
+若要直接驗證目前 working tree，不先建立 WIP commit：
+
+```bash
+forgepilot verify WI-001 --snapshot
+```
+
+ForgePilot 會用 private Git index 建立 local immutable snapshot commit，收進 tracked staged／unstaged 修改、tracked deletion 與 non-ignored untracked files；ignored runtime artifacts 不會進入 snapshot（已 tracked 的內容除外）。current branch、HEAD、real index、staging state 與 working files 在 capture 前後保持不變。snapshot 以 `refs/forgepilot/snapshots/` 保留，不建立 branch 或 tag，也不發網路請求。
+
+Snapshot PASS 後，`status` 以目前 workspace 的自動 digest 判斷 freshness，不會因 snapshot revision 本來就不同於 HEAD 而立刻標 stale。`review approve`／`reject` 也會重算同一 digest：workspace 未變就把 review 綁回已驗證的 snapshot revision；若已改變則拒絕並要求重新執行 `verify WI-001 --snapshot`。
 
 之後每新增一個 commit，`status` 就會把先前的 PASS 標示為 stale：它保留為歷史，但不適用於新的 revision，要重新取得適用的 Evidence 就再跑一次 `verify`。
 

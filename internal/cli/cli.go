@@ -35,7 +35,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   work add --goal <id> --story <path> [--depends-on <work-id>]
   next                              print the next READY work item
   start <work-id>                   move a READY work item to RUNNING
-  verify <work-id>                  run the project's make verify against HEAD and record evidence
+  verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
   review <approve|reject> <work-id> [--pr <owner/name#number>]
@@ -237,7 +237,7 @@ func next(args []string, root string, output io.Writer) error {
 	}
 	revision, _ := repository.Head(root)
 	_, err = fmt.Fprintf(output, "Next: %s\nGoal: %s\nStory: %s\nVerification: %s\nReason: earliest READY work\n",
-		item.ID, item.GoalID, item.StoryRef, verificationSummary(&state, item.ID, revision))
+		item.ID, item.GoalID, item.StoryRef, verificationSummary(&state, item.ID, revision, ""))
 	return err
 }
 
@@ -263,6 +263,16 @@ func status(args []string, root string, output io.Writer) error {
 	// Staleness needs the current revision, but a repository without one is not
 	// an error for a query: report what is known and omit the comparison.
 	revision, _ := repository.Head(root)
+	digest := ""
+	for _, item := range state.WorkItems {
+		latest, ok := state.LatestVerification(item.ID)
+		if item.Status != work.Done && ok && latest.CandidateKind == work.SnapshotCandidate {
+			if workspace, inspectErr := repository.InspectSnapshot(root); inspectErr == nil {
+				revision, digest = workspace.BaseRevision, workspace.Digest
+			}
+			break
+		}
+	}
 	for _, goal := range state.Goals {
 		heading := fmt.Sprintf("Goal %s %s: %s", goal.ID, goal.Status, goal.Title)
 		if goal.Reason != "" {
@@ -284,7 +294,7 @@ func status(args []string, root string, output io.Writer) error {
 				note = " (runner is gone; run forgepilot verify to recover)"
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
-				verificationSummary(&state, item.ID, revision), reviewSummary(&state, item.ID)); err != nil {
+				verificationSummary(&state, item.ID, revision, digest), reviewSummary(&state, item.ID)); err != nil {
 				return err
 			}
 			if unfinished := completionSummary(&state, item.ID); unfinished != "" {
@@ -343,14 +353,21 @@ func now() time.Time                          { return time.Now().UTC() }
 
 // verificationSummary describes a Work Item's latest Verification Evidence. Work
 // that has never been verified says so explicitly: silence would read as approval.
-func verificationSummary(state *work.State, id, revision string) string {
+func verificationSummary(state *work.State, id, revision, digest string) string {
 	latest, ok := state.LatestVerification(id)
 	if !ok {
 		return "not verified"
 	}
 	summary := fmt.Sprintf("%s %s at %s", latest.ID, latest.Result, shortRevision(latest.Revision))
-	if state.Stale(id, revision) {
-		summary += fmt.Sprintf(" (stale; HEAD is now %s)", shortRevision(revision))
+	if latest.CandidateKind == work.SnapshotCandidate {
+		summary = fmt.Sprintf("%s %s snapshot %s", latest.ID, latest.Result, shortRevision(latest.Revision))
+	}
+	if state.CandidateStale(id, revision, digest) {
+		if latest.CandidateKind == work.SnapshotCandidate {
+			summary += " (stale; workspace no longer matches verified snapshot)"
+		} else {
+			summary += fmt.Sprintf(" (stale; HEAD is now %s)", shortRevision(revision))
+		}
 	}
 	return summary
 }

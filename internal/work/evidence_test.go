@@ -14,7 +14,7 @@ import (
 func TestV3EvidenceCarriesEmptyReviewFields(t *testing.T) {
 	zero := 0
 	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
 		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
 	encoded, err := json.Marshal(verification)
 	if err != nil {
@@ -327,7 +327,7 @@ func TestCompletedWorkIsNeverStale(t *testing.T) {
 func TestV4EvidenceCarriesEmptyPRReference(t *testing.T) {
 	zero := 0
 	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
 		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
 	encoded, err := json.Marshal(verification)
 	if err != nil {
@@ -432,7 +432,7 @@ func TestPRReferenceMustBeOwnerNameNumber(t *testing.T) {
 func TestLoadedEvidenceWithAMalformedPRIsRejected(t *testing.T) {
 	items := map[string]Item{"WI-001": {ID: "WI-001"}}
 	review := Evidence{ID: "EV-001", Type: ReviewEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
 		Result: Approved, Reviewer: "carl@example.com", CreatedAt: time.Now().UTC()}
 	if err := validateEvidence([]Evidence{review}, 2, items); err != nil {
 		t.Fatal(err)

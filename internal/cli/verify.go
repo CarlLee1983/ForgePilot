@@ -13,19 +13,20 @@ import (
 )
 
 func verify(args []string, root string, output io.Writer) error {
-	if len(args) != 1 {
-		return errors.New("usage: forgepilot verify <work-id>")
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && args[1] != "--snapshot") {
+		return errors.New("usage: forgepilot verify <work-id> [--snapshot]")
 	}
 	id := args[0]
+	snapshot := len(args) == 2
 	// Holding the Work Item's verification lock for the whole command is what
 	// makes reclaiming an orphan safe: while it is held, no other live runner can
 	// exist, so a run still recorded in state must be abandoned.
 	return storage.WithVerifyLock(root, id, func() error {
-		return runVerification(id, root, output)
+		return runVerification(id, root, output, snapshot)
 	})
 }
 
-func runVerification(id, root string, output io.Writer) error {
+func runVerification(id, root string, output io.Writer, snapshot bool) error {
 	// An abandoned run is a fact that already happened, so it is recorded before
 	// anything is allowed to refuse the command: a block stops new work, not the
 	// recording of what is already over. Reclaiming is never quiet — it is
@@ -42,22 +43,34 @@ func runVerification(id, root string, output io.Writer) error {
 	if err := state.CanBeginVerification(id); err != nil {
 		return err
 	}
-	if err := repository.EnsureClean(root, "verifying"); err != nil {
-		return err
-	}
-	revision, err := repository.Head(root)
-	if err != nil {
-		return err
+	startedAt := now()
+	candidate := work.Candidate{Kind: work.CommitCandidate}
+	if snapshot {
+		captured, err := repository.CaptureSnapshot(root, id, startedAt)
+		if err != nil {
+			return err
+		}
+		candidate = work.Candidate{Kind: work.SnapshotCandidate, Revision: captured.Revision,
+			BaseRevision: captured.BaseRevision, Digest: captured.Digest}
+	} else {
+		if err := repository.EnsureClean(root, "verifying"); err != nil {
+			return err
+		}
+		revision, err := repository.Head(root)
+		if err != nil {
+			return err
+		}
+		candidate.Revision = revision
 	}
 
 	// The canonical check is looked for in the isolated checkout, not the user's
 	// worktree: those are different file trees, and only the checkout holds what
 	// the recorded revision actually contains.
-	worktree := worktreePath(root, id, revision)
+	worktree := worktreePath(root, id, candidate.Revision)
 	if err := repository.PruneWorktrees(root); err != nil {
 		return err
 	}
-	if err := repository.AddWorktree(root, worktree, revision); err != nil {
+	if err := repository.AddWorktree(root, worktree, candidate.Revision); err != nil {
 		return err
 	}
 	if err := repository.EnsureCanonicalCheck(worktree); err != nil {
@@ -76,18 +89,22 @@ func runVerification(id, root string, output io.Writer) error {
 	// The log is opened, and its path printed, before anything about the run is
 	// recorded: a log that cannot be created must abort the command before any
 	// state is written or Evidence appended, not degrade into a run with no log.
-	startedAt := now()
-	logFile := logPath(root, id, revision, startedAt)
+	logFile := logPath(root, id, candidate.Revision, startedAt)
 	log, err := repository.OpenLog(logFile)
 	if err != nil {
 		return err
 	}
 	defer log.Close()
+	if snapshot {
+		if _, err := fmt.Fprintf(output, "Candidate: SNAPSHOT\nRevision: %s\nBase: %s\n", candidate.Revision, candidate.BaseRevision); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(output, "Log: %s\n", logFile); err != nil {
 		return err
 	}
 
-	if err := beginRun(id, root, revision, worktree, logFile, startedAt); err != nil {
+	if err := beginRun(id, root, candidate, worktree, logFile, startedAt); err != nil {
 		return err
 	}
 	exitCode, runErr := repository.RunCanonicalCheck(worktree, log)
@@ -99,7 +116,7 @@ func runVerification(id, root string, output io.Writer) error {
 	var status work.Status
 	if err := storage.Update(root, func(state *work.State) error {
 		var recordErr error
-		evidence, recordErr = state.RecordVerification(id, revision, repository.CanonicalCommand, exitCode, now())
+		evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, now())
 		if recordErr == nil {
 			status = state.WorkItemStatus(id)
 		}
@@ -151,9 +168,9 @@ func reclaimOrphan(id, root string, output io.Writer) error {
 // beginRun marks a new Verification Run in flight. Any abandoned run has already
 // been closed out by reclaimOrphan, so a Work Item is never left with neither an
 // outcome for its old run nor a record of its new one.
-func beginRun(id, root, revision, worktree, logFile string, startedAt time.Time) error {
+func beginRun(id, root string, candidate work.Candidate, worktree, logFile string, startedAt time.Time) error {
 	return storage.Update(root, func(state *work.State) error {
-		return state.BeginVerification(id, revision, worktree, logFile, startedAt)
+		return state.BeginCandidateVerification(id, candidate, worktree, logFile, startedAt)
 	})
 }
 

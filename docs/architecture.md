@@ -2,7 +2,7 @@
 
 ## 文件狀態與範圍
 
-MVP 的 M1–M5 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
+MVP 的 M1–M5 與 P0-001 Candidate Snapshot 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
@@ -13,7 +13,7 @@ MVP 的 M1–M5 已依本文件實作。原始專案需求是產品邊界；標�
 | 擁有者 | 責任 |
 |---|---|
 | Human | Goal approval、架構／範圍／安全判斷、production operation、merge／release authorization |
-| ForgePilot | Goal、工作佇列、狀態、Gate、Evidence index、revision identity、next-work selection |
+| ForgePilot | Goal、工作佇列、狀態、Gate、Evidence index、Candidate identity、next-work selection |
 | ForgeFlowV2 | Story schema、acceptance criteria、工程流程、coding standards、測試與驗證契約、人工審查原則 |
 | Repository | 程式碼、tests、formatters、linters、type／architecture checks、canonical `make verify` |
 | Agent | 讀取 Story、實作、修復、推理與工具操作 |
@@ -47,10 +47,10 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/Forg
 |---|---|---|
 | Goal | `id`, `title`, `description`, `repository`, `status`, `created_at`, `updated_at` | M1 |
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
-| Work Item run | `current_run`（revision、worktree path、started_at、log path；閒置時為 null） | M2；`log path` 於 M5 加入（schema v5） |
+| Work Item run | `current_run`（Candidate identity、worktree path、started_at、log path；閒置時為 null） | M2；`log path` 於 M5、Candidate kind／base／digest 於 P0-001 加入 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
 | Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`rationale`（開啟時的說明）、`options`（至少兩個）、`status`、`opened_at`，以及關閉時的 `choice`／`note`（resolve）或 `reason`（cancel）、`decided_by`、`decided_at` | M3 |
-| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 commit SHA、`result`、timestamp；verification 另有 `command` 與 `exit_code`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起 |
+| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 Candidate identity、`result`、timestamp；verification 另有 `command` 與 `exit_code`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起；Candidate kind／base／digest 於 P0-001 加入 |
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
@@ -182,6 +182,20 @@ Schema v5 相對 v4 只有新增：`schema_version` 改為 5，Work Item 的 `cu
 
 `logs/` 由 ForgePilot 寫入、不自動清理，也不提供清理指令；`.forgepilot/` 已被忽略，成長由使用者處理。理由與備選見 [ADR-0012](adr/0012-verification-log-outside-state.md)。
 
+### P0-001 Candidate Snapshot 與 schema v6
+
+Candidate 是 Evidence 所針對的 immutable code identity，不是另一套 workflow state。`COMMIT` candidate 只有既有 revision；`SNAPSHOT` candidate 另保存建立時的 `base_revision` 與 ForgePilot 自動計算的 `candidate_digest`，其 `revision` 是可 checkout 的 snapshot commit。Candidate 只存在於 `current_run` 與 Evidence，不放到 Work Item 本身；Verification 結束或中斷時，Evidence 從已固定的 run candidate 取得 identity，不重新讀取 live workspace。
+
+`verify <work-id>` 保持 M2 契約：要求 clean workspace，解析 HEAD，對 detached checkout 執行 `make verify`。`verify <work-id> --snapshot` 使用 temporary index，從 HEAD seed 後以 `git add -A` 收進 tracked staged／unstaged 修改、tracked deletion 與 non-ignored untracked files；ignored untracked files 不進 candidate，原本 tracked 的內容仍會進。這個過程不修改 current branch、HEAD、real index、staging state 或 working files。
+
+snapshot tree 先形成 immutable commit，再以 `refs/forgepilot/snapshots/<work-id>/...` 保留，之後才開始 Verification Run。ref 不屬於 branch、tag 或正常 commit history，而且只存在本機；即使後續 canonical check 拒絕、FAIL 或 state 寫入失敗，也不刪除已建立的 ref，以免產生 state 指向會被 GC 回收的 object。完整 retention／GC policy 不在本 ticket。
+
+digest 是 `sha256:` 加 lowercase hex，涵蓋版本化格式、base revision 與依 path 排序的 Git tree entry（relative path、mode、type、object identity）；Git blob/tree identity cryptographically 綁定內容，因此不讀 mtime、absolute path、temporary directory 或 filesystem enumeration order。`status` 與 review 重算 digest 時另用 temporary object database，避免查詢本身把 loose objects 寫進 repository。
+
+Snapshot PASS 後，stale 以目前 workspace digest 是否仍等於 Verification Evidence 判斷，不以 snapshot revision 是否等於 HEAD 判斷。Snapshot review 同樣先重算 digest：相同就把 Human Review 綁回已驗證的 snapshot revision；不同就拒絕且不 append Evidence，要求重新執行 `verify <work-id> --snapshot`。`COMMIT` review 維持 clean workspace＋HEAD 的既有行為。DONE 的條件仍是最新 PASS 與最新 APPROVED 的 `revision` 相同、無 unresolved Gate、Goal ACTIVE；Candidate Snapshot 沒有第二條 completion lifecycle。
+
+Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_revision`、`candidate_digest`。v5→v6 migration 不查 Git，而是把所有舊 run／Evidence 的既有 revision 明確標成 `COMMIT`；舊 binary 拒讀 v6，新 binary 拒讀未 migration 的 v5。migration 前備份 `state.json.v5.bak`，rollback 必須還原該備份；snapshot refs 可以留在本機，不影響舊版 commit-only 流程。決定與失效條件見 [ADR-0014](adr/0014-working-tree-snapshot-is-a-candidate.md)。
+
 ## Verification 與 exact revision：M2 起
 
 Verification Evidence 必須至少保存 repository、Work Item、Story、完整 commit SHA、實際 command、exit code 與 timestamp。`result` 有三個值：`PASS`、`FAIL`、`INTERRUPTED`。INTERRUPTED 沒有 exit code（欄位為 null）——未產生結果就沒有結果碼，填 0 會被讀成成功。FAIL 與 INTERRUPTED 同樣 append；既有 Evidence 不覆寫。INTERRUPTED 表示未產生結果，不得視為 FAIL。
@@ -204,7 +218,7 @@ HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revisi
 
    回收發生在任何拒絕之前，且不受 Gate 或 Goal 狀態約束——中斷是已經發生的事實，而阻擋擋的是開始新的執行。因此被拒絕的 `verify` 在有孤兒時會寫入那一筆 INTERRUPTED（並印在輸出上），在沒有孤兒時什麼都不寫。見 [ADR-0009](adr/0009-reclaim-before-refusing.md)。
 4. **Crash consistency**：Evidence 保存在 `state.json` 內，與 Work Item 共用同一次受鎖的原子替換，因此不存在單邊寫入的中間態。見 [ADR-0001](adr/0001-evidence-in-state-snapshot.md)。
-5. **Stale 觸發**：Stale 定義為最新一筆 Verification Evidence 的 SHA 不等於目前 HEAD。它不造成任何自動 transition；REVIEW → VERIFYING 只由明確的 `verify` 命令推動。`next` 與 `status` 呈現 stale 但不寫入。
+5. **Stale 觸發**：M2 的 COMMIT Evidence 以 SHA 是否等於目前 HEAD 判斷；P0-001 的 SNAPSHOT Evidence 改以 candidate digest 是否等於目前 workspace 判斷。它不造成任何自動 transition；REVIEW → VERIFYING 只由明確的 `verify` 命令推動。`next` 與 `status` 呈現 stale 但不寫入。
 
 Revision 只存在於 Evidence 與 `current_run`，Work Item 本身不保存 `target_revision`；該欄位的刪除見 [ADR-0003](adr/0003-no-work-item-target-revision.md)。
 

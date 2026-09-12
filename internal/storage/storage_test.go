@@ -62,7 +62,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":6,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":7,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +333,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 5`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 6`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -544,5 +544,72 @@ func TestMigrateUpgradesV4StateAndKeepsEverything(t *testing.T) {
 	// they already upgraded.
 	if migrated, err := Migrate(root); err != nil || migrated {
 		t.Fatalf("second Migrate = %v, %v", migrated, err)
+	}
+}
+
+// v5State writes the immediately previous schema. Candidate identity did not
+// exist yet, so migration must explicitly preserve every historical revision as
+// a COMMIT candidate rather than leaving its meaning implicit.
+func v5State(t *testing.T, root string) string {
+	t.Helper()
+	canonical, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := `{"schema_version":5,"next_work_id":3,"next_evidence_id":3,"next_gate_id":1,` +
+		`"goals":[{"id":"g","title":"Goal","description":"","repository":"` + canonical +
+		`","status":"ACTIVE","reason":"","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"work_items":[{"id":"WI-001","goal_id":"g","story_ref":"specs/stories/a","status":"REVIEW","depends_on":null,` +
+		`"current_run":null,"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"},` +
+		`{"id":"WI-002","goal_id":"g","story_ref":"specs/stories/b","status":"VERIFYING","depends_on":null,` +
+		`"current_run":{"revision":"def456","worktree_path":"` + filepath.Join(root, ".forgepilot", "worktrees", "WI-002-def456") +
+		`","log_path":"` + filepath.Join(root, ".forgepilot", "logs", "WI-002-def456.log") +
+		`","started_at":"2026-09-07T00:00:00Z"},"created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],` +
+		`"evidence":[{"id":"EV-001","type":"verification","repository":"` + canonical +
+		`","work_item_id":"WI-001","story_ref":"specs/stories/a","revision":"abc123","command":"make verify",` +
+		`"exit_code":0,"result":"PASS","reviewer":"","note":"","pr":"","created_at":"2026-09-07T00:00:00Z"},` +
+		`{"id":"EV-002","type":"review","repository":"` + canonical +
+		`","work_item_id":"WI-001","story_ref":"specs/stories/a","revision":"abc123","command":"",` +
+		`"exit_code":null,"result":"APPROVED","reviewer":"carl@example.com","note":"looks good",` +
+		`"pr":"","created_at":"2026-09-07T00:00:00Z"}],"gates":[]}`
+	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+func TestMigrateUpgradesV5RevisionsToExplicitCommitCandidates(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	original := v5State(t, root)
+
+	migrated, err := Migrate(root)
+	if err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range state.Evidence {
+		if evidence.CandidateKind != work.CommitCandidate || evidence.BaseRevision != "" || evidence.CandidateDigest != "" {
+			t.Fatalf("migration did not make evidence candidate explicit: %#v", evidence)
+		}
+	}
+	run := state.WorkItems[1].CurrentRun
+	if run == nil || run.CandidateKind != work.CommitCandidate || run.Revision != "def456" || run.BaseRevision != "" || run.CandidateDigest != "" {
+		t.Fatalf("migration did not make current run candidate explicit: %#v", run)
+	}
+	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v5.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatal("backup does not hold the original v5 snapshot")
 	}
 }
