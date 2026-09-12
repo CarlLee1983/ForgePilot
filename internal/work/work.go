@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 type GoalStatus string
 
@@ -71,8 +71,9 @@ type Run struct {
 	// path re-derived from today's naming scheme. It is written when the run
 	// begins and vanishes with the rest of the Run once the run produces
 	// Evidence. See docs/adr/0012-verification-log-outside-state.md.
-	LogPath   string    `json:"log_path"`
-	StartedAt time.Time `json:"started_at"`
+	LogPath   string            `json:"log_path"`
+	Runtime   map[string]string `json:"runtime,omitempty"`
+	StartedAt time.Time         `json:"started_at"`
 }
 
 func (run Run) Candidate() Candidate {
@@ -263,6 +264,9 @@ func (s State) Validate() error {
 		if item.CurrentRun != nil {
 			if err := item.CurrentRun.Candidate().validate(); err != nil {
 				return fmt.Errorf("work item %q has an invalid current run candidate: %w", item.ID, err)
+			}
+			if err := validateRuntime(item.CurrentRun.Runtime); err != nil {
+				return fmt.Errorf("work item %q has invalid current run runtime: %w", item.ID, err)
 			}
 		}
 		if _, exists := items[item.ID]; exists {

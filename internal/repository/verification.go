@@ -237,6 +237,12 @@ func Head(root string) (string, error) {
 // that is present but gitignored would make the main worktree look verifiable
 // while the committed revision has no canonical check at all.
 func EnsureCanonicalCheck(checkout string) error {
+	return EnsureCanonicalCheckWithRuntime(checkout, RuntimeEnvironment{})
+}
+
+// EnsureCanonicalCheckWithRuntime inspects the same checkout with the same
+// resolved environment that the guarded verification transaction will use.
+func EnsureCanonicalCheckWithRuntime(checkout string, runtime RuntimeEnvironment) error {
 	found := false
 	for _, name := range []string{"GNUmakefile", "makefile", "Makefile"} {
 		if _, err := os.Stat(filepath.Join(checkout, name)); err == nil {
@@ -249,6 +255,7 @@ func EnsureCanonicalCheck(checkout string) error {
 	}
 	command := exec.Command("make", "-n", "verify")
 	command.Dir = checkout
+	command.Env = mergedEnvironment(runtime.environment)
 	output, err := command.CombinedOutput()
 	if err == nil {
 		return nil
@@ -321,8 +328,15 @@ func OpenLog(path string) (*os.File, error) {
 // interrupted run still leaves behind whatever it produced before it was
 // killed, and a long run is not silent for its whole duration.
 func RunCanonicalCheck(directory string, log io.Writer) (int, error) {
+	return RunCanonicalCheckWithRuntime(directory, RuntimeEnvironment{}, log)
+}
+
+// RunCanonicalCheckWithRuntime executes the canonical check in the runtime
+// environment already resolved and validated for this candidate checkout.
+func RunCanonicalCheckWithRuntime(directory string, runtime RuntimeEnvironment, log io.Writer) (int, error) {
 	command := exec.Command("make", "verify")
 	command.Dir = directory
+	command.Env = mergedEnvironment(runtime.environment)
 	command.Stdout = log
 	command.Stderr = log
 	err := command.Run()
@@ -336,22 +350,28 @@ func RunCanonicalCheck(directory string, log io.Writer) (int, error) {
 	return 0, nil
 }
 
+func mergedEnvironment(overrides []string) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
+	keys := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
+		key, _, _ := strings.Cut(entry, "=")
+		keys[key] = struct{}{}
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, overridden := keys[key]; !overridden {
+			environment = append(environment, entry)
+		}
+	}
+	return append(environment, overrides...)
+}
+
 func git(root string, environment []string, arguments ...string) (string, error) {
 	command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
-	if len(environment) > 0 {
-		overrides := make(map[string]struct{}, len(environment))
-		for _, entry := range environment {
-			key, _, _ := strings.Cut(entry, "=")
-			overrides[key] = struct{}{}
-		}
-		for _, entry := range os.Environ() {
-			key, _, _ := strings.Cut(entry, "=")
-			if _, overridden := overrides[key]; !overridden {
-				command.Env = append(command.Env, entry)
-			}
-		}
-		command.Env = append(command.Env, environment...)
-	}
+	command.Env = mergedEnvironment(environment)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))

@@ -61,8 +61,9 @@ type Evidence struct {
 	// deciding whether work completes or whether Evidence has gone stale
 	// (ADR-0011), and it is never checked against GitHub (ADR-0010). Optional,
 	// and forbidden on Verification Evidence.
-	PR        string    `json:"pr"`
-	CreatedAt time.Time `json:"created_at"`
+	PR        string            `json:"pr"`
+	Runtime   map[string]string `json:"runtime,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
 }
 
 func (evidence Evidence) Candidate() Candidate {
@@ -159,6 +160,7 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 		Command:         command,
 		ExitCode:        exitCode,
 		Result:          result,
+		Runtime:         copyRuntime(item.CurrentRun.Runtime),
 		CreatedAt:       now,
 	}
 	s.Evidence = append(s.Evidence, evidence)
@@ -204,6 +206,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 			if record.Reviewer != "" || record.Note != "" || record.PR != "" {
 				return fmt.Errorf("evidence %q is a verification but carries review fields", record.ID)
 			}
+			if err := validateRuntime(record.Runtime); err != nil {
+				return fmt.Errorf("evidence %q has invalid runtime: %w", record.ID, err)
+			}
 		case ReviewEvidence:
 			switch record.Result {
 			case Approved, Rejected:
@@ -224,6 +229,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 			}
 			if record.PR != "" && !validPRReference(record.PR) {
 				return fmt.Errorf("evidence %q carries a malformed PR reference %q", record.ID, record.PR)
+			}
+			if len(record.Runtime) != 0 {
+				return fmt.Errorf("evidence %q is a review but carries runtime metadata", record.ID)
 			}
 		default:
 			return fmt.Errorf("evidence %q has unknown type %q", record.ID, record.Type)
@@ -262,6 +270,13 @@ func (s *State) BeginVerification(id, revision, worktreePath, logPath string, no
 // check starts. Later Evidence is derived from this Run value rather than from
 // live repository state.
 func (s *State) BeginCandidateVerification(id string, candidate Candidate, worktreePath, logPath string, now time.Time) error {
+	return s.BeginCandidateVerificationWithRuntime(id, candidate, worktreePath, logPath, nil, now)
+}
+
+// BeginCandidateVerificationWithRuntime fixes the immutable Candidate and the
+// runtime metadata observed when the canonical check starts. The map is copied
+// so a caller cannot mutate persisted run metadata after this transition.
+func (s *State) BeginCandidateVerificationWithRuntime(id string, candidate Candidate, worktreePath, logPath string, runtime map[string]string, now time.Time) error {
 	if err := s.Verifiable(id); err != nil {
 		return err
 	}
@@ -271,11 +286,41 @@ func (s *State) BeginCandidateVerification(id string, candidate Candidate, workt
 	if err := candidate.validate(); err != nil {
 		return fmt.Errorf("a verification run requires a valid candidate: %w", err)
 	}
+	if err := validateRuntime(runtime); err != nil {
+		return fmt.Errorf("a verification run has invalid runtime: %w", err)
+	}
 	item := s.item(id)
 	item.Status = Verifying
 	item.CurrentRun = &Run{Revision: candidate.Revision, CandidateKind: candidate.Kind, BaseRevision: candidate.BaseRevision,
-		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, StartedAt: now}
+		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, Runtime: copyRuntime(runtime), StartedAt: now}
 	item.UpdatedAt = now
+	return nil
+}
+
+func copyRuntime(runtime map[string]string) map[string]string {
+	if len(runtime) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(runtime))
+	for key, value := range runtime {
+		copy[key] = value
+	}
+	return copy
+}
+
+var runtimeVersion = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+){0,3}(?:[A-Za-z][0-9A-Za-z.-]*)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+
+func validateRuntime(runtime map[string]string) error {
+	for name, version := range runtime {
+		switch name {
+		case "node", "go", "python", "rust":
+		default:
+			return fmt.Errorf("unsupported runtime metadata %q", name)
+		}
+		if !runtimeVersion.MatchString(version) {
+			return fmt.Errorf("runtime %q has invalid actual version %q", name, version)
+		}
+	}
 	return nil
 }
 

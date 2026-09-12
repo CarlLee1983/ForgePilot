@@ -10,7 +10,7 @@
 
 1. [CONTEXT.md](CONTEXT.md) — 詞彙。把 Story 與 Work Item 混用是這個 domain 最容易犯的錯
 2. [docs/architecture.md](docs/architecture.md) — 責任邊界、資料模型、狀態規則、各階段的開工前定案
-3. [docs/adr/README.md](docs/adr/README.md) — 13 份 accepted 決定與其失效條件，另有 1 份尚未回答的 proposed 開放問題
+3. [docs/adr/README.md](docs/adr/README.md) — 14 份 accepted 決定與其失效條件，另有 1 份尚未回答的 proposed 開放問題
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約表（**flag 命名以此為準**）與各階段 exit checklist
 5. `docs/specs/` — M1–M4 每個 milestone 一個 `m*/` 目錄，收 spec 與 ticket；M5 之後改以單一檔案記錄（`m5-dogfood-friction.md`），衍生的工作以 issue 追蹤
 
@@ -22,6 +22,7 @@
 
 - **Work Item 上沒有 revision 欄位，也沒有 PR 欄位。** 兩者都只存在於 Evidence。看到 Evidence 上有一個沒有任何規則讀取的 `pr`，那是刻意的——ADR-0003、ADR-0011
 - **Candidate 不存在 Work Item 上。** `COMMIT`／`SNAPSHOT` identity 只隨 `current_run` 與 Evidence 存在；snapshot ref 在 `refs/forgepilot/snapshots/`，不建立 branch、tag 或 WIP commit——ADR-0014
+- **Runtime 不從 main worktree 或 caller shell 猜。** Runtime Contract 在 Candidate checkout 解析；actual versions 先固定於 `current_run` 再隨 Verification Evidence 保存。沒有 declaration 才沿用目前 PATH——ADR-0015
 - **Evidence 上沒有指向 verification 輸出的欄位。** 輸出以 run 為鍵存在 `.forgepilot/logs/` 底下，`current_run` 才有 `LogPath`——ADR-0012
 - **沒有完成指令。** 沒有 `done`、沒有 `complete <work-id>`、沒有測試專用的 approve。DONE 只能是 `review approve` 在條件滿足時的結果——ADR-0008
 - **DONE 沒有 reopen。** 要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄——ADR-0006

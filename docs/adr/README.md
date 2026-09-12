@@ -20,6 +20,7 @@
 | [0012](0012-verification-log-outside-state.md) | Verification 輸出串流到 state 之外的 log，以 run 為鍵；Evidence 上不加欄位 | accepted |
 | [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 是否自我套用 ForgeFlowV2——尚未回答的開放問題 | proposed |
 | [0014](0014-working-tree-snapshot-is-a-candidate.md) | Working tree snapshot 是保留在 ForgePilot ref 下的 Candidate，不是 branch、stash 或 Work Item target | accepted |
+| [0015](0015-runtime-contract-belongs-to-candidate.md) | Runtime Contract 從 Candidate checkout 解析；只固定該次 subprocess environment，actual versions 隨 run 進 Evidence | accepted |
 
 ## 什麼時候該加一份
 

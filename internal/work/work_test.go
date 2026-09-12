@@ -101,8 +101,8 @@ func TestSelectionUsesTimestampThenID(t *testing.T) {
 }
 
 func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
-	if SchemaVersion != 6 {
-		t.Fatalf("SchemaVersion = %d, want 6", SchemaVersion)
+	if SchemaVersion != 7 {
+		t.Fatalf("SchemaVersion = %d, want 7", SchemaVersion)
 	}
 	fresh := NewState()
 	if fresh.NextEvidenceID != 1 || fresh.NextGateID != 1 {
@@ -112,7 +112,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 		t.Fatalf("fresh state carries %d evidence and %d gates", len(fresh.Evidence), len(fresh.Gates))
 	}
 	older := fresh
-	older.SchemaVersion = 5
+	older.SchemaVersion = 6
 	err := older.Validate()
 	if err == nil {
 		t.Fatal("accepted an older schema version")
@@ -121,7 +121,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 		t.Fatalf("older-version error %q does not tell the user to migrate", err)
 	}
 	newer := fresh
-	newer.SchemaVersion = 7
+	newer.SchemaVersion = 8
 	err = newer.Validate()
 	if err == nil {
 		t.Fatal("accepted a newer schema version")

@@ -34,6 +34,12 @@ _Avoid_：Evidence、驗證結果、完成宣告
 **Verification Run**：一次進行中的 Verification。它是短暫的，可能因中斷而結束並且不留下成功或失敗的結論。
 _Avoid_：Evidence、VERIFYING 狀態本身
 
+**Runtime Contract**：Candidate 自己透過版本檔或 ecosystem manifest 宣告的 runtime／toolchain 要求；ForgePilot 只解析並選用本機已安裝的符合版本，不安裝或改動使用者全域環境。
+_Avoid_：caller shell 當下的 PATH、ForgePilot 自行推測的 primary language、dependency installation
+
+**Resolved Runtime**：某次 Verification Run 開始前已驗證並固定的 subprocess environment，以及其中各 runtime 的實際版本；它隨 run 進入 Verification Evidence。
+_Avoid_：永久 shell 設定、完整 PATH、只記宣告版本而未驗證實際 executable
+
 **Stale**：既有 Verification Evidence 所綁定的 Candidate 已不符合目前 workspace；commit candidate 比較 HEAD，snapshot candidate 比較自動計算的 digest。DONE 的工作不標示 stale——它已在某個確切 Candidate 上完成，重驗的提示對它不對應任何行動。
 _Avoid_：失效、FAIL、需要重做
 

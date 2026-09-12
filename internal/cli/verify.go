@@ -73,7 +73,17 @@ func runVerification(id, root string, output io.Writer, snapshot bool) error {
 	if err := repository.AddWorktree(root, worktree, candidate.Revision); err != nil {
 		return err
 	}
-	if err := repository.EnsureCanonicalCheck(worktree); err != nil {
+	runtime, err := repository.ResolveRuntime(worktree)
+	if err != nil {
+		_ = repository.RemoveWorktree(root, worktree)
+		return err
+	}
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			fmt.Fprintf(output, "warning: could not remove resolved runtime environment: %v\n", closeErr)
+		}
+	}()
+	if err := repository.EnsureCanonicalCheckWithRuntime(worktree, runtime); err != nil {
 		_ = repository.RemoveWorktree(root, worktree)
 		return err
 	}
@@ -100,14 +110,19 @@ func runVerification(id, root string, output io.Writer, snapshot bool) error {
 			return err
 		}
 	}
+	if summary := runtime.Summary(); summary != "" {
+		if _, err := fmt.Fprintf(output, "Runtime: %s\n", summary); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(output, "Log: %s\n", logFile); err != nil {
 		return err
 	}
 
-	if err := beginRun(id, root, candidate, worktree, logFile, startedAt); err != nil {
+	if err := beginRun(id, root, candidate, worktree, logFile, runtime.Versions(), startedAt); err != nil {
 		return err
 	}
-	exitCode, runErr := repository.RunCanonicalCheck(worktree, log)
+	exitCode, runErr := repository.RunCanonicalCheckWithRuntime(worktree, runtime, log)
 	if runErr != nil {
 		return runErr
 	}
@@ -168,9 +183,9 @@ func reclaimOrphan(id, root string, output io.Writer) error {
 // beginRun marks a new Verification Run in flight. Any abandoned run has already
 // been closed out by reclaimOrphan, so a Work Item is never left with neither an
 // outcome for its old run nor a record of its new one.
-func beginRun(id, root string, candidate work.Candidate, worktree, logFile string, startedAt time.Time) error {
+func beginRun(id, root string, candidate work.Candidate, worktree, logFile string, runtime map[string]string, startedAt time.Time) error {
 	return storage.Update(root, func(state *work.State) error {
-		return state.BeginCandidateVerification(id, candidate, worktree, logFile, startedAt)
+		return state.BeginCandidateVerificationWithRuntime(id, candidate, worktree, logFile, runtime, startedAt)
 	})
 }
 

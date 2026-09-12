@@ -62,13 +62,55 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":7,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":8,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := Load(root); err == nil {
 			t.Fatalf("accepted %q", contents)
 		}
+	}
+}
+
+func TestRuntimeMetadataIsDefensivelyCopiedBeforeSaving(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
+	runtime := map[string]string{"go": "1.25.5"}
+	if err := Update(root, func(state *work.State) error {
+		if err := state.AddGoal("g", "Goal", "", canonicalRoot, now); err != nil {
+			return err
+		}
+		item, err := state.AddWork("g", "specs/stories/a", nil, now)
+		if err != nil {
+			return err
+		}
+		if err := state.Start(item.ID, now); err != nil {
+			return err
+		}
+		if err := state.BeginCandidateVerificationWithRuntime(item.ID, work.Candidate{Kind: work.CommitCandidate, Revision: "abc123"}, "/tmp/wt", "", runtime, now); err != nil {
+			return err
+		}
+		runtime["go"] = "mutated-before-save"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.WorkItems[0].CurrentRun.Runtime["go"]; got != "1.25.5" {
+		t.Fatalf("saved runtime = %q, want defensive copy", got)
 	}
 }
 
@@ -333,7 +375,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 6`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 7`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -611,5 +653,60 @@ func TestMigrateUpgradesV5RevisionsToExplicitCommitCandidates(t *testing.T) {
 	}
 	if string(backup) != original {
 		t.Fatal("backup does not hold the original v5 snapshot")
+	}
+}
+
+// v6State is the immediately previous schema. Runtime metadata did not exist,
+// so its absent runtime fields must remain a valid, honest historical record.
+func v6State(t *testing.T, root string) string {
+	t.Helper()
+	contents := v5State(t, root)
+	contents = strings.Replace(contents, `"schema_version":5`, `"schema_version":6`, 1)
+	contents = strings.ReplaceAll(contents, `"revision":"abc123","command"`, `"revision":"abc123","candidate_kind":"COMMIT","base_revision":"","candidate_digest":"","command"`)
+	contents = strings.Replace(contents, `"revision":"def456","worktree_path"`, `"revision":"def456","candidate_kind":"COMMIT","base_revision":"","candidate_digest":"","worktree_path"`, 1)
+	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+func TestMigrateUpgradesV6WithoutInventingRuntimeMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	original := v6State(t, root)
+	if _, err := Load(root); err == nil {
+		t.Fatal("read a v6 state without migrating")
+	}
+	migrated, err := Migrate(root)
+	if err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SchemaVersion != work.SchemaVersion {
+		t.Fatalf("schema version = %d, want %d", state.SchemaVersion, work.SchemaVersion)
+	}
+	for _, evidence := range state.Evidence {
+		if evidence.Runtime != nil {
+			t.Fatalf("migration invented evidence runtime: %#v", evidence)
+		}
+	}
+	run := state.WorkItems[1].CurrentRun
+	if run == nil || run.Runtime != nil {
+		t.Fatalf("migration changed in-flight run runtime: %#v", run)
+	}
+	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v6.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatal("backup does not hold the original v6 snapshot")
 	}
 }

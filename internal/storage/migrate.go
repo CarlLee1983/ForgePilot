@@ -140,6 +140,9 @@ func upgrade(contents []byte, from int) (work.State, error) {
 			run.CandidateKind = work.CommitCandidate
 		}
 	}
+	// v6 → v7 adds optional runtime metadata to Runs and Verification Evidence.
+	// Earlier snapshots did not record it, so migration deliberately leaves it
+	// absent rather than inventing facts about the environment that ran a check.
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

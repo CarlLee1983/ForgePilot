@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary 與 P0-003 Actionable Next 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next 與 P1-004 Deterministic Runtime Resolution 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -18,6 +18,7 @@ M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary 與 P0-003
 | P0-001 — Working Tree Candidate Snapshot | `verify --snapshot`、Candidate identity、snapshot-aware review／stale | 不製造 WIP commit 也能讓 Verification 與 Human Review 判斷完全相同的 immutable candidate |
 | P0-002 — Work Item Status Summary | `status --work <id> --summary`、單一 Work Item current-state projection | Human／Agent 不必解析完整 history 就能取得驗證、review、Gate、Goal 與完成狀態 |
 | P0-003 — Actionable Next | `next` 的 agent-action projection、RUNNING／stale REVIEW priority、human-only waiting | 新 Agent 可由一個純讀查詢得知下一個合法動作與原因 |
+| P1-004 — Deterministic Runtime Resolution | candidate-local runtime discovery、installed toolchain resolution、runtime Evidence | `make verify` 使用 Candidate 宣告且已驗證的 runtime，不受 caller PATH 的錯誤預設版本影響 |
 
 M1 通過後才開始 M2，依此類推至 M5；M1–M4 已完成，M5 開工前定案完成後才開始實作。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
 
@@ -434,6 +435,16 @@ Summary 是 read-only presentation projection，不寫入 `state.json`，也不�
 Candidate freshness 沿用 P0-001：COMMIT 比較目前 HEAD，SNAPSHOT 比較目前 workspace digest。若 stale SNAPSHOT 被選中，建議的命令是 `forgepilot verify <work-id> --snapshot`，讓建議本身也是可合法執行的下一步。
 
 驗收：RUNNING 優先於 READY，multiple RUNNING 以 created-at／numeric ID 穩定排序，FAIL 建議 repair，commit 與 snapshot stale REVIEW 都建議 reverify，READY 保留既有排序，Gate／Goal／dependency blocker 不被當成可執行工作，human-only blocker 有明確原因，empty／all DONE 明確無工作；重複 `next` 輸出相同且 state 不變。
+
+## P1-004 — Deterministic Runtime Resolution
+
+`verify` 在 COMMIT／SNAPSHOT 共用的 detached checkout 內解析 Runtime Contract，再建立單一、只供該 subprocess 使用的 Resolved Runtime。支援來源與 precedence 為 `mise.toml` → `.tool-versions` → language-specific version file → ecosystem manifest：Node 的後兩層依序為 `.node-version`、`.nvmrc`、`package.json engines.node`；Go 為 `go.mod`（`toolchain` 優先於 `go` minimum）；Python 為 `.python-version`；Rust 為 `rust-toolchain.toml`、`rust-toolchain`。相容的多來源採最高 precedence，互斥的 exact declarations 拒絕而不猜測；所有已宣告 constraint 都必須由實際 executable 滿足。
+
+resolver 只使用 caller PATH 或 mise／asdf／nvm／pyenv／rustup 的本機既有 installation／shim；選定後在 temporary bin directory 把每個 runtime command 綁到已驗證 executable，再建立 child-process PATH，避免多個 manager bin directory 互相遮蔽。不執行安裝、不 source shell profile、不修改 runtime files 或使用者全域版本，temporary directory 隨命令清理。沒有支援的 declaration 時維持原本 inherited PATH。宣告存在但沒有符合版本時，在 `current_run`、log 與結果 Evidence 建立前拒絕；因此不會留下假的 FAIL。
+
+Schema 升至 v7：`current_run` 與 Verification Evidence 新增選填 `runtime` map，保存 resolver 實際驗證的版本；INTERRUPTED 從原 run 保留同一 metadata。v6→v7 migration 不推測舊執行環境，舊 Evidence 沒有 `runtime` 仍合法。Human Review Evidence 不攜帶 runtime。
+
+驗收：無 declaration 維持舊流程；全部支援的 declaration source、相同／不可用版本、conflict、multiple runtimes 均有 repository tests；integration tests 證明錯誤 shell default 不進 canonical check、runtime failure 不留 FAIL Evidence、COMMIT 與 SNAPSHOT 都從 detached checkout 解析，且 Evidence 記錄 actual runtime。完整 gates 為 `make verify` 與 `go test -race -count=1 ./...`。
 
 ## 每階段交付格式
 

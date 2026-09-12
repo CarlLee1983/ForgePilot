@@ -2,7 +2,7 @@
 
 ## 文件狀態與範圍
 
-MVP 的 M1–M5 與 P0-001 Candidate Snapshot 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
+MVP 的 M1–M5、P0-001–P0-003 與 P1-004 Deterministic Runtime Resolution 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
@@ -47,10 +47,10 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/Forg
 |---|---|---|
 | Goal | `id`, `title`, `description`, `repository`, `status`, `created_at`, `updated_at` | M1 |
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
-| Work Item run | `current_run`（Candidate identity、worktree path、started_at、log path；閒置時為 null） | M2；`log path` 於 M5、Candidate kind／base／digest 於 P0-001 加入 |
+| Work Item run | `current_run`（Candidate identity、worktree path、started_at、log path、resolved runtime；閒置時為 null） | M2；`log path` 於 M5、Candidate kind／base／digest 於 P0-001、runtime 於 P1-004 加入 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
 | Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`rationale`（開啟時的說明）、`options`（至少兩個）、`status`、`opened_at`，以及關閉時的 `choice`／`note`（resolve）或 `reason`（cancel）、`decided_by`、`decided_at` | M3 |
-| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 Candidate identity、`result`、timestamp；verification 另有 `command` 與 `exit_code`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起；Candidate kind／base／digest 於 P0-001 加入 |
+| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 Candidate identity、`result`、timestamp；verification 另有 `command`、`exit_code` 與選填 actual `runtime`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起；Candidate kind／base／digest 於 P0-001、runtime 於 P1-004 加入 |
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
@@ -207,6 +207,16 @@ Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_r
 Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW 是否仍可前進由 `Verifiable` 決定，READY 是否可開始仍由 `Next()` 決定。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、或 fresh PASS REVIEW 缺 Human Review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
 
 completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。完整 `status` 的歷史輸出維持原樣；summary 則只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
+
+### P1-004 Deterministic Runtime Resolution 與 schema v7
+
+Runtime Contract 屬於 Candidate 的內容，因此 discovery 固定發生在 COMMIT／SNAPSHOT 已建立的 detached checkout 內，不得先讀 main worktree。`internal/repository` 提供單一 runtime resolver interface，封裝 declaration parsing、precedence、local installation／shim discovery、actual-version validation 與 child-process environment；`internal/cli` 只接收 opaque Resolved Runtime、印 summary，並把 actual version values 傳給 domain。canonical target precheck 與真正的 `make verify` 接收同一份 environment，避免把關條件與交易使用不同 PATH。
+
+支援來源依序為 `mise.toml`、`.tool-versions`、language-specific files、ecosystem manifest。Exact declarations 必須互相相容；較低 precedence 的 range／minimum 仍是 contract constraint，不能被高 precedence 選擇靜默違反。resolver 可從 mise、asdf、nvm、pyenv、rustup 的既有 data directory 或 caller PATH/shim 找 executable；選定後建立 private temporary command directory，讓 `node`／`go`／`python`／`rustc` 等名稱精確指向各自驗證過的 executable，再把它與所需 bin directories 組成一次性 PATH。這避免前一個 runtime 的 manager directory 意外遮蔽另一個 runtime。它不呼叫 install、不 source profile、不寫 repository 或 global manager state，temporary directory 隨命令清理。沒有 declaration 時不建立 environment override，沿用舊行為。
+
+解析、可用性與 actual-version validation 全部在 `EnsureCanonicalCheck`、log 建立與 `BeginCandidateVerification` 之前完成。任一步失敗是 precondition failure：移除 detached checkout，Work Item 保持原狀，不 append FAIL Evidence。成功時 resolved version map 先存進 `current_run`，PASS／FAIL／INTERRUPTED Evidence 都從 run 複製，完成時不重查 live shell。
+
+Schema v7 對 `current_run` 與 Verification Evidence 新增選填 `runtime` map。v6→v7 不回填，因為舊執行的 actual runtime 無從證明；沒有 runtime 的舊 Evidence 繼續合法。Human Review 不是 subprocess outcome，因此禁止攜帶 runtime。決定與失效條件見 [ADR-0015](adr/0015-runtime-contract-belongs-to-candidate.md)。
 
 ## Verification 與 exact revision：M2 起
 
