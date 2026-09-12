@@ -31,7 +31,7 @@
     <tr><td><code>work add</code></td><td><code>--goal --story [--depends-on ...]</code></td><td>配發 <code>WI-nnn</code>。依賴皆 DONE 則 READY，否則 PENDING。</td></tr>
     <tr><td><code>next</code></td><td>—</td><td><strong>純查詢</strong>。不 claim、不 start、不改狀態。會說明選取理由。</td></tr>
     <tr><td><code>start</code></td><td><code>&lt;work-id&gt;</code></td><td>READY → RUNNING。在寫交易內重查 Goal 與依賴。</td></tr>
-    <tr><td><code>verify</code></td><td><code>&lt;work-id&gt;</code></td><td>先回收孤兒，再在隔離 worktree 對 HEAD 跑 <code>make verify</code>，append Evidence。</td></tr>
+    <tr><td><code>verify</code></td><td><code>&lt;work-id&gt; [--snapshot]</code></td><td>先回收孤兒；無 flag 時在隔離 worktree 對乾淨 HEAD 跑 <code>make verify</code>，<code>--snapshot</code> 時對 immutable working-tree snapshot 執行，append Evidence。</td></tr>
     <tr><td><code>gate open</code></td><td><code>--work --question --option --option [--reason]</code></td><td>配發 <code>GATE-nnn</code>。至少兩個 <code>--option</code>。該工作即被阻擋。</td></tr>
     <tr><td><code>gate resolve</code></td><td><code>&lt;gate-id&gt; --option [--note] [--by]</code></td><td>只接受列出的選項之一。轉為 RESOLVED。</td></tr>
     <tr><td><code>gate cancel</code></td><td><code>&lt;gate-id&gt; --reason [--by]</code></td><td>轉為 CANCELLED 並解除阻擋——記錄「這個問題問錯了」。</td></tr>
@@ -85,7 +85,7 @@
 <table>
   <thead><tr><th>情況</th><th>行為</th></tr></thead>
   <tbody>
-    <tr><td>工作樹不乾淨（含 untracked）</td><td><code>verify</code> 與 <code>review</code> 拒絕，<strong>不寫任何 Evidence</strong></td></tr>
+    <tr><td>工作樹不乾淨（含 untracked）</td><td>不帶 flag 的 <code>verify</code> 拒絕；可用 <code>verify &lt;work-id&gt; --snapshot</code> 驗證 working tree。COMMIT review 仍拒絕，SNAPSHOT review 則要求 workspace digest 未變。</td></tr>
     <tr><td>受驗 revision 沒有 <code>make verify</code> target</td><td>拒絕且不寫 Evidence——那是無法驗證，不是驗證失敗</td></tr>
     <tr><td>Story reference 不在 <code>specs/stories/</code> 內或不存在</td><td><code>work add</code> 拒絕</td></tr>
     <tr><td>有未解除 Gate</td><td>擋 <code>start</code>、擋 <code>verify</code>、不被 <code>next</code> 選中、擋完成</td></tr>

@@ -217,7 +217,7 @@ func addWork(args []string, root string, output io.Writer) error {
 	// must not turn a successful command into a failing one. The hint is a
 	// courtesy, not a result the caller depends on.
 	if uncommitted, hintErr := repository.Uncommitted(root, story); hintErr == nil && uncommitted {
-		_, err = fmt.Fprintf(output, "%s is not committed yet; Verification only sees what HEAD describes, so commit it before running verify.\n", story)
+		_, err = fmt.Fprintf(output, "%s is not committed yet;\nuse `forgepilot verify %s --snapshot` to verify the working tree,\nor commit it before commit-mode verification.\n", story, added.ID)
 	}
 	return err
 }

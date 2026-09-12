@@ -93,6 +93,8 @@ forgepilot status
 
 `--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 ForgeFlowV2 執行工程工作。
 
+若 `work add` 發現該 Story 尚未提交，它會在成功輸出後提供兩條下一步：使用剛配發的 Work Item ID 執行 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行不帶 flag 的 commit-mode verification。
+
 此時保存的是 `WI-001 = RUNNING`、`WI-002 = PENDING`。重新啟動 CLI 後，`status` 應呈現相同狀態；`next` 會推薦 `WI-001` 的 `resume implementation`，而不是開始另一張 READY 工作。沒有進行中的工作時，它才會輸出像 `Action: forgepilot start WI-002` 的建議。遇到 fresh REVIEW 的 Human Review、OPEN Gate 或 BLOCKED Goal 而沒有其他可做工作時，`next` 明確輸出等待原因；它從不替 Agent 執行建議。
 
 Agent 可以選擇驗證已提交 revision：
@@ -103,7 +105,7 @@ forgepilot verify WI-001
 
 ForgePilot 會確認工作樹乾淨、解析目前的 HEAD，在 `.forgepilot/worktrees/` 底下建立該 commit 的 detached worktree，於其中解析 `mise.toml`、`.tool-versions`、language-specific version files 與支援的 ecosystem manifests，再用本機已安裝且符合宣告的 runtime 執行你的專案所定義的 `make verify`，然後保存 Evidence。通過則 `WI-001` 進入 REVIEW，失敗則退回 RUNNING 讓 Agent 繼續修。repository 沒有支援的 runtime declaration 時維持原本 PATH；有宣告但找不到符合版本時直接拒絕，不記成 Verification FAIL。
 
-因為驗證跑在隔離的 checkout，**你的 `make verify` 必須能在全新 checkout 上執行**——需要 `.env`、本機已安裝依賴或既有 build cache 的專案會失敗。這與 CI 的要求相同。工作樹不乾淨（含未追蹤檔案）時 `verify` 會拒絕執行，因為 commit 無法描述未提交的內容。
+因為 commit-mode 驗證跑在隔離的 checkout，**你的 `make verify` 必須能在全新 checkout 上執行**——需要 `.env`、本機已安裝依賴或既有 build cache 的專案會失敗。這與 CI 的要求相同。不帶 flag 的 `verify` 在工作樹不乾淨（含未追蹤檔案）時會拒絕執行，因為 commit 無法描述未提交的內容；要驗證那些內容則使用下方的 snapshot mode。
 
 若要直接驗證目前 working tree，不先建立 WIP commit：
 
@@ -115,7 +117,7 @@ ForgePilot 會用 private Git index 建立 local immutable snapshot commit，收
 
 Snapshot PASS 後，`status` 以目前 workspace 的自動 digest 判斷 freshness，不會因 snapshot revision 本來就不同於 HEAD 而立刻標 stale。`review approve`／`reject` 也會重算同一 digest：workspace 未變就把 review 綁回已驗證的 snapshot revision；若已改變則拒絕並要求重新執行 `verify WI-001 --snapshot`。
 
-之後每新增一個 commit，`status` 就會把先前的 PASS 標示為 stale：它保留為歷史，但不適用於新的 revision，要重新取得適用的 Evidence 就再跑一次 `verify`。
+COMMIT candidate 後每新增一個 commit，`status` 就會把先前的 PASS 標示為 stale：它保留為歷史，但不適用於新的 revision，要重新取得適用的 Evidence 就再跑一次 `verify`。SNAPSHOT candidate 則以 workspace digest 判斷 stale，如上所述。
 
 驗證中斷（Ctrl-C、關掉終端機、機器重開）不會留下假結果：下一次 `verify` 會把那次執行記為 INTERRUPTED 並退回 RUNNING。這件事在任何拒絕之前發生，所以就算那件工作此刻被 Gate 擋著、`verify` 會被拒絕，中斷仍然被記錄下來——被擋住的是開始新的執行，不是記錄已經發生的事。
 

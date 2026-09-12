@@ -398,6 +398,8 @@ CLI 契約：
 | `forgepilot review approve/reject <work-id>` | 最新 Verification 為 `COMMIT` 時保持 clean HEAD；為 `SNAPSHOT` 時重算 workspace digest，相同才把 review 綁回已驗證的 snapshot revision，不同則拒絕且不留 Evidence |
 | `forgepilot status` | `COMMIT` 以 HEAD、`SNAPSHOT` 以 workspace candidate digest 判斷 stale；DONE 仍不標 stale |
 
+`work add` 發現 Story 尚未提交時仍成功建立 Work Item，並以剛配發的 ID 提示兩條合法路徑：`forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行既有的 commit-mode verification。
+
 Schema 升至 v6：`current_run` 與 Evidence 增加 `candidate_kind`、`base_revision`、`candidate_digest`。`migrate` 將 v5 與更舊版本的既有 revision 明確標成 `COMMIT`，先留下 `state.json.v<n>.bak`；不查 Git、不重寫舊 Evidence 的 revision 或結果。rollback 是還原備份；已建立的 local snapshot refs 可留存。
 
 驗收矩陣：

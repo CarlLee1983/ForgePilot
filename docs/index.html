@@ -278,7 +278,7 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-hash"/></svg>
         <h3>測試通過的，是你正在看的那一版</h3>
-        <p>每次驗證都綁死一個 commit。之後只要再改一行，那次驗證就不算數了，工作重新卡住。</p>
+        <p>每次驗證都綁死一個 immutable Candidate：既有 commit 或 working-tree snapshot。之後 Candidate 不再代表目前內容時，那次驗證就不算數了，工作重新卡住。</p>
         <span class="tag">Evidence · exact revision</span>
       </div>
       <div class="cell">
@@ -343,7 +343,7 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
         <text class="d-t small" x="581" y="293" text-anchor="middle">repo 自己的 Makefile</text>
 
         <text class="d-t" x="350" y="271" text-anchor="middle">Evidence</text>
-        <text class="d-t small" x="350" y="293" text-anchor="middle">結果綁死一個 commit</text>
+        <text class="d-t small" x="350" y="293" text-anchor="middle">結果綁死一個 Candidate</text>
 
         <g class="d-line" color="var(--line)" marker-end="url(#ah)">
           <path d="M204 69 L258 69"/>
@@ -408,7 +408,7 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
         <g class="d-lab">
           <text x="60" y="166" text-anchor="middle">問，不是自己挑</text>
           <text x="180" y="166" text-anchor="middle">認領</text>
-          <text x="300" y="166" text-anchor="middle">commit</text>
+          <text x="300" y="166" text-anchor="middle">commit / snapshot</text>
           <text x="420" y="166" text-anchor="middle">產生證據</text>
           <text x="540" y="166" text-anchor="middle">同意或退回</text>
           <text x="650" y="166" text-anchor="middle">下游解鎖</text>
@@ -419,7 +419,7 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
           <path d="M540 108 L540 56"/>
         </g>
         <g class="d-lab stop">
-          <text x="420" y="44" text-anchor="middle">工作樹要乾淨</text>
+          <text x="420" y="44" text-anchor="middle">commit mode 要乾淨</text>
           <text x="540" y="44" text-anchor="middle">agent 到不了這裡</text>
         </g>
       </svg>
@@ -457,7 +457,7 @@ footer p { max-width: 60ch; margin: 0 0 10px; }
 
     <div class="body-text" style="margin-top:26px">
       <p>第四條最容易被忽略，它也是這套東西真正改變的地方。agent 卡住的時候原本會自己選一條路走下去，現在它把問題留在佇列上，你下次看 <code>status</code> 就會看到。</p>
-      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件，agent 就算跑了 approve，只要 HEAD 跟通過驗證的 commit 對不上，或還有 Gate 開著，工作照樣不會進 DONE，而且那筆審查會用它的 git 身分留在記錄裡，跑不掉。</p>
+      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件，agent 就算跑了 approve，只要最新 PASS 與 approval 沒有綁同一個 Candidate revision，或還有 Gate 開著，工作照樣不會進 DONE，而且那筆審查會用它的 git 身分留在記錄裡，跑不掉。</p>
       <p>接下來的事跟你手動用一模一樣，<a href="#start">安裝與 init</a> 之後把上面四條貼進去就能開始。</p>
     </div>
   </div>
@@ -525,7 +525,7 @@ approval is at 96f3e0b2eef1</span>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-gate"/></svg>
         <h3>ForgePilot</h3>
-        <p>派工、擋人、記錄。真正去跑驗證並把結果綁在 commit 上的是它，但跑什麼內容不由它決定。</p>
+        <p>派工、擋人、記錄。真正去跑驗證並把結果綁在 immutable Candidate 上的是它，但跑什麼內容不由它決定。</p>
       </div>
     </div>
 
@@ -534,9 +534,9 @@ approval is at 96f3e0b2eef1</span>
 
       <p><strong>agent 問下一件。</strong> 它跑 <code>next</code>，拿到的是依賴已經清乾淨、確實輪到的那一件，然後 <code>start</code> 認領。它不自己挑，也挑不到還卡著依賴的工作。</p>
 
-      <p><strong>寫程式，然後 commit。</strong> 這一步的順序最常被記反。程式碼寫完要<strong>先 commit，才輪到 verify</strong>，因為驗證是對一個確切的 commit 做的。工作樹只要還有沒提交的東西，連沒被追蹤的檔案都算，<code>verify</code> 會直接拒絕，而且一筆 Evidence 都不寫。那是無法驗證，不是驗證失敗。</p>
+      <p><strong>寫程式，選擇 Candidate。</strong> 有兩條合法路徑：先 commit，再用 <code>verify</code> 驗證乾淨工作樹的 HEAD；或用 <code>verify WI-001 --snapshot</code> 把目前 working tree 固定成 immutable snapshot 後驗證。前者的工作樹只要還有未提交內容（含未追蹤檔案）就會拒絕，而且不寫 Evidence；那是無法驗證，不是驗證失敗。</p>
 
-      <p><strong>verify。</strong> ForgePilot 把那個 commit checkout 到一個隔離的 worktree，在那裡跑 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 ForgeFlowV2 的工程契約決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS 或 FAIL 連同完整的 commit SHA 記成 Evidence。PASS 之後工作進 REVIEW，FAIL 就退回去繼續改。</p>
+      <p><strong>verify。</strong> commit mode 把 HEAD checkout 到隔離的 worktree；snapshot mode 先把 working tree 固定成 immutable snapshot，再在隔離 checkout 執行 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 ForgeFlowV2 的工程契約決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS 或 FAIL 連同 Candidate revision 記成 Evidence。PASS 之後工作進 REVIEW，FAIL 就退回去繼續改。</p>
 
       <p><strong>人看過才算完成。</strong> 你 <code>review approve</code>，四項條件同時成立的話，工作在那一刻進 DONE，等著它的下游在同一次交易裡變成可以開始。條件不齊就只記下審查，並告訴你差什麼。</p>
 
@@ -544,7 +544,7 @@ approval is at 96f3e0b2eef1</span>
     </div>
 
     <div class="body-text" style="margin-top:34px">
-      <p>兩個最常被記反的地方。<strong>commit 在 verify 之前</strong>，不是驗證完才 commit。<strong>verify 通過不等於完成</strong>，那只是進了 REVIEW，還要人點頭。</p>
+      <p>兩個最常被記反的地方。<strong>不帶 flag 的 verify 要先 commit；要保留 working tree 就用 <code>verify --snapshot</code></strong>。<strong>verify 通過不等於完成</strong>，那只是進了 REVIEW，還要人點頭。</p>
       <p class="dim">全部是本機的命令列，不需要伺服器，也不需要帳號。狀態存在你 repo 裡的一個 JSON 檔，由程序鎖保護，多個終端機或多個 agent 同時用不會打架。</p>
     </div>
 
@@ -552,7 +552,7 @@ approval is at 96f3e0b2eef1</span>
     <div class="steps">
       <div class="stepline">
         <span class="k">init</span>
-        <p>在 repo 裡建立狀態檔。它會動到 <code>.gitignore</code>，所以<strong>馬上 commit</strong>，因為之後每一步都要求工作樹是乾淨的。</p>
+        <p>在 repo 裡建立狀態檔。它會動到 <code>.gitignore</code>；若接著走 commit mode，先把它 commit。要驗證尚未提交內容時可改用 <code>verify --snapshot</code>。</p>
       </div>
       <div class="stepline">
         <span class="k">goal / work add</span>
@@ -568,7 +568,7 @@ approval is at 96f3e0b2eef1</span>
       </div>
       <div class="stepline">
         <span class="k">verify</span>
-        <p>它在一個<strong>隔離的工作區</strong>裡，對確切的那個 commit 跑<strong>那個 repo 自己 Makefile 裡的 <code>verify</code> target</strong>。連 Makefile 存不存在都是在那份 checkout 裡判斷的，被 gitignore 掉的 Makefile 騙不過它。那個工作區也看不到你還沒提交的東西，所以不會有「在我機器上是好的」。結果連同 commit 編號一起存起來。</p>
+        <p>它在一個<strong>隔離的工作區</strong>裡，對確切 Candidate 跑<strong>那個 repo 自己 Makefile 裡的 <code>verify</code> target</strong>。不帶 flag 時 Candidate 是乾淨 HEAD；<code>--snapshot</code> 時是由目前 working tree 固定的 immutable snapshot。連 Makefile 存不存在都是在那份 checkout 裡判斷的，被 gitignore 掉的 Makefile 騙不過它。結果連同 Candidate revision 一起存起來。</p>
       </div>
       <div class="stepline">
         <span class="k">gate</span>

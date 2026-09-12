@@ -178,7 +178,7 @@
   </div>
   <div class="term">
     <div class="name">Evidence</div>
-    <p class="body">綁定一件工作與一個確切 commit SHA 的紀錄，只新增不修改。兩種：Verification（PASS / FAIL / INTERRUPTED）與 Human Review（APPROVED / REJECTED），共用同一條時間軸。</p>
+    <p class="body">綁定一件工作與一個確切 Candidate revision 的紀錄，只新增不修改；Candidate 可以是既有 commit 或 working-tree snapshot。兩種：Verification（PASS / FAIL / INTERRUPTED）與 Human Review（APPROVED / REJECTED），共用同一條時間軸。</p>
     <p class="avoid"><b>不是</b>完成宣告，也不是 Agent 的自評。</p>
   </div>
   <div class="term">
@@ -218,7 +218,7 @@
     <div class="tag">M2</div>
     <div>
       <h4>Verification Evidence</h4>
-      <p>在隔離的 detached worktree 對確切 commit 執行受管理專案自己的 <code>make verify</code>，結果存成綁定該 revision 的 Evidence。新 revision 不沿用舊的 PASS。</p>
+      <p>M2 在隔離的 detached worktree 對乾淨 HEAD 執行受管理專案自己的 <code>make verify</code>，結果存成綁定該 revision 的 Evidence。P0-001 再加入 <code>--snapshot</code>，把 working tree 固定成 Candidate 後走同一條驗證路徑。新 Candidate 不沿用舊的 PASS。</p>
     </div>
   </div>
   <div class="ms">
@@ -282,7 +282,7 @@
     <tr><td><code>goal</code></td><td>create / block / unblock / complete / cancel</td></tr>
     <tr><td><code>work add</code></td><td>新增 Work Item，指定 Story 與依賴</td></tr>
     <tr><td><code>next</code> / <code>start</code></td><td>純查詢下一件可執行的工作；把 READY 推進到 RUNNING</td></tr>
-    <tr><td><code>verify</code></td><td>在隔離 worktree 對當下 HEAD 跑 <code>make verify</code>，記錄 Evidence</td></tr>
+    <tr><td><code>verify [--snapshot]</code></td><td>對乾淨 HEAD，或 immutable working-tree snapshot，在隔離 worktree 跑 <code>make verify</code>，記錄 Evidence</td></tr>
     <tr><td><code>gate</code></td><td>open / resolve / cancel——提出、決定或撤銷一個需要人判斷的問題</td></tr>
     <tr><td><code>review</code></td><td>approve / reject；approve 在條件成立時完成工作並解鎖下游</td></tr>
     <tr><td><code>status</code></td><td>整份佇列，包含未解除的 Gate 數、最新 Evidence 與未完成的原因</td></tr>

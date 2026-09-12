@@ -31,7 +31,7 @@
 
 <p><strong>一，Story reference 必須落在 <code>specs/stories/</code> 底下，而且檔案要真的存在。</strong> 這條寫死在 <code>internal/repository/repository.go</code>，路徑正規化與 symlink 解析之後仍須落在該目錄內。ForgePilot 自己的 repo <em>沒有</em> 這個目錄（它的規格住在 <code>docs/specs/</code>），所以拿它管自己，第一個動作是建一個。ForgePilot 不讀 Story 的內容也不猜它的 schema，只確認那個路徑存在且在允許範圍內。</p>
 
-<p><strong>二，<code>init</code> 會弄髒工作樹。</strong> 它往 <code>.gitignore</code> 補上 <code>.forgepilot/</code>，而 <code>verify</code> 與 <code>review</code> 都要求嚴格乾淨，也就是 tracked 無修改、無 staged、<strong>無 untracked</strong>。不先 commit，之後每一步都會被拒絕，錯誤訊息還指著 <code>init</code> 自己造成的檔案。</p>
+<p><strong>二，<code>init</code> 會弄髒工作樹。</strong> 它往 <code>.gitignore</code> 補上 <code>.forgepilot/</code>。不帶 flag 的 <code>verify</code> 與 COMMIT review 都要求嚴格乾淨，也就是 tracked 無修改、無 staged、<strong>無 untracked</strong>；走這條 commit-mode 路徑就先 commit。若要驗證尚未提交內容，改用 <code>verify WI-001 --snapshot</code>；後續 SNAPSHOT review 要求 workspace digest 未變。</p>
 
 <p>受管理的專案還需要一個可執行的 <code>make verify</code> target。ForgePilot 不定義驗證的內容，只負責在乾淨且隔離的環境裡跑它、記下結果綁哪個 revision。</p>
 
@@ -39,13 +39,13 @@
 
 <div class="step">
   <span class="n">STEP 1</span>
-  <h3>init，然後立刻 commit</h3>
+  <h3>init；commit mode 就立刻 commit</h3>
 <pre><code>forgepilot init
 git status --short</code></pre>
 <pre class="out"><code><b>Initialized ForgePilot in /path/to/your/repo</b>
 
 ?? .gitignore</code></pre>
-  <p>那個 <code>??</code> 就是第二個擋點的來源。現在就處理掉：</p>
+  <p>那個 <code>??</code> 是 commit-mode 的擋點。若要走預設的 clean-HEAD verification，現在就處理掉：</p>
 <pre><code>git add .gitignore specs/ &amp;&amp; git commit -m "chore: adopt forgepilot"</code></pre>
   <p class="muted">state 住在 <code>.forgepilot/state.json</code>，被程序鎖與原子替換保護，並綁定這個 repository 的身分，把目錄搬走它會拒絕讀，不會默默重綁到別的 repo。</p>
 </div>
@@ -93,12 +93,12 @@ forgepilot start WI-001</code></pre>
 <div class="step">
   <span class="n">STEP 5</span>
   <h3>verify：在隔離的 worktree 跑 make verify</h3>
-  <p>先看它拒絕的樣子。工作樹髒的時候，它<strong>什麼都不寫</strong>。那是「無法驗證」，不是「驗證失敗」，記成 FAIL 會是謊。</p>
+  <p>先看不帶 flag 的 commit mode 拒絕的樣子。工作樹髒的時候，它<strong>什麼都不寫</strong>。那是「無法驗證」，不是「驗證失敗」，記成 FAIL 會是謊。</p>
 <pre><code>echo scratch &gt; dirty.txt
 forgepilot verify WI-001</code></pre>
 <pre class="out"><code>forgepilot: worktree is not clean; commit or stash the following before verifying:
 ?? dirty.txt</code></pre>
-  <p>清乾淨再跑。驗證在一個 detached worktree 裡執行，看不到主工作樹的未提交內容，Evidence 綁定完整的 commit SHA。</p>
+  <p>要走 commit mode 就清乾淨再跑；若要保留目前內容，直接改跑 <code>forgepilot verify WI-001 --snapshot</code>。commit mode 驗證在 detached worktree 裡執行，看不到主工作樹的未提交內容，Evidence 綁定完整的 commit SHA；snapshot mode 則先把那些內容固定成 immutable snapshot Candidate。</p>
 <pre><code>rm dirty.txt
 forgepilot verify WI-001</code></pre>
 <pre class="out"><code><b>EV-001 PASS at 9fda18ae576acbda2813b38a33fa2ebd28cade4c</b>
@@ -161,7 +161,7 @@ Reviewed by: you@example.com (self-asserted; ForgePilot does not authenticate id
 
 <div class="step">
   <span class="n">STEP 9</span>
-  <h3>stale：HEAD 動了，舊的 PASS 就不算數</h3>
+  <h3>stale：COMMIT candidate 的 HEAD 動了，舊的 PASS 就不算數</h3>
   <p>這是最容易讓人愣住的一段。WI-002 驗證通過後，你又 commit 了一次，然後 approve：</p>
 <pre class="out"><code>  WI-002 REVIEW specs/stories/B-001.md
     <b>EV-006 PASS at 26be05c98447 (stale; HEAD is now 96f3e0b2eef1)</b></code></pre>
@@ -242,7 +242,7 @@ Next: none</code></pre>
 <tr><td><code>story reference "…" does not exist</code></td><td>先把 Story 檔案寫出來。Work Item 不該指向不存在的工程契約。</td></tr>
 <tr><td><code>story reference must remain under specs/stories</code></td><td>路徑正規化與 symlink 解析後仍須落在該目錄內。</td></tr>
 <tr><td><code>work item "WI-002" is PENDING, not READY</code></td><td>依賴還沒全部 DONE。<code>start</code> 只接受 READY。</td></tr>
-<tr><td><code>worktree is not clean; commit or stash the following before verifying:</code></td><td>訊息會列出髒的檔案。乾淨採嚴格定義，untracked 也算。不寫任何 Evidence。</td></tr>
+<tr><td><code>worktree is not clean; commit or stash the following before verifying:</code></td><td>這是不帶 flag 的 commit mode；訊息會列出髒的檔案。乾淨採嚴格定義，untracked 也算。不寫任何 Evidence；若要驗證當前內容，改用 <code>verify &lt;work-id&gt; --snapshot</code>。</td></tr>
 <tr><td><code>this revision has no makefile, so `make verify` cannot be run</code></td><td>受管理的專案得自己提供 canonical verification。同樣不留 Evidence。</td></tr>
 <tr><td><code>work item "WI-002" does not belong to an active goal</code></td><td>Goal 是 BLOCKED 或已結束。先 <code>goal unblock</code>。</td></tr>
 <tr><td><code>goal "demo" still has unfinished work: WI-002 is REVIEW</code></td><td>Goal 完成的宣告要有實質意義，它會指名卡住的那一件。</td></tr>
@@ -349,7 +349,7 @@ Next: none</code></pre>
 
 <h2>還沒被解決的摩擦</h2>
 
-<p>真的拿它管過一段工作之後累積下來的不順手，記在 <a href="learning-records/">learning-records</a>，是未來版本的輸入而不是待辦清單。目前有兩項。<strong>Story 目錄的硬性要求</strong>讓一個規格不放在 <code>specs/stories/</code> 的專案（包括 ForgePilot 自己）第一步就得建空目錄；<strong><code>init</code> 弄髒工作樹</strong>讓新使用者的第一次 <code>verify</code> 必定失敗，而錯誤訊息指著 <code>init</code> 自己造成的檔案。</p>
+<p>真的拿它管過一段工作之後累積下來的不順手，記在 <a href="learning-records/">learning-records</a>，是未來版本的輸入而不是待辦清單。目前有兩項。<strong>Story 目錄的硬性要求</strong>讓一個規格不放在 <code>specs/stories/</code> 的專案（包括 ForgePilot 自己）第一步就得建空目錄；<strong><code>init</code> 弄髒工作樹</strong>會讓新使用者第一次不帶 flag 的 <code>verify</code> 失敗，而錯誤訊息指著 <code>init</code> 自己造成的檔案。要驗證尚未提交內容可改用 <code>verify --snapshot</code>。</p>
 
 <p>用起來還有哪裡卡，就再記一筆。這是這個工具目前唯一的真實回饋來源。</p>
 

@@ -218,11 +218,12 @@ func TestWorkAddHintsWhenTheStoryIsNotCommitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("work add: %v: %s", err, output)
 	}
-	if !strings.Contains(output, "WI-001 READY") {
-		t.Fatalf("output %q does not show the Work Item being created", output)
-	}
-	if !strings.Contains(output, "specs/stories/a.md is not committed yet") || !strings.Contains(output, "Verification") {
-		t.Fatalf("output %q does not name the story and explain Verification", output)
+	want := "WI-001 READY\nStory: specs/stories/a.md\n" +
+		"specs/stories/a.md is not committed yet;\n" +
+		"use `forgepilot verify WI-001 --snapshot` to verify the working tree,\n" +
+		"or commit it before commit-mode verification.\n"
+	if output != want {
+		t.Fatalf("work add output:\nwant:\n%s\ngot:\n%s", want, output)
 	}
 }
 
@@ -240,8 +241,9 @@ func TestWorkAddDoesNotHintWhenTheStoryIsCommittedAndClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("work add: %v: %s", err, output)
 	}
-	if strings.Contains(output, "not committed") {
-		t.Fatalf("output %q hints at a story that is already committed and clean", output)
+	want := "WI-001 READY\nStory: specs/stories/a.md\n"
+	if output != want {
+		t.Fatalf("committed-story work add output:\nwant:\n%s\ngot:\n%s", want, output)
 	}
 }
 
@@ -250,6 +252,7 @@ func TestWorkAddHintsWhenTheStoryIsCommittedButModified(t *testing.T) {
 	commitAll(t, root, "seed stories")
 	mustRun(t, binary, root, "init")
 	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
 	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "a.md"), []byte("# story\nmore\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -257,8 +260,11 @@ func TestWorkAddHintsWhenTheStoryIsCommittedButModified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("work add: %v: %s", err, output)
 	}
-	if !strings.Contains(output, "specs/stories/a.md") || !strings.Contains(output, "not committed") {
-		t.Fatalf("output %q does not hint at the uncommitted change", output)
+	wantHint := "specs/stories/a.md is not committed yet;\n" +
+		"use `forgepilot verify WI-002 --snapshot` to verify the working tree,\n" +
+		"or commit it before commit-mode verification.\n"
+	if !strings.Contains(output, wantHint) {
+		t.Fatalf("output %q does not contain the snapshot and commit-mode hint %q", output, wantHint)
 	}
 }
 
