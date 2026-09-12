@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M5、P0-001 Candidate Snapshot 與 P0-002 Work Item Status Summary 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary 與 P0-003 Actionable Next 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -17,6 +17,7 @@ M1–M5、P0-001 Candidate Snapshot 與 P0-002 Work Item Status Summary 已完�
 | M5 — Verification diagnosability & review clarity | review 拒絕訊息說出當下動作、verification 輸出串流成 state 之外的 log | 非 PASS 執行的輸出可從落地 log 重讀；review 與 verify 的髒工作樹拒絕訊息各自說出正在做的事 |
 | P0-001 — Working Tree Candidate Snapshot | `verify --snapshot`、Candidate identity、snapshot-aware review／stale | 不製造 WIP commit 也能讓 Verification 與 Human Review 判斷完全相同的 immutable candidate |
 | P0-002 — Work Item Status Summary | `status --work <id> --summary`、單一 Work Item current-state projection | Human／Agent 不必解析完整 history 就能取得驗證、review、Gate、Goal 與完成狀態 |
+| P0-003 — Actionable Next | `next` 的 agent-action projection、RUNNING／stale REVIEW priority、human-only waiting | 新 Agent 可由一個純讀查詢得知下一個合法動作與原因 |
 
 M1 通過後才開始 M2，依此類推至 M5；M1–M4 已完成，M5 開工前定案完成後才開始實作。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
 
@@ -423,6 +424,16 @@ CLI 契約：
 Summary 是 read-only presentation projection，不寫入 `state.json`，也不新增 lifecycle state。Verification 必須沿用既有 Candidate 規則：COMMIT 以 HEAD 比較、SNAPSHOT 以 workspace digest 比較，DONE 不標 stale。Review 只選最新 Human Review；Gate 只列 `OPEN`，`RESOLVED`／`CANCELLED` 不列入 blocker。`Completion:` 的 base projection 只會是 `not started`、`implementing`、`verification required`、`verification failed`、`verification stale`、`awaiting human review`、`changes requested`、`blocked by gate`、`goal blocked` 或 `done`。若 APPROVED 之後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有完成條件，`awaiting human review` 固定加上 ` (re-approve to complete)` action suffix；這是既有完成規則的呈現，不是新 transition。
 
 驗收：原有 `status` 輸出保持不變；READY／RUNNING、PASS／FAIL／stale／snapshot、APPROVED／REJECTED、單一／多個 unresolved Gate、BLOCKED Goal 與 DONE 都有 projection coverage；遺漏或不完整 flags 是 usage error。
+
+## P0-003 — Actionable Next
+
+`forgepilot next` 從「最早 READY Work Item」擴充為 read-only 的 agent-action projection。它依序選擇：可推進的 RUNNING Work Item（最新 Verification 為 FAIL 時建議修復）、可推進且 candidate stale 的 REVIEW Work Item（建議重驗）、以及既有的最早 READY Work Item（建議 `start`）。READY 的 Goal／dependency／Gate 條件與 created-at／numeric-ID 排序仍完全委派既有 selection rule。
+
+沒有 agent 可做的工作時，fresh PASS 的 REVIEW 回報需要 Human Review；OPEN Gate 回報最早的未解除 Gate；非 ACTIVE Goal 回報 Goal 狀態。這些等待不會遮蔽其他獨立的 RUNNING、stale REVIEW 或 READY 工作。PENDING dependency 與 in-flight VERIFYING 不是 human-only recommendation。所有 action kind 都是 read-only projection，不新增 Work Item status、不寫入 `state.json`、不 claim、start、verify、resolve Gate 或建立 Agent session。
+
+Candidate freshness 沿用 P0-001：COMMIT 比較目前 HEAD，SNAPSHOT 比較目前 workspace digest。若 stale SNAPSHOT 被選中，建議的命令是 `forgepilot verify <work-id> --snapshot`，讓建議本身也是可合法執行的下一步。
+
+驗收：RUNNING 優先於 READY，multiple RUNNING 以 created-at／numeric ID 穩定排序，FAIL 建議 repair，commit 與 snapshot stale REVIEW 都建議 reverify，READY 保留既有排序，Gate／Goal／dependency blocker 不被當成可執行工作，human-only blocker 有明確原因，empty／all DONE 明確無工作；重複 `next` 輸出相同且 state 不變。
 
 ## 每階段交付格式
 

@@ -26,7 +26,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 ## 目前狀態
 
-**M1–M5、P0-001 Candidate Snapshot 與 P0-002 Work Item Status Summary 已實作。**
+**M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary 與 P0-003 Actionable Next 已實作。**
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
@@ -39,6 +39,8 @@ M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review ap
 P0-001 新增 `forgepilot verify WI-001 --snapshot`：不需要先製造 WIP commit，就能把 staged、unstaged、tracked deletion 與 non-ignored untracked content 固定成 immutable local Candidate，再讓 Verification 與 Human Review 綁定同一個 snapshot revision。既有不帶 flag 的 clean-HEAD verification 完全保留。
 
 P0-002 新增 `forgepilot status --work WI-001 --summary`：以固定的少量行數呈現單一 Work Item 的 current status、最新 Verification／Human Review、未解除 Gate、Goal 狀態與 completion projection；既有 `forgepilot status` 的完整 history 輸出保持不變。
+
+P0-003 擴充 `forgepilot next`：它優先建議續接已 RUNNING 的工作、修復最新 verification FAIL 的工作、或重新驗證 stale REVIEW candidate；只有沒有這些工作時才推薦最早的 READY Work Item。它只輸出下一個合法 agent action 與原因，不會自動執行 `start`／`verify` 或改寫 state。
 
 初始支援平台是 macOS 的本機檔案系統，使用 Go 1.25.5。state 由程序鎖與原子替換保護；其他平台尚未宣稱支援。
 
@@ -89,7 +91,7 @@ forgepilot status
 
 `--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 ForgeFlowV2 執行工程工作。
 
-此時保存的是 `WI-001 = RUNNING`、`WI-002 = PENDING`。重新啟動 CLI 後，`status` 應呈現相同狀態。`next` 只選取 READY 工作，不負責續接已在 RUNNING 的工作。
+此時保存的是 `WI-001 = RUNNING`、`WI-002 = PENDING`。重新啟動 CLI 後，`status` 應呈現相同狀態；`next` 會推薦 `WI-001` 的 `resume implementation`，而不是開始另一張 READY 工作。沒有進行中的工作時，它才會輸出像 `Action: forgepilot start WI-002` 的建議。遇到 fresh REVIEW 的 Human Review、OPEN Gate 或 BLOCKED Goal 而沒有其他可做工作時，`next` 明確輸出等待原因；它從不替 Agent 執行建議。
 
 Agent 可以選擇驗證已提交 revision：
 

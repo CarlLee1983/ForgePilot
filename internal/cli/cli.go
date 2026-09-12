@@ -33,7 +33,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   goal create --id <id> --title <t> declare a goal
   goal <block|unblock|complete|cancel> <goal-id>
   work add --goal <id> --story <path> [--depends-on <work-id>]
-  next                              print the next READY work item
+  next                              recommend the next legal agent action
   start <work-id>                   move a READY work item to RUNNING
   verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
@@ -230,15 +230,74 @@ func next(args []string, root string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	item, ok := state.Next()
-	if !ok {
-		_, err = fmt.Fprintln(output, "No READY work.")
+	repositoryState, err := nextRepositoryState(&state, root)
+	if err != nil {
 		return err
 	}
-	revision, _ := repository.Head(root)
-	_, err = fmt.Fprintf(output, "Next: %s\nGoal: %s\nStory: %s\nVerification: %s\nReason: earliest READY work\n",
-		item.ID, item.GoalID, item.StoryRef, verificationSummary(&state, item.ID, revision, ""))
+	action := state.ActionableNext(repositoryState)
+	switch action.Kind {
+	case work.NextActionNone:
+		_, err = fmt.Fprintln(output, "No actionable work.")
+	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
+		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: %s\nReason: %s\n", action.Item.ID, action.Reason)
+	default:
+		_, err = fmt.Fprintf(output, "Next: %s\nState: %s\nGoal: %s\nStory: %s\nAction: %s\nReason: %s\n",
+			action.Item.ID, action.Item.Status, action.Item.GoalID, action.Item.StoryRef,
+			nextActionText(&state, action), action.Reason)
+	}
 	return err
+}
+
+// nextRepositoryState gathers Git facts only when a REVIEW Work Item can
+// actually be re-verified or is waiting for a Human Review. READY and RUNNING
+// recommendations still work in a repository without a commit, just as next
+// did before candidate-aware selection existed.
+func nextRepositoryState(state *work.State, root string) (work.RepositoryState, error) {
+	needsCommitRevision := false
+	for _, item := range state.WorkItems {
+		if item.Status != work.Review || state.Verifiable(item.ID) != nil {
+			continue
+		}
+		verification, ok := state.LatestVerification(item.ID)
+		if !ok {
+			continue
+		}
+		if verification.CandidateKind == work.SnapshotCandidate {
+			workspace, err := repository.InspectSnapshot(root)
+			if err != nil {
+				return work.RepositoryState{}, err
+			}
+			return work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}, nil
+		}
+		needsCommitRevision = true
+	}
+	if needsCommitRevision {
+		revision, err := repository.Head(root)
+		if err != nil {
+			return work.RepositoryState{}, err
+		}
+		return work.RepositoryState{Revision: revision}, nil
+	}
+	return work.RepositoryState{}, nil
+}
+
+func nextActionText(state *work.State, action work.NextAction) string {
+	switch action.Kind {
+	case work.NextActionResume:
+		return "resume implementation"
+	case work.NextActionRepair:
+		return "repair implementation and verify again"
+	case work.NextActionReverify:
+		command := fmt.Sprintf("forgepilot verify %s", action.Item.ID)
+		if verification, ok := state.LatestVerification(action.Item.ID); ok && verification.CandidateKind == work.SnapshotCandidate {
+			command += " --snapshot"
+		}
+		return command
+	case work.NextActionStart:
+		return fmt.Sprintf("forgepilot start %s", action.Item.ID)
+	default:
+		return ""
+	}
 }
 
 func start(args []string, root string, output io.Writer) error {

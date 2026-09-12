@@ -55,7 +55,7 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 	run("WI-001 RUNNING", "status")
 	run("WI-003 RUNNING", "status")
 	run("WI-002 PENDING", "status")
-	run("No READY work.", "next")
+	run("Action: resume implementation", "next")
 	fail("goal", "create", "--id", "queue", "--title", "Again")
 	failWith("story reference must be located under specs/stories", "work", "add", "--goal", "queue", "--story", "specs/stories/missing.md")
 	fail("work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-404")
@@ -68,6 +68,130 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	fail("status")
+}
+
+func TestNextRecommendsAgentWorkWithoutWritingState(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	empty, err := command(binary, root, "next")
+	if err != nil || !strings.Contains(empty, "No actionable work.") {
+		t.Fatalf("next in empty repository = %q, %v", empty, err)
+	}
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+
+	statePath := filepath.Join(root, ".forgepilot", "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("first next = %q, %v", first, err)
+	}
+	for _, want := range []string{
+		"Next: WI-001", "State: READY", "Goal: queue", "Story: specs/stories/a.md",
+		"Action: forgepilot start WI-001", "Reason: earliest READY work",
+	} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("next output %q does not contain %q", first, want)
+		}
+	}
+	second, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("second next = %q, %v", second, err)
+	}
+	if second != first {
+		t.Fatalf("repeated next changed output\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("next changed state.json")
+	}
+
+	mustRun(t, binary, root, "start", "WI-001")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	output, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with RUNNING and READY = %q, %v", output, err)
+	}
+	for _, want := range []string{"Next: WI-001", "State: RUNNING", "Action: resume implementation", "Reason: work is already in progress"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestNextReportsHumanOnlyBlockers(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Proceed?", "--option", "yes", "--option", "no")
+
+	output, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with gate = %q, %v", output, err)
+	}
+	for _, want := range []string{"No agent-actionable work.", "Waiting: WI-001", "Reason: unresolved Gate GATE-001"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+
+	mustRun(t, binary, root, "gate", "cancel", "GATE-001", "--reason", "not needed", "--by", "human@example.com")
+	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "waiting for direction")
+	output, err = command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with blocked goal = %q, %v", output, err)
+	}
+	for _, want := range []string{"No agent-actionable work.", "Waiting: WI-001", "Reason: goal queue is BLOCKED"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestNextRecommendsCommitReverificationWhenEvidenceIsStale(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
+	if err := os.WriteFile(filepath.Join(root, "new-commit.txt"), []byte("new revision\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "move HEAD")
+
+	statePath := filepath.Join(root, ".forgepilot", "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with stale commit = %q, %v", output, err)
+	}
+	for _, want := range []string{"Next: WI-001", "Action: forgepilot verify WI-001\n", "Reason: verified candidate is stale"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+	if strings.Contains(output, "--snapshot") {
+		t.Fatalf("commit stale next incorrectly recommends snapshot: %q", output)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("next changed state.json while checking stale commit")
+	}
 }
 
 func TestWorkAddWithoutStoriesDirectoryNamesTheMissingDirectory(t *testing.T) {
@@ -598,6 +722,31 @@ func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
 		}
 		if !strings.Contains(summary, completion) {
 			t.Fatalf("summary %q does not contain %q", summary, completion)
+		}
+		statePath := filepath.Join(root, ".forgepilot", "state.json")
+		before, readErr := os.ReadFile(statePath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		next, err := command(binary, root, "next")
+		if err != nil {
+			t.Fatalf("next = %q, %v", next, err)
+		}
+		after, readErr := os.ReadFile(statePath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(after) != string(before) {
+			t.Fatal("next changed state.json while inspecting a snapshot candidate")
+		}
+		if want {
+			for _, expected := range []string{"Next: WI-001", "Action: forgepilot verify WI-001 --snapshot", "Reason: verified candidate is stale"} {
+				if !strings.Contains(next, expected) {
+					t.Fatalf("stale snapshot next %q does not contain %q", next, expected)
+				}
+			}
+		} else if !strings.Contains(next, "No agent-actionable work.\n\nWaiting: WI-001\nReason: human review required") {
+			t.Fatalf("fresh snapshot next = %q", next)
 		}
 	}
 	assertStale(false)

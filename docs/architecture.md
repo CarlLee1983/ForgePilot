@@ -83,7 +83,7 @@ M2 為驗證建立的 worktree 不在此限：它們是短暫的、detached 的�
 - 新增時全部依賴 DONE 則為 READY，否則 PENDING。無依賴時視為已滿足。
 - 候選必須屬於 ACTIVE Goal、為 READY、全部依賴 DONE，且沒有 unresolved Gate。Gate 條件在 M3 啟用。
 - 候選按 `created_at` 升冪排序，同時間以 Work Item ID 的配發序號升冪決勝。
-- `next` 是純查詢，不 claim、不 start、不改寫 READY 狀態。
+- `Next()` 是 READY selection 的純規則；`next` command 在 P0-003 以它作為最後一層候選，不 claim、不 start、不改寫 READY 狀態。
 - `start` 必須在寫交易內重查 Goal 與依賴；不能只相信保存的 READY 值。
 - 不限制全域只能存在一個 RUNNING；`status` 必須能列出多個進行中的工作。
 
@@ -199,6 +199,12 @@ Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_r
 ### P0-002 Work Item Status Summary
 
 `status --work <work-id> --summary` 是單一 Work Item 的 read-only current-state projection。它的資料流固定為 domain state → summary projection → CLI formatter：`internal/work` 以純值形式接收目前 repository revision 與 snapshot digest，選擇 latest Verification／Human Review、未解除 Gates，並重用 Candidate stale 規則；`internal/cli` 才讀取 Git 事實及格式化固定輸出。它不持久化 `summary`、`current_blocker`、`completion_text` 或 `next_action`，也不改變 Work Item lifecycle。
+
+### P0-003 Actionable Next
+
+`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING、可驗證條件成立且 candidate stale 的 REVIEW、再來才是既有 `Next()` 的 READY selection。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；其餘 RUNNING 稱為 resume。REVIEW 的 freshness 一律復用 `CandidateStale`：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
+
+Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW 是否仍可前進由 `Verifiable` 決定，READY 是否可開始仍由 `Next()` 決定。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、或 fresh PASS REVIEW 缺 Human Review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
 
 completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。完整 `status` 的歷史輸出維持原樣；summary 則只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
 
