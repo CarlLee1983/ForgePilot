@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M5 已全部完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next 與 P1-004 Deterministic Runtime Resolution 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -15,6 +15,10 @@ M1–M5 已全部完成。本文件供後續開發拆分工作、驗收與交接
 | M3 — Human Gate & Review | Gate、Decision、Human Review、DONE 與依賴解鎖 | 合法完成 A 後 B 可執行；未 review 不可 DONE |
 | M4 — PR exact-head review integration | PR number＋HEAD SHA review target | 新 HEAD 必須重新取得適用 review Evidence |
 | M5 — Verification diagnosability & review clarity | review 拒絕訊息說出當下動作、verification 輸出串流成 state 之外的 log | 非 PASS 執行的輸出可從落地 log 重讀；review 與 verify 的髒工作樹拒絕訊息各自說出正在做的事 |
+| P0-001 — Working Tree Candidate Snapshot | `verify --snapshot`、Candidate identity、snapshot-aware review／stale | 不製造 WIP commit 也能讓 Verification 與 Human Review 判斷完全相同的 immutable candidate |
+| P0-002 — Work Item Status Summary | `status --work <id> --summary`、單一 Work Item current-state projection | Human／Agent 不必解析完整 history 就能取得驗證、review、Gate、Goal 與完成狀態 |
+| P0-003 — Actionable Next | `next` 的 agent-action projection、RUNNING／stale REVIEW priority、human-only waiting | 新 Agent 可由一個純讀查詢得知下一個合法動作與原因 |
+| P1-004 — Deterministic Runtime Resolution | candidate-local runtime discovery、installed toolchain resolution、runtime Evidence | `make verify` 使用 Candidate 宣告且已驗證的 runtime，不受 caller PATH 的錯誤預設版本影響 |
 
 M1 通過後才開始 M2，依此類推至 M5；M1–M4 已完成，M5 開工前定案完成後才開始實作。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
 
@@ -382,6 +386,65 @@ issue #9，`work add` 的提示改善見 issue #10，ForgeFlow Story 定義與�
 「是否自我套用 ForgeFlowV2」的未決問題、以及 Evidence 不承諾工作時序這三件事的文件記錄
 見 issue #12；issue #11（事後補跑與邊做邊跑在 state 裡分辨不出來）的關閉結論記在
 [ADR-0012](adr/0012-verification-log-outside-state.md)。
+
+## P0-001 — Working Tree Candidate Snapshot
+
+CLI 契約：
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot verify <work-id>` | 保持既有 clean workspace → HEAD → detached worktree → `make verify`，Evidence candidate kind 為 `COMMIT` |
+| `forgepilot verify <work-id> --snapshot` | 從目前 working tree 建立 immutable `SNAPSHOT` candidate，輸出 Candidate、snapshot Revision、Base 與 Log，再執行相同 canonical check |
+| `forgepilot review approve/reject <work-id>` | 最新 Verification 為 `COMMIT` 時保持 clean HEAD；為 `SNAPSHOT` 時重算 workspace digest，相同才把 review 綁回已驗證的 snapshot revision，不同則拒絕且不留 Evidence |
+| `forgepilot status` | `COMMIT` 以 HEAD、`SNAPSHOT` 以 workspace candidate digest 判斷 stale；DONE 仍不標 stale |
+
+Schema 升至 v6：`current_run` 與 Evidence 增加 `candidate_kind`、`base_revision`、`candidate_digest`。`migrate` 將 v5 與更舊版本的既有 revision 明確標成 `COMMIT`，先留下 `state.json.v<n>.bak`；不查 Git、不重寫舊 Evidence 的 revision 或結果。rollback 是還原備份；已建立的 local snapshot refs 可留存。
+
+驗收矩陣：
+
+- Legacy clean-HEAD verification、review、stale 與 completion 行為不變。
+- Snapshot 收進 tracked staged／unstaged 修改、同檔 staged＋unstaged 最終內容、tracked deletion、non-ignored untracked；ignored untracked 排除。
+- capture 前後 branch、HEAD、real index、staging diff、unstaged diff、working files 相同；canonical check 在 snapshot detached worktree 執行，Evidence revision 等於該 checkout。
+- snapshot ref 在命令結束後仍可解析及 checkout，不建立 branch／tag、不發網路請求。
+- 同一 workspace fresh；修改、新增、刪除使 digest 改變並呈現 stale；review 拒絕變更後的 workspace，re-verify 新 snapshot 後可 review。
+- PASS＋APPROVED 綁同一 snapshot revision 時仍由既有 completion invariant 進 DONE。
+- 同 Work Item 的 snapshot verification 仍由既有 flock serialization；中斷後 append `INTERRUPTED` 並保存原 run candidate。
+- v5 migration 保存 Goal、Work Item、Evidence、Gate 與 in-flight run，並將舊 candidate 明確標成 `COMMIT`。
+
+Snapshot retention／GC、cloud／GitHub integration、network request、自動 commit／PR、ForgeFlowV2 readiness 與其他 CLI 擴充不在 P0-001。
+
+## P0-002 — Work Item Status Summary
+
+CLI 契約：
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot status` | 保持既有完整 Goal／Work Item／Evidence／Gate history 輸出，不接受單獨的 filter。 |
+| `forgepilot status --work <work-id> --summary` | 固定輸出該 Work Item 的 status、Goal 與 Story、latest Verification、latest Human Review、未解除 Gate IDs 與 completion projection。不存在的 ID 回傳 `unknown work item "<id>"`。 |
+
+Summary 是 read-only presentation projection，不寫入 `state.json`，也不新增 lifecycle state。Verification 必須沿用既有 Candidate 規則：COMMIT 以 HEAD 比較、SNAPSHOT 以 workspace digest 比較，DONE 不標 stale。Review 只選最新 Human Review；Gate 只列 `OPEN`，`RESOLVED`／`CANCELLED` 不列入 blocker。`Completion:` 的 base projection 只會是 `not started`、`implementing`、`verification required`、`verification failed`、`verification stale`、`awaiting human review`、`changes requested`、`blocked by gate`、`goal blocked` 或 `done`。若 APPROVED 之後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有完成條件，`awaiting human review` 固定加上 ` (re-approve to complete)` action suffix；這是既有完成規則的呈現，不是新 transition。
+
+驗收：原有 `status` 輸出保持不變；READY／RUNNING、PASS／FAIL／stale／snapshot、APPROVED／REJECTED、單一／多個 unresolved Gate、BLOCKED Goal 與 DONE 都有 projection coverage；遺漏或不完整 flags 是 usage error。
+
+## P0-003 — Actionable Next
+
+`forgepilot next` 從「最早 READY Work Item」擴充為 read-only 的 agent-action projection。它依序選擇：可推進的 RUNNING Work Item（最新 Verification 為 FAIL 時建議修復）、可推進且 candidate stale 的 REVIEW Work Item（建議重驗）、以及既有的最早 READY Work Item（建議 `start`）。READY 的 Goal／dependency／Gate 條件與 created-at／numeric-ID 排序仍完全委派既有 selection rule。
+
+沒有 agent 可做的工作時，fresh PASS 的 REVIEW 回報需要 Human Review；OPEN Gate 回報最早的未解除 Gate；非 ACTIVE Goal 回報 Goal 狀態。這些等待不會遮蔽其他獨立的 RUNNING、stale REVIEW 或 READY 工作。PENDING dependency 與 in-flight VERIFYING 不是 human-only recommendation。所有 action kind 都是 read-only projection，不新增 Work Item status、不寫入 `state.json`、不 claim、start、verify、resolve Gate 或建立 Agent session。
+
+Candidate freshness 沿用 P0-001：COMMIT 比較目前 HEAD，SNAPSHOT 比較目前 workspace digest。若 stale SNAPSHOT 被選中，建議的命令是 `forgepilot verify <work-id> --snapshot`，讓建議本身也是可合法執行的下一步。
+
+驗收：RUNNING 優先於 READY，multiple RUNNING 以 created-at／numeric ID 穩定排序，FAIL 建議 repair，commit 與 snapshot stale REVIEW 都建議 reverify，READY 保留既有排序，Gate／Goal／dependency blocker 不被當成可執行工作，human-only blocker 有明確原因，empty／all DONE 明確無工作；重複 `next` 輸出相同且 state 不變。
+
+## P1-004 — Deterministic Runtime Resolution
+
+`verify` 在 COMMIT／SNAPSHOT 共用的 detached checkout 內解析 Runtime Contract，再建立單一、只供該 subprocess 使用的 Resolved Runtime。支援來源與 precedence 為 `mise.toml` → `.tool-versions` → language-specific version file → ecosystem manifest：Node 的後兩層依序為 `.node-version`、`.nvmrc`、`package.json engines.node`；Go 為 `go.mod`（`toolchain` 優先於 `go` minimum）；Python 為 `.python-version`；Rust 為 `rust-toolchain.toml`、`rust-toolchain`。相容的多來源採最高 precedence，互斥的 exact declarations 拒絕而不猜測；所有已宣告 constraint 都必須由實際 executable 滿足。
+
+resolver 只使用 caller PATH 或 mise／asdf／nvm／pyenv／rustup 的本機既有 installation／shim；選定後在 temporary bin directory 把每個 runtime command 綁到已驗證 executable，再建立 child-process PATH，避免多個 manager bin directory 互相遮蔽。不執行安裝、不 source shell profile、不修改 runtime files 或使用者全域版本，temporary directory 隨命令清理。沒有支援的 declaration 時維持原本 inherited PATH。宣告存在但沒有符合版本時，在 `current_run`、log 與結果 Evidence 建立前拒絕；因此不會留下假的 FAIL。
+
+Schema 升至 v7：`current_run` 與 Verification Evidence 新增選填 `runtime` map，保存 resolver 實際驗證的版本；INTERRUPTED 從原 run 保留同一 metadata。v6→v7 migration 不推測舊執行環境，舊 Evidence 沒有 `runtime` 仍合法。Human Review Evidence 不攜帶 runtime。
+
+驗收：無 declaration 維持舊流程；全部支援的 declaration source、相同／不可用版本、conflict、multiple runtimes 均有 repository tests；integration tests 證明錯誤 shell default 不進 canonical check、runtime failure 不留 FAIL Evidence、COMMIT 與 SNAPSHOT 都從 detached checkout 解析，且 Evidence 記錄 actual runtime。完整 gates 為 `make verify` 與 `go test -race -count=1 ./...`。
 
 ## 每階段交付格式
 

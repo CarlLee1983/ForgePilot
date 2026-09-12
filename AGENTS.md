@@ -10,7 +10,7 @@
 
 1. [CONTEXT.md](CONTEXT.md) — 詞彙。把 Story 與 Work Item 混用是這個 domain 最容易犯的錯
 2. [docs/architecture.md](docs/architecture.md) — 責任邊界、資料模型、狀態規則、各階段的開工前定案
-3. [docs/adr/README.md](docs/adr/README.md) — 12 份不易反轉的決定與其失效條件，另有 1 份尚未回答的 proposed 開放問題
+3. [docs/adr/README.md](docs/adr/README.md) — 14 份 accepted 決定與其失效條件，另有 1 份尚未回答的 proposed 開放問題
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約表（**flag 命名以此為準**）與各階段 exit checklist
 5. `docs/specs/` — M1–M4 每個 milestone 一個 `m*/` 目錄，收 spec 與 ticket；M5 之後改以單一檔案記錄（`m5-dogfood-friction.md`），衍生的工作以 issue 追蹤
 
@@ -21,6 +21,8 @@
 這些看起來像疏漏，其實是決定。動手前先讀對應的 ADR。
 
 - **Work Item 上沒有 revision 欄位，也沒有 PR 欄位。** 兩者都只存在於 Evidence。看到 Evidence 上有一個沒有任何規則讀取的 `pr`，那是刻意的——ADR-0003、ADR-0011
+- **Candidate 不存在 Work Item 上。** `COMMIT`／`SNAPSHOT` identity 只隨 `current_run` 與 Evidence 存在；snapshot ref 在 `refs/forgepilot/snapshots/`，不建立 branch、tag 或 WIP commit——ADR-0014
+- **Runtime 不從 main worktree 或 caller shell 猜。** Runtime Contract 在 Candidate checkout 解析；actual versions 先固定於 `current_run` 再隨 Verification Evidence 保存。沒有 declaration 才沿用目前 PATH——ADR-0015
 - **Evidence 上沒有指向 verification 輸出的欄位。** 輸出以 run 為鍵存在 `.forgepilot/logs/` 底下，`current_run` 才有 `LogPath`——ADR-0012
 - **沒有完成指令。** 沒有 `done`、沒有 `complete <work-id>`、沒有測試專用的 approve。DONE 只能是 `review approve` 在條件滿足時的結果——ADR-0008
 - **DONE 沒有 reopen。** 要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄——ADR-0006
@@ -35,6 +37,8 @@
 每一條都是實際踩過的，不是假設。
 
 **前置檢查與它把關的交易必須用同一個判準。** 這個專案犯過兩次同型錯誤：M2 在主工作樹檢查卻在隔離 worktree 執行；M3 的 `CanBeginVerification` 孤兒分支漏了 Gate 檢查，卡在 VERIFYING 的工作因此能繞過未解除的 Gate。兩次都是 code review 找到的。寫任何檢查時問一次：檢查的對象是不是執行的對象，判準是不是比它把關的交易寬鬆。
+
+**Snapshot capture 只操作 private index。** `verify --snapshot` 可以寫 local Git objects 與 ForgePilot snapshot ref，但 capture 前後的 current branch、HEAD、real index、staging state 與 working files 必須相同；`status`／snapshot review 重算 digest 時連 object database 都要隔離。詳見 ADR-0014。
 
 **每次 schema 升版，兩處 fixture 的版本號必須跟著往上調**——`internal/storage/storage_test.go` 中驗證「較新 schema 應被拒讀」的那一筆，與 `internal/work/work_test.go` 中區分較舊／較新 schema 錯誤的那一筆。它們壞掉的方式不是變紅，是在無人察覺下改為驗證一個合法的 state。M2 踩過一次。同一個檔案裡還有一處用字串替換改寫版本號的測試，改動時確認它仍然抓得到你要它抓的東西。
 

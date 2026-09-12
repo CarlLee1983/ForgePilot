@@ -33,13 +33,13 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   goal create --id <id> --title <t> declare a goal
   goal <block|unblock|complete|cancel> <goal-id>
   work add --goal <id> --story <path> [--depends-on <work-id>]
-  next                              print the next READY work item
+  next                              recommend the next legal agent action
   start <work-id>                   move a READY work item to RUNNING
-  verify <work-id>                  run the project's make verify against HEAD and record evidence
+  verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
   review <approve|reject> <work-id> [--pr <owner/name#number>]
-  status                            print goals, work items, gates and latest evidence
+  status [--work <work-id> --summary] print full status, or one Work Item's current summary
 
 ForgePilot does not replace ForgeFlow or your coding agent, and makes no
 network requests.
@@ -230,15 +230,74 @@ func next(args []string, root string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	item, ok := state.Next()
-	if !ok {
-		_, err = fmt.Fprintln(output, "No READY work.")
+	repositoryState, err := nextRepositoryState(&state, root)
+	if err != nil {
 		return err
 	}
-	revision, _ := repository.Head(root)
-	_, err = fmt.Fprintf(output, "Next: %s\nGoal: %s\nStory: %s\nVerification: %s\nReason: earliest READY work\n",
-		item.ID, item.GoalID, item.StoryRef, verificationSummary(&state, item.ID, revision))
+	action := state.ActionableNext(repositoryState)
+	switch action.Kind {
+	case work.NextActionNone:
+		_, err = fmt.Fprintln(output, "No actionable work.")
+	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
+		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: %s\nReason: %s\n", action.Item.ID, action.Reason)
+	default:
+		_, err = fmt.Fprintf(output, "Next: %s\nState: %s\nGoal: %s\nStory: %s\nAction: %s\nReason: %s\n",
+			action.Item.ID, action.Item.Status, action.Item.GoalID, action.Item.StoryRef,
+			nextActionText(&state, action), action.Reason)
+	}
 	return err
+}
+
+// nextRepositoryState gathers Git facts only when a REVIEW Work Item can
+// actually be re-verified or is waiting for a Human Review. READY and RUNNING
+// recommendations still work in a repository without a commit, just as next
+// did before candidate-aware selection existed.
+func nextRepositoryState(state *work.State, root string) (work.RepositoryState, error) {
+	needsCommitRevision := false
+	for _, item := range state.WorkItems {
+		if item.Status != work.Review || state.Verifiable(item.ID) != nil {
+			continue
+		}
+		verification, ok := state.LatestVerification(item.ID)
+		if !ok {
+			continue
+		}
+		if verification.CandidateKind == work.SnapshotCandidate {
+			workspace, err := repository.InspectSnapshot(root)
+			if err != nil {
+				return work.RepositoryState{}, err
+			}
+			return work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}, nil
+		}
+		needsCommitRevision = true
+	}
+	if needsCommitRevision {
+		revision, err := repository.Head(root)
+		if err != nil {
+			return work.RepositoryState{}, err
+		}
+		return work.RepositoryState{Revision: revision}, nil
+	}
+	return work.RepositoryState{}, nil
+}
+
+func nextActionText(state *work.State, action work.NextAction) string {
+	switch action.Kind {
+	case work.NextActionResume:
+		return "resume implementation"
+	case work.NextActionRepair:
+		return "repair implementation and verify again"
+	case work.NextActionReverify:
+		command := fmt.Sprintf("forgepilot verify %s", action.Item.ID)
+		if verification, ok := state.LatestVerification(action.Item.ID); ok && verification.CandidateKind == work.SnapshotCandidate {
+			command += " --snapshot"
+		}
+		return command
+	case work.NextActionStart:
+		return fmt.Sprintf("forgepilot start %s", action.Item.ID)
+	default:
+		return ""
+	}
 }
 
 func start(args []string, root string, output io.Writer) error {
@@ -254,7 +313,7 @@ func start(args []string, root string, output io.Writer) error {
 
 func status(args []string, root string, output io.Writer) error {
 	if len(args) != 0 {
-		return errors.New("usage: forgepilot status")
+		return statusSummary(args, root, output)
 	}
 	state, err := storage.Load(root)
 	if err != nil {
@@ -263,6 +322,16 @@ func status(args []string, root string, output io.Writer) error {
 	// Staleness needs the current revision, but a repository without one is not
 	// an error for a query: report what is known and omit the comparison.
 	revision, _ := repository.Head(root)
+	digest := ""
+	for _, item := range state.WorkItems {
+		latest, ok := state.LatestVerification(item.ID)
+		if item.Status != work.Done && ok && latest.CandidateKind == work.SnapshotCandidate {
+			if workspace, inspectErr := repository.InspectSnapshot(root); inspectErr == nil {
+				revision, digest = workspace.BaseRevision, workspace.Digest
+			}
+			break
+		}
+	}
 	for _, goal := range state.Goals {
 		heading := fmt.Sprintf("Goal %s %s: %s", goal.ID, goal.Status, goal.Title)
 		if goal.Reason != "" {
@@ -284,7 +353,7 @@ func status(args []string, root string, output io.Writer) error {
 				note = " (runner is gone; run forgepilot verify to recover)"
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
-				verificationSummary(&state, item.ID, revision), reviewSummary(&state, item.ID)); err != nil {
+				verificationSummary(&state, item.ID, revision, digest), reviewSummary(&state, item.ID)); err != nil {
 				return err
 			}
 			if unfinished := completionSummary(&state, item.ID); unfinished != "" {
@@ -305,6 +374,117 @@ func status(args []string, root string, output io.Writer) error {
 		_, err = fmt.Fprintln(output, "Next: none")
 	}
 	return err
+}
+
+const statusUsage = "usage: forgepilot status [--work <work-id> --summary]"
+
+// statusSummary deliberately accepts only the paired selectors. A bare
+// --work would look like a supported filtered version of the full history,
+// while this command's contract is explicitly a current-state summary.
+func statusSummary(args []string, root string, output io.Writer) error {
+	var id string
+	var hasWork, hasSummary bool
+	for len(args) > 0 {
+		switch args[0] {
+		case "--work":
+			if hasWork || len(args) < 2 || args[1] == "" || strings.HasPrefix(args[1], "--") {
+				return errors.New(statusUsage)
+			}
+			id, hasWork = args[1], true
+			args = args[2:]
+		case "--summary":
+			if hasSummary {
+				return errors.New(statusUsage)
+			}
+			hasSummary = true
+			args = args[1:]
+		default:
+			return errors.New(statusUsage)
+		}
+	}
+	if !hasWork || !hasSummary {
+		return errors.New(statusUsage)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		return err
+	}
+	// Resolve the Work Item before Git so an unknown ID always has the documented
+	// domain error, not an unrelated repository error.
+	summary, err := state.WorkSummary(id, work.RepositoryState{})
+	if err != nil {
+		return err
+	}
+	repositoryState := work.RepositoryState{}
+	if summary.HasVerification && summary.Item.Status != work.Done {
+		if summary.Verification.CandidateKind == work.SnapshotCandidate {
+			workspace, inspectErr := repository.InspectSnapshot(root)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			repositoryState = work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}
+		} else {
+			revision, headErr := repository.Head(root)
+			if headErr != nil {
+				return headErr
+			}
+			repositoryState.Revision = revision
+		}
+	}
+	summary, err = state.WorkSummary(id, repositoryState)
+	if err != nil {
+		return err
+	}
+	return writeWorkSummary(output, summary)
+}
+
+func writeWorkSummary(output io.Writer, summary work.WorkItemSummary) error {
+	blocking := "none"
+	if len(summary.BlockingGates) > 0 {
+		ids := make([]string, 0, len(summary.BlockingGates))
+		for _, gate := range summary.BlockingGates {
+			ids = append(ids, gate.ID)
+		}
+		blocking = strings.Join(ids, ", ")
+	}
+	_, err := fmt.Fprintf(output, "%s %s\nGoal: %s %s\nStory: %s\nVerification: %s\nReview: %s\nBlocking gates: %s\nCompletion: %s\n",
+		summary.Item.ID, summary.Item.Status,
+		summary.Goal.ID, summary.Goal.Status,
+		summary.Item.StoryRef,
+		workVerificationSummary(summary),
+		workReviewSummary(summary),
+		blocking,
+		workCompletionSummary(summary))
+	return err
+}
+
+func workVerificationSummary(summary work.WorkItemSummary) string {
+	if !summary.HasVerification {
+		return "not run"
+	}
+	result := fmt.Sprintf("%s %s at %s", summary.Verification.ID, summary.Verification.Result, shortRevision(summary.Verification.Revision))
+	if summary.Verification.CandidateKind == work.SnapshotCandidate {
+		result += " (snapshot)"
+	}
+	if summary.VerificationStale {
+		result += " (stale)"
+	}
+	return result
+}
+
+func workReviewSummary(summary work.WorkItemSummary) string {
+	if !summary.HasReview {
+		return "not reviewed"
+	}
+	return fmt.Sprintf("%s %s at %s", summary.Review.ID, summary.Review.Result, shortRevision(summary.Review.Revision))
+}
+
+func workCompletionSummary(summary work.WorkItemSummary) string {
+	if summary.ApprovalNeedsRerecord {
+		return "awaiting human review (re-approve to complete)"
+	}
+	return string(summary.Completion)
 }
 
 type flagValues map[string][]string
@@ -343,14 +523,21 @@ func now() time.Time                          { return time.Now().UTC() }
 
 // verificationSummary describes a Work Item's latest Verification Evidence. Work
 // that has never been verified says so explicitly: silence would read as approval.
-func verificationSummary(state *work.State, id, revision string) string {
+func verificationSummary(state *work.State, id, revision, digest string) string {
 	latest, ok := state.LatestVerification(id)
 	if !ok {
 		return "not verified"
 	}
 	summary := fmt.Sprintf("%s %s at %s", latest.ID, latest.Result, shortRevision(latest.Revision))
-	if state.Stale(id, revision) {
-		summary += fmt.Sprintf(" (stale; HEAD is now %s)", shortRevision(revision))
+	if latest.CandidateKind == work.SnapshotCandidate {
+		summary = fmt.Sprintf("%s %s snapshot %s", latest.ID, latest.Result, shortRevision(latest.Revision))
+	}
+	if state.CandidateStale(id, revision, digest) {
+		if latest.CandidateKind == work.SnapshotCandidate {
+			summary += " (stale; workspace no longer matches verified snapshot)"
+		} else {
+			summary += fmt.Sprintf(" (stale; HEAD is now %s)", shortRevision(revision))
+		}
 	}
 	return summary
 }

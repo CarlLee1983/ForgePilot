@@ -14,7 +14,7 @@ import (
 func TestV3EvidenceCarriesEmptyReviewFields(t *testing.T) {
 	zero := 0
 	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
 		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
 	encoded, err := json.Marshal(verification)
 	if err != nil {
@@ -39,6 +39,38 @@ func TestV3EvidenceCarriesEmptyReviewFields(t *testing.T) {
 	withNote.Note = "looks fine"
 	if err := validateEvidence([]Evidence{withNote}, 2, items); err == nil {
 		t.Fatal("accepted verification evidence carrying a review note")
+	}
+}
+
+func TestRuntimeValidationAllowsLegacyVerificationButRejectsReviewOrBlankMetadata(t *testing.T) {
+	zero := 0
+	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
+		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
+	items := map[string]Item{"WI-001": {ID: "WI-001"}}
+	if err := validateEvidence([]Evidence{verification}, 2, items); err != nil {
+		t.Fatalf("legacy verification without runtime = %v", err)
+	}
+	unsupported := verification
+	unsupported.Runtime = map[string]string{"os": "14.0"}
+	if err := validateEvidence([]Evidence{unsupported}, 2, items); err == nil {
+		t.Fatal("accepted unsupported runtime metadata")
+	}
+	blankValue := verification
+	blankValue.Runtime = map[string]string{"go": "\t"}
+	if err := validateEvidence([]Evidence{blankValue}, 2, items); err == nil {
+		t.Fatal("accepted runtime with blank value")
+	}
+	prerelease := verification
+	prerelease.Runtime = map[string]string{"go": "1.25rc1", "node": "24.0.0-rc.1+build.2", "python": "3.13.0rc1", "rust": "1.86.0-nightly"}
+	if err := validateEvidence([]Evidence{prerelease}, 2, items); err != nil {
+		t.Fatalf("rejected normalized prerelease runtime: %v", err)
+	}
+	review := Evidence{ID: "EV-001", Type: ReviewEvidence, Repository: "/repo", WorkItemID: "WI-001",
+		StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate, Result: Approved,
+		Reviewer: "carl@example.com", Runtime: map[string]string{"go": "1.25.5"}, CreatedAt: time.Now().UTC()}
+	if err := validateEvidence([]Evidence{review}, 2, items); err == nil {
+		t.Fatal("accepted review evidence carrying runtime")
 	}
 }
 
@@ -327,7 +359,7 @@ func TestCompletedWorkIsNeverStale(t *testing.T) {
 func TestV4EvidenceCarriesEmptyPRReference(t *testing.T) {
 	zero := 0
 	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
 		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
 	encoded, err := json.Marshal(verification)
 	if err != nil {
@@ -432,7 +464,7 @@ func TestPRReferenceMustBeOwnerNameNumber(t *testing.T) {
 func TestLoadedEvidenceWithAMalformedPRIsRejected(t *testing.T) {
 	items := map[string]Item{"WI-001": {ID: "WI-001"}}
 	review := Evidence{ID: "EV-001", Type: ReviewEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123",
+		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
 		Result: Approved, Reviewer: "carl@example.com", CreatedAt: time.Now().UTC()}
 	if err := validateEvidence([]Evidence{review}, 2, items); err != nil {
 		t.Fatal(err)

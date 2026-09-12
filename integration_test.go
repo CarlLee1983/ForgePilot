@@ -55,7 +55,7 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 	run("WI-001 RUNNING", "status")
 	run("WI-003 RUNNING", "status")
 	run("WI-002 PENDING", "status")
-	run("No READY work.", "next")
+	run("Action: resume implementation", "next")
 	fail("goal", "create", "--id", "queue", "--title", "Again")
 	failWith("story reference must be located under specs/stories", "work", "add", "--goal", "queue", "--story", "specs/stories/missing.md")
 	fail("work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-404")
@@ -68,6 +68,130 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	fail("status")
+}
+
+func TestNextRecommendsAgentWorkWithoutWritingState(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	empty, err := command(binary, root, "next")
+	if err != nil || !strings.Contains(empty, "No actionable work.") {
+		t.Fatalf("next in empty repository = %q, %v", empty, err)
+	}
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+
+	statePath := filepath.Join(root, ".forgepilot", "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("first next = %q, %v", first, err)
+	}
+	for _, want := range []string{
+		"Next: WI-001", "State: READY", "Goal: queue", "Story: specs/stories/a.md",
+		"Action: forgepilot start WI-001", "Reason: earliest READY work",
+	} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("next output %q does not contain %q", first, want)
+		}
+	}
+	second, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("second next = %q, %v", second, err)
+	}
+	if second != first {
+		t.Fatalf("repeated next changed output\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("next changed state.json")
+	}
+
+	mustRun(t, binary, root, "start", "WI-001")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	output, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with RUNNING and READY = %q, %v", output, err)
+	}
+	for _, want := range []string{"Next: WI-001", "State: RUNNING", "Action: resume implementation", "Reason: work is already in progress"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestNextReportsHumanOnlyBlockers(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Proceed?", "--option", "yes", "--option", "no")
+
+	output, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with gate = %q, %v", output, err)
+	}
+	for _, want := range []string{"No agent-actionable work.", "Waiting: WI-001", "Reason: unresolved Gate GATE-001"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+
+	mustRun(t, binary, root, "gate", "cancel", "GATE-001", "--reason", "not needed", "--by", "human@example.com")
+	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "waiting for direction")
+	output, err = command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with blocked goal = %q, %v", output, err)
+	}
+	for _, want := range []string{"No agent-actionable work.", "Waiting: WI-001", "Reason: goal queue is BLOCKED"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestNextRecommendsCommitReverificationWhenEvidenceIsStale(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
+	if err := os.WriteFile(filepath.Join(root, "new-commit.txt"), []byte("new revision\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "move HEAD")
+
+	statePath := filepath.Join(root, ".forgepilot", "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next with stale commit = %q, %v", output, err)
+	}
+	for _, want := range []string{"Next: WI-001", "Action: forgepilot verify WI-001\n", "Reason: verified candidate is stale"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+	if strings.Contains(output, "--snapshot") {
+		t.Fatalf("commit stale next incorrectly recommends snapshot: %q", output)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("next changed state.json while checking stale commit")
+	}
 }
 
 func TestWorkAddWithoutStoriesDirectoryNamesTheMissingDirectory(t *testing.T) {
@@ -479,11 +603,394 @@ func TestVerifyRunsOutsideTheMainWorktree(t *testing.T) {
 	}
 }
 
+func TestCommitRuntimeDiscoveryIgnoresMainWorktreeOnlyDeclaration(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forgepilot/\n.node-version\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeVerify(t, root, "verify:\n\t@test \"$$(node --version)\" = v22.17.1\n")
+	// This declaration exists only in the main worktree and is ignored by Git;
+	// the COMMIT candidate's detached checkout must not discover it.
+	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("99\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "bin")
+	writeExecutable(t, bin, "node", "#!/bin/sh\necho v22.17.1\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("NVM_DIR", t.TempDir())
+
+	output, err := command(binary, root, "verify", "WI-001")
+	if err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	if strings.Contains(output, "Runtime:") {
+		t.Fatalf("commit verification discovered main-only runtime declaration: %q", output)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 1 || state.Evidence[0].Runtime != nil {
+		t.Fatalf("commit evidence = %#v, want legacy no-declaration runtime", state.Evidence)
+	}
+}
+
+func TestVerifyResolvesCandidateRuntimeAndRecordsActualVersion(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+
+	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("24\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@test \"$$(node --version)\" = v24.8.0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "declare runtime contract")
+	wrong := filepath.Join(t.TempDir(), "bin")
+	writeExecutable(t, wrong, "node", "#!/bin/sh\necho v22.17.1\n")
+	nvm := t.TempDir()
+	writeExecutable(t, filepath.Join(nvm, "versions", "node", "v24.8.0", "bin"), "node", "#!/bin/sh\necho v24.8.0\n")
+	t.Setenv("PATH", wrong+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("NVM_DIR", nvm)
+
+	output, err := command(binary, root, "verify", "WI-001")
+	if err != nil || !strings.Contains(output, "Runtime: node 24.8.0\n") || !strings.Contains(output, "PASS") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 1 || state.Evidence[0].Runtime["node"] != "24.8.0" {
+		t.Fatalf("evidence = %#v, want resolved Node runtime", state.Evidence)
+	}
+}
+
+func TestRuntimePreconditionFailureCreatesNoFailureEvidence(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("99\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@node --version\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "require unavailable runtime")
+	bin := filepath.Join(t.TempDir(), "bin")
+	writeExecutable(t, bin, "node", "#!/bin/sh\necho v22.17.1\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("NVM_DIR", t.TempDir())
+
+	output, err := command(binary, root, "verify", "WI-001")
+	if err == nil || !strings.Contains(output, "verification environment unavailable") || !strings.Contains(output, "Node 99 required") {
+		t.Fatalf("verify = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 0 || state.WorkItems[0].Status != work.Running || state.WorkItems[0].CurrentRun != nil {
+		t.Fatalf("runtime refusal changed state: %#v", state)
+	}
+	if entries, err := os.ReadDir(filepath.Join(root, ".forgepilot", "worktrees")); err == nil && len(entries) != 0 {
+		t.Fatalf("runtime refusal left worktrees: %v", entries)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".forgepilot", "logs")); !os.IsNotExist(err) {
+		t.Fatalf("runtime refusal created logs before a run: %v", err)
+	}
+}
+
+func TestSnapshotRuntimeIsResolvedInsideItsDetachedCheckout(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, "verify:\n\t@test \"$$(node --version)\" = v24.8.0\n")
+	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("24\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wrong := filepath.Join(t.TempDir(), "bin")
+	writeExecutable(t, wrong, "node", "#!/bin/sh\necho v22.17.1\n")
+	nvm := t.TempDir()
+	writeExecutable(t, filepath.Join(nvm, "versions", "node", "v24.8.0", "bin"), "node", "#!/bin/sh\necho v24.8.0\n")
+	t.Setenv("PATH", wrong+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("NVM_DIR", nvm)
+
+	output, err := command(binary, root, "verify", "WI-001", "--snapshot")
+	if err != nil || !strings.Contains(output, "Candidate: SNAPSHOT") || !strings.Contains(output, "Runtime: node 24.8.0") || !strings.Contains(output, "PASS") {
+		t.Fatalf("snapshot verify = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Evidence) != 1 || state.Evidence[0].CandidateKind != work.SnapshotCandidate || state.Evidence[0].Runtime["node"] != "24.8.0" {
+		t.Fatalf("snapshot evidence = %#v", state.Evidence)
+	}
+}
+
+func writeExecutable(t *testing.T, directory, name, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSnapshotVerificationAndReviewUseTheSameWorkingTreeCandidate(t *testing.T) {
+	root, binary := fixture(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forgepilot/\nignored.txt\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "candidate.txt"), []byte("base\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deleted.txt"), []byte("delete me\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@test \"$$(cat candidate.txt)\" = final\n\t@test -f added.txt\n\t@test ! -e deleted.txt\n\t@test ! -e ignored.txt\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	base := commitAll(t, root, "snapshot base")
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+
+	// One path carries both staged and unstaged edits; the candidate must contain
+	// the final workspace contents, not stop at the staged version.
+	if err := os.WriteFile(filepath.Join(root, "candidate.txt"), []byte("staged\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommand(t, root, "add", "candidate.txt")
+	if err := os.WriteFile(filepath.Join(root, "candidate.txt"), []byte("final\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "added.txt"), []byte("new\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ignored.txt"), []byte("runtime\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	before := gitWorkspaceSurface(t, root)
+
+	output, err := command(binary, root, "verify", "WI-001", "--snapshot")
+	if err != nil {
+		t.Fatalf("snapshot verify = %q, %v", output, err)
+	}
+	for _, want := range []string{"Candidate: SNAPSHOT", "Revision: ", "Base: " + base, "PASS", "WI-001 REVIEW"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("snapshot verify output %q does not contain %q", output, want)
+		}
+	}
+	if after := gitWorkspaceSurface(t, root); after != before {
+		t.Fatalf("snapshot verify changed developer workspace\nwant:\n%s\ngot:\n%s", before, after)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification, ok := state.LatestVerification("WI-001")
+	if !ok || verification.CandidateKind != work.SnapshotCandidate || verification.BaseRevision != base || verification.CandidateDigest == "" {
+		t.Fatalf("snapshot verification evidence = %#v", verification)
+	}
+	if output := gitCommand(t, root, "cat-file", "-t", verification.Revision); strings.TrimSpace(output) != "commit" {
+		t.Fatalf("snapshot revision is not retained as a commit: %q", output)
+	}
+	if output, err := command(binary, root, "status"); err != nil || strings.Contains(output, "stale") {
+		t.Fatalf("unchanged snapshot status = %q, %v", output, err)
+	}
+
+	output, err = command(binary, root, "review", "approve", "WI-001")
+	if err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("snapshot review approve = %q, %v", output, err)
+	}
+	if after := gitWorkspaceSurface(t, root); after != before {
+		t.Fatalf("snapshot review changed developer workspace\nwant:\n%s\ngot:\n%s", before, after)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, ok := state.LatestReview("WI-001")
+	if !ok || review.Revision != verification.Revision || review.CandidateDigest != verification.CandidateDigest || review.CandidateKind != work.SnapshotCandidate {
+		t.Fatalf("review %#v does not bind verified snapshot %#v", review, verification)
+	}
+}
+
+func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
+	root, binary := fixture(t)
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	mustRun(t, binary, root, "verify", "WI-001", "--snapshot")
+
+	assertStale := func(want bool) {
+		t.Helper()
+		output, err := command(binary, root, "status")
+		if err != nil {
+			t.Fatalf("status = %q, %v", output, err)
+		}
+		if got := strings.Contains(output, "stale"); got != want {
+			t.Fatalf("status stale = %v, want %v: %q", got, want, output)
+		}
+		summary, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+		if err != nil {
+			t.Fatalf("summary = %q, %v", summary, err)
+		}
+		if !strings.Contains(summary, "(snapshot)") {
+			t.Fatalf("snapshot summary does not identify its candidate: %q", summary)
+		}
+		if got := strings.Contains(summary, "(stale)"); got != want {
+			t.Fatalf("summary stale = %v, want %v: %q", got, want, summary)
+		}
+		completion := "Completion: awaiting human review"
+		if want {
+			completion = "Completion: verification stale"
+		}
+		if !strings.Contains(summary, completion) {
+			t.Fatalf("summary %q does not contain %q", summary, completion)
+		}
+		statePath := filepath.Join(root, ".forgepilot", "state.json")
+		before, readErr := os.ReadFile(statePath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		next, err := command(binary, root, "next")
+		if err != nil {
+			t.Fatalf("next = %q, %v", next, err)
+		}
+		after, readErr := os.ReadFile(statePath)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(after) != string(before) {
+			t.Fatal("next changed state.json while inspecting a snapshot candidate")
+		}
+		if want {
+			for _, expected := range []string{"Next: WI-001", "Action: forgepilot verify WI-001 --snapshot", "Reason: verified candidate is stale"} {
+				if !strings.Contains(next, expected) {
+					t.Fatalf("stale snapshot next %q does not contain %q", next, expected)
+				}
+			}
+		} else if !strings.Contains(next, "No agent-actionable work.\n\nWaiting: WI-001\nReason: human review required") {
+			t.Fatalf("fresh snapshot next = %q", next)
+		}
+	}
+	assertStale(false)
+
+	story := filepath.Join(root, "specs", "stories", "a.md")
+	if err := os.WriteFile(story, []byte("# changed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(true)
+	if err := os.WriteFile(story, []byte("# story\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(false)
+
+	added := filepath.Join(root, "after.txt")
+	if err := os.WriteFile(added, []byte("added\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(true)
+	if err := os.Remove(added); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(false)
+
+	deleted := filepath.Join(root, "specs", "stories", "b.md")
+	if err := os.Remove(deleted); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(true)
+	if err := os.WriteFile(deleted, []byte("# story\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	assertStale(false)
+
+	if err := os.WriteFile(added, []byte("new candidate\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "review", "approve", "WI-001")
+	if err == nil || !strings.Contains(output, "workspace no longer matches verified snapshot") ||
+		!strings.Contains(output, "verify WI-001 --snapshot") {
+		t.Fatalf("review of changed workspace = %q, %v", output, err)
+	}
+	state, loadErr := storage.Load(root)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(state.Evidence) != 1 || state.WorkItemStatus("WI-001") != work.Review {
+		t.Fatalf("refused review changed state: %#v", state)
+	}
+
+	if output, err = command(binary, root, "verify", "WI-001", "--snapshot"); err != nil || !strings.Contains(output, "PASS") {
+		t.Fatalf("reverify snapshot = %q, %v", output, err)
+	}
+	if output, err = command(binary, root, "review", "approve", "WI-001"); err != nil || !strings.Contains(output, "WI-001 DONE") {
+		t.Fatalf("review after reverify = %q, %v", output, err)
+	}
+}
+
+func gitCommand(t *testing.T, root string, arguments ...string) string {
+	t.Helper()
+	output, err := exec.Command("git", append([]string{"-C", root}, arguments...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", arguments, err, output)
+	}
+	return string(output)
+}
+
+func gitWorkspaceSurface(t *testing.T, root string) string {
+	t.Helper()
+	index, err := os.ReadFile(filepath.Join(root, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join([]string{
+		gitCommand(t, root, "status", "--porcelain=v1", "--untracked-files=all"),
+		gitCommand(t, root, "diff", "--binary"),
+		gitCommand(t, root, "diff", "--cached", "--binary"),
+		gitCommand(t, root, "rev-parse", "HEAD"),
+		gitCommand(t, root, "branch", "--show-current"),
+		string(index),
+	}, "\x00")
+}
+
 // startVerify launches a verification in the background and waits until state
 // shows the run in flight, so the test can observe or interrupt it.
 func startVerify(t *testing.T, binary, root, id string) *exec.Cmd {
 	t.Helper()
-	running := exec.Command(binary, "verify", id)
+	return startVerification(t, binary, root, "verify", id)
+}
+
+func startVerification(t *testing.T, binary, root string, arguments ...string) *exec.Cmd {
+	t.Helper()
+	if len(arguments) < 2 || arguments[0] != "verify" {
+		t.Fatalf("startVerification requires verify arguments, got %v", arguments)
+	}
+	workID := arguments[1]
+	running := exec.Command(binary, arguments...)
 	running.Dir = root
 	if err := running.Start(); err != nil {
 		t.Fatal(err)
@@ -493,7 +1000,7 @@ func startVerify(t *testing.T, binary, root, id string) *exec.Cmd {
 		state, err := storage.Load(root)
 		if err == nil {
 			for _, item := range state.WorkItems {
-				if item.ID == id && item.CurrentRun != nil && item.Status == work.Verifying {
+				if item.ID == workID && item.CurrentRun != nil && item.Status == work.Verifying {
 					return running
 				}
 			}
@@ -501,8 +1008,60 @@ func startVerify(t *testing.T, binary, root, id string) *exec.Cmd {
 		time.Sleep(20 * time.Millisecond)
 	}
 	_ = running.Process.Kill()
-	t.Fatalf("%s never entered VERIFYING", id)
+	t.Fatalf("%v never entered VERIFYING", arguments)
 	return nil
+}
+
+func TestSnapshotVerificationStaysSerializedAndReclaimsInterruptedCandidate(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, "verify:\n\t@echo snapshot started\n\t@sleep 30\n")
+	if err := os.WriteFile(filepath.Join(root, "dirty.txt"), []byte("candidate\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	running := startVerification(t, binary, root, "verify", "WI-001", "--snapshot")
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := state.WorkItems[0].CurrentRun
+	if run == nil || run.CandidateKind != work.SnapshotCandidate || run.CandidateDigest == "" || run.BaseRevision == "" {
+		t.Fatalf("snapshot current run = %#v", run)
+	}
+	interruptedCandidate := run.Candidate()
+	if output, err := command(binary, root, "verify", "WI-001", "--snapshot"); err == nil {
+		t.Fatalf("concurrent snapshot verify succeeded: %s", output)
+	}
+	if err := running.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.Wait()
+
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(passingVerify), 0644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := command(binary, root, "verify", "WI-001", "--snapshot")
+	if err != nil || !strings.Contains(output, "INTERRUPTED") || !strings.Contains(output, "PASS") {
+		t.Fatalf("snapshot verify after interruption = %q, %v", output, err)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var interrupted *work.Evidence
+	for i := range state.Evidence {
+		if state.Evidence[i].Result == work.Interrupted {
+			interrupted = &state.Evidence[i]
+			break
+		}
+	}
+	if interrupted == nil || interrupted.Candidate() != interruptedCandidate {
+		t.Fatalf("INTERRUPTED evidence %#v does not preserve run candidate %#v", interrupted, interruptedCandidate)
+	}
 }
 
 func TestVerifyIsVisibleConcurrentAndRecoversFromInterruption(t *testing.T) {
@@ -660,6 +1219,149 @@ func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 	}
 	if len(state.Evidence) != 3 {
 		t.Fatalf("evidence = %#v, want three accumulated records", state.Evidence)
+	}
+}
+
+func TestWorkItemStatusSummary(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+
+	// The original no-argument status is deliberately a separate, stable view.
+	// This exact assertion catches summary work accidentally changing it.
+	full, err := command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", full, err)
+	}
+	const wantFull = "Goal queue ACTIVE: Queue\n  WI-001 READY specs/stories/a.md\n    not verified\n    not reviewed\n    Gates: 0 open\nNext: WI-001\n"
+	if full != wantFull {
+		t.Fatalf("status changed\nwant:\n%s\ngot:\n%s", wantFull, full)
+	}
+
+	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary = %q, %v", output, err)
+	}
+	const wantReady = "WI-001 READY\nGoal: queue ACTIVE\nStory: specs/stories/a.md\nVerification: not run\nReview: not reviewed\nBlocking gates: none\nCompletion: not started\n"
+	if output != wantReady {
+		t.Fatalf("ready summary\nwant:\n%s\ngot:\n%s", wantReady, output)
+	}
+
+	for _, arguments := range [][]string{
+		{"status", "--work"},
+		{"status", "--work", ""},
+		{"status", "--work", "WI-001"},
+		{"status", "--summary"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil || !strings.Contains(output, "usage: forgepilot status") {
+			t.Fatalf("%v = %q, %v; want usage failure", arguments, output, err)
+		}
+	}
+	if output, err := command(binary, root, "status", "--work", "WI-999", "--summary"); err == nil || !strings.Contains(output, `unknown work item "WI-999"`) {
+		t.Fatalf("unknown work summary = %q, %v", output, err)
+	}
+}
+
+func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T) {
+	root, binary := fixture(t)
+	revision := reviewable(t, binary, root)
+
+	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after PASS = %q, %v", output, err)
+	}
+	for _, want := range []string{"WI-001 REVIEW", "Verification: EV-001 PASS at " + revision[:12], "Review: not reviewed", "Blocking gates: none", "Completion: awaiting human review"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("summary %q does not contain %q", output, want)
+		}
+	}
+
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Choose", "--option", "one", "--option", "two")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Discard", "--option", "one", "--option", "two")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary with gates = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Blocking gates: GATE-001, GATE-002") || !strings.Contains(output, "Completion: blocked by gate") {
+		t.Fatalf("multiple-gate summary = %q", output)
+	}
+	mustRun(t, binary, root, "gate", "resolve", "GATE-002", "--option", "one")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary with gate = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Blocking gates: GATE-001") || strings.Contains(output, "GATE-002") || !strings.Contains(output, "Completion: blocked by gate") {
+		t.Fatalf("gate summary = %q", output)
+	}
+
+	// Approval while a Gate is open is correctly recorded but cannot complete.
+	// Once the Gate resolves, the existing lifecycle requires approval again.
+	mustRun(t, binary, root, "review", "approve", "WI-001")
+	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "one")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after unblocking approved work = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Review: EV-002 APPROVED") || !strings.Contains(output, "Completion: awaiting human review (re-approve to complete)") {
+		t.Fatalf("unblocked approved summary = %q", output)
+	}
+	mustRun(t, binary, root, "review", "approve", "WI-001")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after DONE = %q, %v", output, err)
+	}
+	for _, want := range []string{"WI-001 DONE", "Review: EV-003 APPROVED at " + revision[:12], "Blocking gates: none", "Completion: done"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("done summary %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, failingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
+	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after FAIL = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Verification: EV-001 FAIL") || !strings.Contains(output, "Completion: verification failed") {
+		t.Fatalf("failed-verification summary = %q", output)
+	}
+
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	mustRun(t, binary, root, "start", "WI-002")
+	mustRun(t, binary, root, "verify", "WI-002")
+	mustRun(t, binary, root, "review", "reject", "WI-002", "--reason", "fix it")
+	output, err = command(binary, root, "status", "--summary", "--work", "WI-002")
+	if err != nil {
+		t.Fatalf("summary after rejection = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Review: EV-003 REJECTED") || !strings.Contains(output, "Completion: changes requested") {
+		t.Fatalf("rejected-review summary = %q", output)
+	}
+	mustRun(t, binary, root, "verify", "WI-002")
+	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	if err != nil {
+		t.Fatalf("summary after re-verification = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Verification: EV-004 PASS") || !strings.Contains(output, "Review: EV-003 REJECTED") || !strings.Contains(output, "Completion: awaiting human review") {
+		t.Fatalf("re-verified summary = %q", output)
+	}
+
+	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "awaiting decision")
+	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	if err != nil {
+		t.Fatalf("summary with blocked goal = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Goal: queue BLOCKED") || !strings.Contains(output, "Completion: goal blocked") {
+		t.Fatalf("blocked-goal summary = %q", output)
 	}
 }
 

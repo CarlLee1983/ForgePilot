@@ -64,15 +64,31 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	if err != nil {
 		return err
 	}
-	// A review must point at content a commit describes, exactly as a
-	// verification must: otherwise the judgement names a revision that never
-	// held what was reviewed.
-	if err := repository.EnsureClean(root, "reviewing"); err != nil {
-		return err
-	}
-	revision, err := repository.Head(root)
+	state, err := storage.Load(root)
 	if err != nil {
 		return err
+	}
+	latest, hasVerification := state.LatestVerification(id)
+	expectedVerificationID := ""
+	if hasVerification {
+		expectedVerificationID = latest.ID
+	}
+	currentRevision, currentDigest := "", ""
+	if hasVerification && latest.CandidateKind == work.SnapshotCandidate {
+		workspace, inspectErr := repository.InspectSnapshot(root)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		currentRevision, currentDigest = workspace.BaseRevision, workspace.Digest
+	} else {
+		// Legacy COMMIT review remains strict clean-HEAD review.
+		if cleanErr := repository.EnsureClean(root, "reviewing"); cleanErr != nil {
+			return cleanErr
+		}
+		currentRevision, err = repository.Head(root)
+		if err != nil {
+			return err
+		}
 	}
 
 	var evidence work.Evidence
@@ -80,8 +96,12 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	var unfinished string
 	var unlocked []string
 	if err := storage.Update(root, func(state *work.State) error {
+		candidate, resolveErr := state.ResolveReviewCandidate(id, expectedVerificationID, currentRevision, currentDigest)
+		if resolveErr != nil {
+			return resolveErr
+		}
 		var recordErr error
-		evidence, recordErr = state.RecordReview(id, revision, result, reviewer, note, values.one("pr"), now())
+		evidence, recordErr = state.RecordCandidateReview(id, candidate, result, reviewer, note, values.one("pr"), now())
 		if recordErr != nil {
 			return recordErr
 		}
