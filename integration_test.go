@@ -582,6 +582,23 @@ func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
 		if got := strings.Contains(output, "stale"); got != want {
 			t.Fatalf("status stale = %v, want %v: %q", got, want, output)
 		}
+		summary, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+		if err != nil {
+			t.Fatalf("summary = %q, %v", summary, err)
+		}
+		if !strings.Contains(summary, "(snapshot)") {
+			t.Fatalf("snapshot summary does not identify its candidate: %q", summary)
+		}
+		if got := strings.Contains(summary, "(stale)"); got != want {
+			t.Fatalf("summary stale = %v, want %v: %q", got, want, summary)
+		}
+		completion := "Completion: awaiting human review"
+		if want {
+			completion = "Completion: verification stale"
+		}
+		if !strings.Contains(summary, completion) {
+			t.Fatalf("summary %q does not contain %q", summary, completion)
+		}
 	}
 	assertStale(false)
 
@@ -906,6 +923,149 @@ func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 	}
 	if len(state.Evidence) != 3 {
 		t.Fatalf("evidence = %#v, want three accumulated records", state.Evidence)
+	}
+}
+
+func TestWorkItemStatusSummary(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+
+	// The original no-argument status is deliberately a separate, stable view.
+	// This exact assertion catches summary work accidentally changing it.
+	full, err := command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", full, err)
+	}
+	const wantFull = "Goal queue ACTIVE: Queue\n  WI-001 READY specs/stories/a.md\n    not verified\n    not reviewed\n    Gates: 0 open\nNext: WI-001\n"
+	if full != wantFull {
+		t.Fatalf("status changed\nwant:\n%s\ngot:\n%s", wantFull, full)
+	}
+
+	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary = %q, %v", output, err)
+	}
+	const wantReady = "WI-001 READY\nGoal: queue ACTIVE\nStory: specs/stories/a.md\nVerification: not run\nReview: not reviewed\nBlocking gates: none\nCompletion: not started\n"
+	if output != wantReady {
+		t.Fatalf("ready summary\nwant:\n%s\ngot:\n%s", wantReady, output)
+	}
+
+	for _, arguments := range [][]string{
+		{"status", "--work"},
+		{"status", "--work", ""},
+		{"status", "--work", "WI-001"},
+		{"status", "--summary"},
+	} {
+		if output, err := command(binary, root, arguments...); err == nil || !strings.Contains(output, "usage: forgepilot status") {
+			t.Fatalf("%v = %q, %v; want usage failure", arguments, output, err)
+		}
+	}
+	if output, err := command(binary, root, "status", "--work", "WI-999", "--summary"); err == nil || !strings.Contains(output, `unknown work item "WI-999"`) {
+		t.Fatalf("unknown work summary = %q, %v", output, err)
+	}
+}
+
+func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T) {
+	root, binary := fixture(t)
+	revision := reviewable(t, binary, root)
+
+	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after PASS = %q, %v", output, err)
+	}
+	for _, want := range []string{"WI-001 REVIEW", "Verification: EV-001 PASS at " + revision[:12], "Review: not reviewed", "Blocking gates: none", "Completion: awaiting human review"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("summary %q does not contain %q", output, want)
+		}
+	}
+
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Choose", "--option", "one", "--option", "two")
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Discard", "--option", "one", "--option", "two")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary with gates = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Blocking gates: GATE-001, GATE-002") || !strings.Contains(output, "Completion: blocked by gate") {
+		t.Fatalf("multiple-gate summary = %q", output)
+	}
+	mustRun(t, binary, root, "gate", "resolve", "GATE-002", "--option", "one")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary with gate = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Blocking gates: GATE-001") || strings.Contains(output, "GATE-002") || !strings.Contains(output, "Completion: blocked by gate") {
+		t.Fatalf("gate summary = %q", output)
+	}
+
+	// Approval while a Gate is open is correctly recorded but cannot complete.
+	// Once the Gate resolves, the existing lifecycle requires approval again.
+	mustRun(t, binary, root, "review", "approve", "WI-001")
+	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "one")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after unblocking approved work = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Review: EV-002 APPROVED") || !strings.Contains(output, "Completion: awaiting human review (re-approve to complete)") {
+		t.Fatalf("unblocked approved summary = %q", output)
+	}
+	mustRun(t, binary, root, "review", "approve", "WI-001")
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after DONE = %q, %v", output, err)
+	}
+	for _, want := range []string{"WI-001 DONE", "Review: EV-003 APPROVED at " + revision[:12], "Blocking gates: none", "Completion: done"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("done summary %q does not contain %q", output, want)
+		}
+	}
+}
+
+func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, failingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
+	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("summary after FAIL = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Verification: EV-001 FAIL") || !strings.Contains(output, "Completion: verification failed") {
+		t.Fatalf("failed-verification summary = %q", output)
+	}
+
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	mustRun(t, binary, root, "start", "WI-002")
+	mustRun(t, binary, root, "verify", "WI-002")
+	mustRun(t, binary, root, "review", "reject", "WI-002", "--reason", "fix it")
+	output, err = command(binary, root, "status", "--summary", "--work", "WI-002")
+	if err != nil {
+		t.Fatalf("summary after rejection = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Review: EV-003 REJECTED") || !strings.Contains(output, "Completion: changes requested") {
+		t.Fatalf("rejected-review summary = %q", output)
+	}
+	mustRun(t, binary, root, "verify", "WI-002")
+	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	if err != nil {
+		t.Fatalf("summary after re-verification = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Verification: EV-004 PASS") || !strings.Contains(output, "Review: EV-003 REJECTED") || !strings.Contains(output, "Completion: awaiting human review") {
+		t.Fatalf("re-verified summary = %q", output)
+	}
+
+	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "awaiting decision")
+	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	if err != nil {
+		t.Fatalf("summary with blocked goal = %q, %v", output, err)
+	}
+	if !strings.Contains(output, "Goal: queue BLOCKED") || !strings.Contains(output, "Completion: goal blocked") {
+		t.Fatalf("blocked-goal summary = %q", output)
 	}
 }
 

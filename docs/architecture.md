@@ -196,6 +196,12 @@ Snapshot PASS 後，stale 以目前 workspace digest 是否仍等於 Verificatio
 
 Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_revision`、`candidate_digest`。v5→v6 migration 不查 Git，而是把所有舊 run／Evidence 的既有 revision 明確標成 `COMMIT`；舊 binary 拒讀 v6，新 binary 拒讀未 migration 的 v5。migration 前備份 `state.json.v5.bak`，rollback 必須還原該備份；snapshot refs 可以留在本機，不影響舊版 commit-only 流程。決定與失效條件見 [ADR-0014](adr/0014-working-tree-snapshot-is-a-candidate.md)。
 
+### P0-002 Work Item Status Summary
+
+`status --work <work-id> --summary` 是單一 Work Item 的 read-only current-state projection。它的資料流固定為 domain state → summary projection → CLI formatter：`internal/work` 以純值形式接收目前 repository revision 與 snapshot digest，選擇 latest Verification／Human Review、未解除 Gates，並重用 Candidate stale 規則；`internal/cli` 才讀取 Git 事實及格式化固定輸出。它不持久化 `summary`、`current_blocker`、`completion_text` 或 `next_action`，也不改變 Work Item lifecycle。
+
+completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。完整 `status` 的歷史輸出維持原樣；summary 則只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
+
 ## Verification 與 exact revision：M2 起
 
 Verification Evidence 必須至少保存 repository、Work Item、Story、完整 commit SHA、實際 command、exit code 與 timestamp。`result` 有三個值：`PASS`、`FAIL`、`INTERRUPTED`。INTERRUPTED 沒有 exit code（欄位為 null）——未產生結果就沒有結果碼，填 0 會被讀成成功。FAIL 與 INTERRUPTED 同樣 append；既有 Evidence 不覆寫。INTERRUPTED 表示未產生結果，不得視為 FAIL。

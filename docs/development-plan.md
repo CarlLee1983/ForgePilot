@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M5 與 P0-001 Candidate Snapshot 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M5、P0-001 Candidate Snapshot 與 P0-002 Work Item Status Summary 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -16,6 +16,7 @@ M1–M5 與 P0-001 Candidate Snapshot 已完成。本文件供後續開發拆分
 | M4 — PR exact-head review integration | PR number＋HEAD SHA review target | 新 HEAD 必須重新取得適用 review Evidence |
 | M5 — Verification diagnosability & review clarity | review 拒絕訊息說出當下動作、verification 輸出串流成 state 之外的 log | 非 PASS 執行的輸出可從落地 log 重讀；review 與 verify 的髒工作樹拒絕訊息各自說出正在做的事 |
 | P0-001 — Working Tree Candidate Snapshot | `verify --snapshot`、Candidate identity、snapshot-aware review／stale | 不製造 WIP commit 也能讓 Verification 與 Human Review 判斷完全相同的 immutable candidate |
+| P0-002 — Work Item Status Summary | `status --work <id> --summary`、單一 Work Item current-state projection | Human／Agent 不必解析完整 history 就能取得驗證、review、Gate、Goal 與完成狀態 |
 
 M1 通過後才開始 M2，依此類推至 M5；M1–M4 已完成，M5 開工前定案完成後才開始實作。各階段不得提前加入 database、Web UI、daemon、scheduler framework、agent runtime、plugin framework 或 network API。
 
@@ -409,6 +410,19 @@ Schema 升至 v6：`current_run` 與 Evidence 增加 `candidate_kind`、`base_re
 - v5 migration 保存 Goal、Work Item、Evidence、Gate 與 in-flight run，並將舊 candidate 明確標成 `COMMIT`。
 
 Snapshot retention／GC、cloud／GitHub integration、network request、自動 commit／PR、ForgeFlowV2 readiness 與其他 CLI 擴充不在 P0-001。
+
+## P0-002 — Work Item Status Summary
+
+CLI 契約：
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot status` | 保持既有完整 Goal／Work Item／Evidence／Gate history 輸出，不接受單獨的 filter。 |
+| `forgepilot status --work <work-id> --summary` | 固定輸出該 Work Item 的 status、Goal 與 Story、latest Verification、latest Human Review、未解除 Gate IDs 與 completion projection。不存在的 ID 回傳 `unknown work item "<id>"`。 |
+
+Summary 是 read-only presentation projection，不寫入 `state.json`，也不新增 lifecycle state。Verification 必須沿用既有 Candidate 規則：COMMIT 以 HEAD 比較、SNAPSHOT 以 workspace digest 比較，DONE 不標 stale。Review 只選最新 Human Review；Gate 只列 `OPEN`，`RESOLVED`／`CANCELLED` 不列入 blocker。`Completion:` 的 base projection 只會是 `not started`、`implementing`、`verification required`、`verification failed`、`verification stale`、`awaiting human review`、`changes requested`、`blocked by gate`、`goal blocked` 或 `done`。若 APPROVED 之後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有完成條件，`awaiting human review` 固定加上 ` (re-approve to complete)` action suffix；這是既有完成規則的呈現，不是新 transition。
+
+驗收：原有 `status` 輸出保持不變；READY／RUNNING、PASS／FAIL／stale／snapshot、APPROVED／REJECTED、單一／多個 unresolved Gate、BLOCKED Goal 與 DONE 都有 projection coverage；遺漏或不完整 flags 是 usage error。
 
 ## 每階段交付格式
 

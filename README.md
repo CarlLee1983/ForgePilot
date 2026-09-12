@@ -26,7 +26,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 ## 目前狀態
 
-**M1–M5 與 P0-001 Candidate Snapshot 已實作。**
+**M1–M5、P0-001 Candidate Snapshot 與 P0-002 Work Item Status Summary 已實作。**
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
@@ -37,6 +37,8 @@ M3 接上工作真正能完成的那條線：`gate` 讓需要人判斷的問題�
 M4 讓 Human Review 可以指明它發生在哪個 pull request 上：`review approve` 與 `review reject` 接受選填的 `--pr owner/name#number`，該值連同確切的 commit SHA 一起存進 Evidence。ForgePilot **不去 GitHub 查證**那個 PR——它不發出任何網路請求（[ADR-0010](docs/adr/0010-no-outbound-network-requests.md)），只驗格式。PR 是識別資料，不參與完成或 stale 的判定（[ADR-0011](docs/adr/0011-pr-identity-does-not-gate-completion.md)）；「HEAD 一變就是新的 review target」由既有的 SHA 比對成立。
 
 P0-001 新增 `forgepilot verify WI-001 --snapshot`：不需要先製造 WIP commit，就能把 staged、unstaged、tracked deletion 與 non-ignored untracked content 固定成 immutable local Candidate，再讓 Verification 與 Human Review 綁定同一個 snapshot revision。既有不帶 flag 的 clean-HEAD verification 完全保留。
+
+P0-002 新增 `forgepilot status --work WI-001 --summary`：以固定的少量行數呈現單一 Work Item 的 current status、最新 Verification／Human Review、未解除 Gate、Goal 狀態與 completion projection；既有 `forgepilot status` 的完整 history 輸出保持不變。
 
 初始支援平台是 macOS 的本機檔案系統，使用 Go 1.25.5。state 由程序鎖與原子替換保護；其他平台尚未宣稱支援。
 

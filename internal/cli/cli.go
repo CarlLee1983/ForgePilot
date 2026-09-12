@@ -39,7 +39,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
   review <approve|reject> <work-id> [--pr <owner/name#number>]
-  status                            print goals, work items, gates and latest evidence
+  status [--work <work-id> --summary] print full status, or one Work Item's current summary
 
 ForgePilot does not replace ForgeFlow or your coding agent, and makes no
 network requests.
@@ -254,7 +254,7 @@ func start(args []string, root string, output io.Writer) error {
 
 func status(args []string, root string, output io.Writer) error {
 	if len(args) != 0 {
-		return errors.New("usage: forgepilot status")
+		return statusSummary(args, root, output)
 	}
 	state, err := storage.Load(root)
 	if err != nil {
@@ -315,6 +315,117 @@ func status(args []string, root string, output io.Writer) error {
 		_, err = fmt.Fprintln(output, "Next: none")
 	}
 	return err
+}
+
+const statusUsage = "usage: forgepilot status [--work <work-id> --summary]"
+
+// statusSummary deliberately accepts only the paired selectors. A bare
+// --work would look like a supported filtered version of the full history,
+// while this command's contract is explicitly a current-state summary.
+func statusSummary(args []string, root string, output io.Writer) error {
+	var id string
+	var hasWork, hasSummary bool
+	for len(args) > 0 {
+		switch args[0] {
+		case "--work":
+			if hasWork || len(args) < 2 || args[1] == "" || strings.HasPrefix(args[1], "--") {
+				return errors.New(statusUsage)
+			}
+			id, hasWork = args[1], true
+			args = args[2:]
+		case "--summary":
+			if hasSummary {
+				return errors.New(statusUsage)
+			}
+			hasSummary = true
+			args = args[1:]
+		default:
+			return errors.New(statusUsage)
+		}
+	}
+	if !hasWork || !hasSummary {
+		return errors.New(statusUsage)
+	}
+
+	state, err := storage.Load(root)
+	if err != nil {
+		return err
+	}
+	// Resolve the Work Item before Git so an unknown ID always has the documented
+	// domain error, not an unrelated repository error.
+	summary, err := state.WorkSummary(id, work.RepositoryState{})
+	if err != nil {
+		return err
+	}
+	repositoryState := work.RepositoryState{}
+	if summary.HasVerification && summary.Item.Status != work.Done {
+		if summary.Verification.CandidateKind == work.SnapshotCandidate {
+			workspace, inspectErr := repository.InspectSnapshot(root)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			repositoryState = work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}
+		} else {
+			revision, headErr := repository.Head(root)
+			if headErr != nil {
+				return headErr
+			}
+			repositoryState.Revision = revision
+		}
+	}
+	summary, err = state.WorkSummary(id, repositoryState)
+	if err != nil {
+		return err
+	}
+	return writeWorkSummary(output, summary)
+}
+
+func writeWorkSummary(output io.Writer, summary work.WorkItemSummary) error {
+	blocking := "none"
+	if len(summary.BlockingGates) > 0 {
+		ids := make([]string, 0, len(summary.BlockingGates))
+		for _, gate := range summary.BlockingGates {
+			ids = append(ids, gate.ID)
+		}
+		blocking = strings.Join(ids, ", ")
+	}
+	_, err := fmt.Fprintf(output, "%s %s\nGoal: %s %s\nStory: %s\nVerification: %s\nReview: %s\nBlocking gates: %s\nCompletion: %s\n",
+		summary.Item.ID, summary.Item.Status,
+		summary.Goal.ID, summary.Goal.Status,
+		summary.Item.StoryRef,
+		workVerificationSummary(summary),
+		workReviewSummary(summary),
+		blocking,
+		workCompletionSummary(summary))
+	return err
+}
+
+func workVerificationSummary(summary work.WorkItemSummary) string {
+	if !summary.HasVerification {
+		return "not run"
+	}
+	result := fmt.Sprintf("%s %s at %s", summary.Verification.ID, summary.Verification.Result, shortRevision(summary.Verification.Revision))
+	if summary.Verification.CandidateKind == work.SnapshotCandidate {
+		result += " (snapshot)"
+	}
+	if summary.VerificationStale {
+		result += " (stale)"
+	}
+	return result
+}
+
+func workReviewSummary(summary work.WorkItemSummary) string {
+	if !summary.HasReview {
+		return "not reviewed"
+	}
+	return fmt.Sprintf("%s %s at %s", summary.Review.ID, summary.Review.Result, shortRevision(summary.Review.Revision))
+}
+
+func workCompletionSummary(summary work.WorkItemSummary) string {
+	if summary.ApprovalNeedsRerecord {
+		return "awaiting human review (re-approve to complete)"
+	}
+	return string(summary.Completion)
 }
 
 type flagValues map[string][]string

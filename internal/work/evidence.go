@@ -480,7 +480,7 @@ func (s *State) Stale(id, revision string) bool {
 // the deterministic digest of the current workspace candidate.
 func (s *State) CandidateStale(id, revision, digest string) bool {
 	latest, ok := s.LatestVerification(id)
-	if !ok || revision == "" {
+	if !ok {
 		return false
 	}
 	// Completed work is never stale. DONE means "finished at that revision",
@@ -494,6 +494,9 @@ func (s *State) CandidateStale(id, revision, digest string) bool {
 			return false
 		}
 		return latest.CandidateDigest != digest
+	}
+	if revision == "" {
+		return false
 	}
 	return latest.Revision != revision
 }
