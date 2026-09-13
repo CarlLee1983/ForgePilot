@@ -192,6 +192,7 @@ func (s *State) OpenGate(workItemID, question string, options []string, rational
 	}
 	s.NextGateID++
 	s.Gates = append(s.Gates, gate)
+	s.refreshDependents(workItemID, nil, now)
 	return gate, nil
 }
 
@@ -238,6 +239,14 @@ func (s *State) gateBlock(workItemID string) error {
 // text alone is not an answer: the choice is structured so that reading the
 // record later does not mean interpreting a sentence a second time.
 func (s *State) ResolveGate(gateID, choice, note, decidedBy string, now time.Time) error {
+	return s.resolveGate(gateID, choice, note, decidedBy, nil, now)
+}
+
+func (s *State) ResolveGateWithRepository(gateID, choice, note, decidedBy string, repository RepositoryState, now time.Time) error {
+	return s.resolveGate(gateID, choice, note, decidedBy, &repository, now)
+}
+
+func (s *State) resolveGate(gateID, choice, note, decidedBy string, repository *RepositoryState, now time.Time) error {
 	gate, err := s.closableGate(gateID, decidedBy)
 	if err != nil {
 		return err
@@ -249,6 +258,7 @@ func (s *State) ResolveGate(gateID, choice, note, decidedBy string, now time.Tim
 	decidedAt := now
 	gate.Status, gate.Choice, gate.Note = GateResolved, choice, note
 	gate.DecidedBy, gate.DecidedAt = decidedBy, &decidedAt
+	s.refreshDependents(gate.WorkItemID, repository, now)
 	return nil
 }
 
@@ -257,6 +267,14 @@ func (s *State) ResolveGate(gateID, choice, note, decidedBy string, now time.Tim
 // back door: whoever cancels could already have picked any option. What it adds
 // is a permanent, visible record that the question itself was withdrawn.
 func (s *State) CancelGate(gateID, reason, decidedBy string, now time.Time) error {
+	return s.cancelGate(gateID, reason, decidedBy, nil, now)
+}
+
+func (s *State) CancelGateWithRepository(gateID, reason, decidedBy string, repository RepositoryState, now time.Time) error {
+	return s.cancelGate(gateID, reason, decidedBy, &repository, now)
+}
+
+func (s *State) cancelGate(gateID, reason, decidedBy string, repository *RepositoryState, now time.Time) error {
 	gate, err := s.closableGate(gateID, decidedBy)
 	if err != nil {
 		return err
@@ -267,6 +285,7 @@ func (s *State) CancelGate(gateID, reason, decidedBy string, now time.Time) erro
 	decidedAt := now
 	gate.Status, gate.Reason = GateCancelled, reason
 	gate.DecidedBy, gate.DecidedAt = decidedBy, &decidedAt
+	s.refreshDependents(gate.WorkItemID, repository, now)
 	return nil
 }
 

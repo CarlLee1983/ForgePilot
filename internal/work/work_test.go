@@ -57,7 +57,7 @@ func TestQueueRules(t *testing.T) {
 
 func TestRefreshAndValidation(t *testing.T) {
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	state := State{SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 1, NextGateID: 1, Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive}}, WorkItems: []Item{
+	state := State{SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 1, NextGateID: 1, Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}}, WorkItems: []Item{
 		{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Done},
 		{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Pending, DependsOn: []string{"WI-001"}},
 	}}
@@ -87,7 +87,7 @@ func TestRefreshAndValidation(t *testing.T) {
 
 func TestSelectionUsesTimestampThenID(t *testing.T) {
 	old, same := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	state := State{SchemaVersion: SchemaVersion, NextWorkID: 4, NextEvidenceID: 1, NextGateID: 1, Goals: []Goal{{ID: "active", Title: "Active", Repository: "/repo", Status: GoalActive}, {ID: "blocked", Title: "Blocked", Repository: "/repo", Status: GoalBlocked}}, WorkItems: []Item{
+	state := State{SchemaVersion: SchemaVersion, NextWorkID: 4, NextEvidenceID: 1, NextGateID: 1, Goals: []Goal{{ID: "active", Title: "Active", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}, {ID: "blocked", Title: "Blocked", Repository: "/repo", Status: GoalBlocked, ReviewPolicy: ReviewPerWorkItem}}, WorkItems: []Item{
 		{ID: "WI-003", GoalID: "active", StoryRef: "specs/stories/c", Status: Ready, CreatedAt: same},
 		{ID: "WI-002", GoalID: "active", StoryRef: "specs/stories/b", Status: Ready, CreatedAt: same},
 		{ID: "WI-001", GoalID: "active", StoryRef: "specs/stories/a", Status: Ready, CreatedAt: old},
@@ -101,8 +101,8 @@ func TestSelectionUsesTimestampThenID(t *testing.T) {
 }
 
 func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
-	if SchemaVersion != 7 {
-		t.Fatalf("SchemaVersion = %d, want 7", SchemaVersion)
+	if SchemaVersion != 8 {
+		t.Fatalf("SchemaVersion = %d, want 8", SchemaVersion)
 	}
 	fresh := NewState()
 	if fresh.NextEvidenceID != 1 || fresh.NextGateID != 1 {
@@ -112,7 +112,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 		t.Fatalf("fresh state carries %d evidence and %d gates", len(fresh.Evidence), len(fresh.Gates))
 	}
 	older := fresh
-	older.SchemaVersion = 6
+	older.SchemaVersion = 7
 	err := older.Validate()
 	if err == nil {
 		t.Fatal("accepted an older schema version")
@@ -121,7 +121,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 		t.Fatalf("older-version error %q does not tell the user to migrate", err)
 	}
 	newer := fresh
-	newer.SchemaVersion = 8
+	newer.SchemaVersion = 9
 	err = newer.Validate()
 	if err == nil {
 		t.Fatal("accepted a newer schema version")
@@ -137,7 +137,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 func TestRemovedStatusesAreRejected(t *testing.T) {
 	for _, removed := range []Status{"WAITING_HUMAN", "BLOCKED"} {
 		state := State{SchemaVersion: SchemaVersion, NextWorkID: 2, NextEvidenceID: 1, NextGateID: 1,
-			Goals:     []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive}},
+			Goals:     []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}},
 			WorkItems: []Item{{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: removed}}}
 		if err := state.Validate(); err == nil {
 			t.Fatalf("accepted removed status %q", removed)

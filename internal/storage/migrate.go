@@ -143,6 +143,18 @@ func upgrade(contents []byte, from int) (work.State, error) {
 	// v6 → v7 adds optional runtime metadata to Runs and Verification Evidence.
 	// Earlier snapshots did not record it, so migration deliberately leaves it
 	// absent rather than inventing facts about the environment that ran a check.
+	if from < 8 {
+		// v7 → v8 makes Goal review policy explicit. Earlier snapshots always
+		// used per-Work-Item review, so retain that behavior rather than leaving
+		// a newly mandatory field ambiguous. A non-empty policy contradicts the
+		// declared pre-v8 version and must not be silently accepted.
+		for i := range state.Goals {
+			if state.Goals[i].ReviewPolicy != "" {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries review policy; refusing to migrate over it", from, state.Goals[i].ID)
+			}
+			state.Goals[i].ReviewPolicy = work.ReviewPerWorkItem
+		}
+	}
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

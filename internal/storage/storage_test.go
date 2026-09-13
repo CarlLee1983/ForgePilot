@@ -62,7 +62,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":8,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":9,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -375,7 +375,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 7`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 8`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -708,5 +708,101 @@ func TestMigrateUpgradesV6WithoutInventingRuntimeMetadata(t *testing.T) {
 	}
 	if string(backup) != original {
 		t.Fatal("backup does not hold the original v6 snapshot")
+	}
+}
+
+// v7State writes the schema immediately before review policy became mandatory.
+// Goals had no review_policy field then, so migration must make its historic
+// per-Work-Item behavior explicit.
+func v7State(t *testing.T, root string) string {
+	t.Helper()
+	contents := v6State(t, root)
+	contents = strings.Replace(contents, `"schema_version":6`, `"schema_version":7`, 1)
+	canonical, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents = strings.Replace(contents,
+		`],"work_items"`,
+		`,{"id":"h","title":"Second Goal","description":"","repository":"`+canonical+`","status":"ACTIVE","reason":"","created_at":"2026-09-07T00:00:00Z","updated_at":"2026-09-07T00:00:00Z"}],"work_items"`,
+		1,
+	)
+	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+func TestMigrateUpgradesV7GoalsToPerWorkItemReviewPolicy(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	original := v7State(t, root)
+
+	if _, err := Load(root); err == nil {
+		t.Fatal("read a v7 state without migrating")
+	}
+	if migrated, err := Migrate(root); err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, goal := range state.Goals {
+		if goal.ReviewPolicy != work.ReviewPerWorkItem {
+			t.Fatalf("migrated Goal %q review policy = %q, want %q", goal.ID, goal.ReviewPolicy, work.ReviewPerWorkItem)
+		}
+	}
+	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v7.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatal("backup does not hold the original v7 snapshot")
+	}
+}
+
+func TestMigrateRefusesV7HeaderThatUnderstatesReviewPolicy(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	v7State(t, root)
+	if migrated, err := Migrate(root); err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	path := filepath.Join(root, stateDirectory, "state.json")
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewound := strings.Replace(string(current), `"schema_version": 8`, `"schema_version": 7`, 1)
+	if rewound == string(current) {
+		t.Fatalf("failed to rewind the version header of %s", current)
+	}
+	if err := os.WriteFile(path, []byte(rewound), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, stateDirectory, "state.json.v7.bak")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Migrate(root); err == nil {
+		t.Fatal("migrated a v7 snapshot that already carries review policy")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != rewound {
+		t.Fatal("a refused migration still modified the state")
 	}
 }

@@ -60,7 +60,7 @@ func (s *State) complete(id string, now time.Time) {
 		return
 	}
 	item.Status, item.UpdatedAt = Done, now
-	s.RefreshReady(now)
+	s.refreshDependents(id, nil, now)
 }
 
 func shortRevision(revision string) string {

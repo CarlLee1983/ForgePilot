@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 7
+const SchemaVersion = 8
 
 type GoalStatus string
 
@@ -20,6 +20,15 @@ const (
 	GoalCancelled GoalStatus = "CANCELLED"
 )
 
+// ReviewPolicy places the routine Human Review boundary. It is durable Goal
+// policy, never a per-command permission to skip review.
+type ReviewPolicy string
+
+const (
+	ReviewPerWorkItem ReviewPolicy = "WORK_ITEM"
+	ReviewPerGoal     ReviewPolicy = "GOAL"
+)
+
 type Status string
 
 const (
@@ -28,17 +37,21 @@ const (
 	Running   Status = "RUNNING"
 	Verifying Status = "VERIFYING"
 	Review    Status = "REVIEW"
+	// Verified means machine verification passed under a Goal-level review
+	// policy. It satisfies dependency progression but is not Human acceptance.
+	Verified Status = "VERIFIED"
 	// Done is terminal and is only ever reached by satisfying the completion
 	// conditions in RecordReview; nothing sets it directly.
 	Done Status = "DONE"
 )
 
 type Goal struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Repository  string     `json:"repository"`
-	Status      GoalStatus `json:"status"`
+	ID           string       `json:"id"`
+	Title        string       `json:"title"`
+	Description  string       `json:"description"`
+	Repository   string       `json:"repository"`
+	Status       GoalStatus   `json:"status"`
+	ReviewPolicy ReviewPolicy `json:"review_policy"`
 	// Reason explains a Goal that was blocked or cancelled. Neither is worth
 	// recording without one: the status alone says a Goal stopped, not why.
 	Reason    string    `json:"reason"`
@@ -96,17 +109,38 @@ func NewState() State {
 }
 
 func (s *State) AddGoal(id, title, description, repository string, now time.Time) error {
+	return s.AddGoalWithReviewPolicy(id, title, description, repository, ReviewPerWorkItem, now)
+}
+
+func (s *State) AddGoalWithReviewPolicy(id, title, description, repository string, policy ReviewPolicy, now time.Time) error {
 	if id == "" || title == "" {
 		return errors.New("goal id and title are required")
+	}
+	if !validReviewPolicy(policy) {
+		return fmt.Errorf("invalid review policy %q", policy)
 	}
 	if s.goal(id) != nil {
 		return fmt.Errorf("goal %q already exists", id)
 	}
-	s.Goals = append(s.Goals, Goal{ID: id, Title: title, Description: description, Repository: repository, Status: GoalActive, CreatedAt: now, UpdatedAt: now})
+	s.Goals = append(s.Goals, Goal{ID: id, Title: title, Description: description, Repository: repository, Status: GoalActive, ReviewPolicy: policy, CreatedAt: now, UpdatedAt: now})
 	return nil
 }
 
+func validReviewPolicy(policy ReviewPolicy) bool {
+	return policy == ReviewPerWorkItem || policy == ReviewPerGoal
+}
+
 func (s *State) AddWork(goalID, story string, dependencies []string, now time.Time) (Item, error) {
+	return s.addWork(goalID, story, dependencies, nil, now)
+}
+
+// AddWorkWithRepository applies current repository facts when deciding whether
+// VERIFIED dependencies make the new Work Item READY.
+func (s *State) AddWorkWithRepository(goalID, story string, dependencies []string, repository RepositoryState, now time.Time) (Item, error) {
+	return s.addWork(goalID, story, dependencies, &repository, now)
+}
+
+func (s *State) addWork(goalID, story string, dependencies []string, repository *RepositoryState, now time.Time) (Item, error) {
 	goal := s.goal(goalID)
 	if goal == nil {
 		return Item{}, fmt.Errorf("unknown goal %q", goalID)
@@ -134,7 +168,7 @@ func (s *State) AddWork(goalID, story string, dependencies []string, now time.Ti
 	id := fmt.Sprintf("WI-%03d", s.NextWorkID)
 	s.NextWorkID++
 	status := Ready
-	if !s.dependenciesDone(dependencies) {
+	if !s.dependenciesSatisfiedAt(dependencies, repository) {
 		status = Pending
 	}
 	created := Item{ID: id, GoalID: goalID, StoryRef: story, Status: status, DependsOn: append([]string(nil), dependencies...), CreatedAt: now, UpdatedAt: now}
@@ -142,26 +176,77 @@ func (s *State) AddWork(goalID, story string, dependencies []string, now time.Ti
 	return created, nil
 }
 
-// RefreshReady promotes PENDING work whose dependencies have all completed. It
-// only promotes within an ACTIVE Goal: Next already refuses to select anything
-// else, and marking work READY under a Goal that is paused or abandoned would
-// leave two parts of the product disagreeing about the same fact.
+// RefreshReady reconciles PENDING and READY work with the dependency progression
+// policy. It only changes work within an ACTIVE Goal: pausing a Goal must not
+// rewrite its Work Item statuses merely because the pause itself temporarily
+// prevents progression.
 func (s *State) RefreshReady(now time.Time) {
+	s.refreshReady(nil, now)
+}
+
+// RefreshReadyWithRepository may promote work whose VERIFIED dependencies are
+// still bound to the current Candidate. Without these facts RefreshReady is
+// deliberately conservative and leaves such work PENDING.
+func (s *State) RefreshReadyWithRepository(repository RepositoryState, now time.Time) {
+	s.refreshReady(&repository, now)
+}
+
+func (s *State) refreshReady(repository *RepositoryState, now time.Time) {
 	for i := range s.WorkItems {
-		if s.WorkItems[i].Status != Pending || !s.dependenciesDone(s.WorkItems[i].DependsOn) {
-			continue
+		s.reconcileReady(&s.WorkItems[i], repository, now)
+	}
+}
+
+func (s *State) refreshDependents(dependencyID string, repository *RepositoryState, now time.Time) {
+	for i := range s.WorkItems {
+		for _, id := range s.WorkItems[i].DependsOn {
+			if id == dependencyID {
+				s.reconcileReady(&s.WorkItems[i], repository, now)
+				break
+			}
 		}
-		if goal := s.goal(s.WorkItems[i].GoalID); goal == nil || goal.Status != GoalActive {
-			continue
+	}
+}
+
+func (s *State) refreshGoal(goalID string, repository *RepositoryState, now time.Time) {
+	for i := range s.WorkItems {
+		if s.WorkItems[i].GoalID == goalID {
+			s.reconcileReady(&s.WorkItems[i], repository, now)
 		}
-		s.WorkItems[i].Status, s.WorkItems[i].UpdatedAt = Ready, now
+	}
+}
+
+func (s *State) reconcileReady(item *Item, repository *RepositoryState, now time.Time) {
+	if item.Status != Pending && item.Status != Ready {
+		return
+	}
+	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
+		return
+	}
+	target := Pending
+	if s.dependenciesSatisfiedAt(item.DependsOn, repository) {
+		target = Ready
+	}
+	if item.Status != target {
+		item.Status, item.UpdatedAt = target, now
 	}
 }
 
 func (s *State) Next() (Item, bool) {
+	return s.next(nil)
+}
+
+// NextWithRepository applies Candidate freshness when VERIFIED dependencies are
+// involved. Read-only CLI projections use it so missing or stale repository
+// facts fail closed rather than presenting downstream work as startable.
+func (s *State) NextWithRepository(repository RepositoryState) (Item, bool) {
+	return s.next(&repository)
+}
+
+func (s *State) next(repository *RepositoryState) (Item, bool) {
 	items := make([]Item, 0, len(s.WorkItems))
 	for _, item := range s.WorkItems {
-		if item.Status == Ready && s.dependenciesDone(item.DependsOn) && s.OpenGateCount(item.ID) == 0 {
+		if item.Status == Ready && s.dependenciesSatisfiedAt(item.DependsOn, repository) && s.OpenGateCount(item.ID) == 0 {
 			if goal := s.goal(item.GoalID); goal != nil && goal.Status == GoalActive {
 				items = append(items, item)
 			}
@@ -180,6 +265,16 @@ func (s *State) Next() (Item, bool) {
 }
 
 func (s *State) Start(id string, now time.Time) error {
+	return s.start(id, nil, now)
+}
+
+// StartWithRepository applies the same transition with current repository facts
+// so a VERIFIED dependency whose Candidate is stale cannot authorize new work.
+func (s *State) StartWithRepository(id string, repository RepositoryState, now time.Time) error {
+	return s.start(id, &repository, now)
+}
+
+func (s *State) start(id string, repository *RepositoryState, now time.Time) error {
 	item := s.item(id)
 	if item == nil {
 		return fmt.Errorf("unknown work item %q", id)
@@ -193,8 +288,17 @@ func (s *State) Start(id string, now time.Time) error {
 	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
 		return fmt.Errorf("work item %q does not belong to an active goal", id)
 	}
-	if !s.dependenciesDone(item.DependsOn) {
+	if !s.dependenciesProgressionAuthorized(item.DependsOn) {
 		return fmt.Errorf("work item %q has incomplete dependencies", id)
+	}
+	for _, dependencyID := range item.DependsOn {
+		dependency := s.item(dependencyID)
+		if dependency != nil && dependency.Status != Done && repository == nil {
+			return fmt.Errorf("work item %q requires current repository facts for VERIFIED dependency %q", id, dependencyID)
+		}
+	}
+	if repository != nil && !s.dependenciesSatisfiedAt(item.DependsOn, repository) {
+		return fmt.Errorf("work item %q has a stale dependency; verify it against the current candidate first", id)
 	}
 	item.Status, item.UpdatedAt = Running, now
 	return nil
@@ -220,6 +324,12 @@ func (s State) Validate() error {
 	for _, goal := range s.Goals {
 		if goal.ID == "" || goal.Title == "" || goal.Repository == "" {
 			return fmt.Errorf("invalid goal %q", goal.ID)
+		}
+		if !validReviewPolicy(goal.ReviewPolicy) {
+			return fmt.Errorf("goal %q has invalid review policy %q", goal.ID, goal.ReviewPolicy)
+		}
+		if goal.ReviewPolicy == ReviewPerGoal && goal.Status == GoalCompleted {
+			return fmt.Errorf("goal %q uses GOAL review policy but is COMPLETED without final-review evidence", goal.ID)
 		}
 		switch goal.Status {
 		case GoalActive, GoalCompleted:
@@ -250,8 +360,16 @@ func (s State) Validate() error {
 		if _, ok := goals[item.GoalID]; !ok {
 			return fmt.Errorf("work item %q has unknown goal", item.ID)
 		}
+		goal := goals[item.GoalID]
+		if goal.ReviewPolicy == ReviewPerGoal && (item.Status == Review || item.Status == Done) {
+			return fmt.Errorf("work item %q is %s under GOAL review policy", item.ID, item.Status)
+		}
 		switch item.Status {
 		case Pending, Ready, Running, Verifying, Review, Done:
+		case Verified:
+			if goals[item.GoalID].ReviewPolicy != ReviewPerGoal {
+				return fmt.Errorf("work item %q is VERIFIED under %s review policy", item.ID, goals[item.GoalID].ReviewPolicy)
+			}
 		default:
 			return fmt.Errorf("invalid status for %q", item.ID)
 		}
@@ -302,6 +420,21 @@ func (s State) Validate() error {
 	if err := validateEvidence(s.Evidence, s.NextEvidenceID, items); err != nil {
 		return err
 	}
+	for _, item := range s.WorkItems {
+		if item.Status != Verified {
+			continue
+		}
+		verification, ok := s.LatestVerification(item.ID)
+		if !ok || verification.Result != Pass {
+			return fmt.Errorf("work item %q is VERIFIED without a latest PASS Verification", item.ID)
+		}
+	}
+	for _, evidence := range s.Evidence {
+		item := items[evidence.WorkItemID]
+		if evidence.Type == ReviewEvidence && goals[item.GoalID].ReviewPolicy == ReviewPerGoal {
+			return fmt.Errorf("evidence %q is a Work Item review under GOAL review policy", evidence.ID)
+		}
+	}
 	if err := validateGates(s.Gates, s.NextGateID, items); err != nil {
 		return err
 	}
@@ -347,13 +480,45 @@ func (s *State) item(id string) *Item {
 	}
 	return nil
 }
-func (s *State) dependenciesDone(ids []string) bool {
+func (s *State) dependenciesSatisfiedAt(ids []string, repository *RepositoryState) bool {
 	for _, id := range ids {
-		if item := s.item(id); item == nil || item.Status != Done {
+		item := s.item(id)
+		if item == nil || !s.satisfiesDependency(*item) {
+			return false
+		}
+		if item.Status != Done {
+			if repository == nil {
+				return false
+			}
+			verification, ok := s.LatestVerification(id)
+			if !ok || verification.Result != Pass || !candidateMatchesRepository(verification, *repository) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (s *State) dependenciesProgressionAuthorized(ids []string) bool {
+	for _, id := range ids {
+		item := s.item(id)
+		if item == nil || !s.satisfiesDependency(*item) {
 			return false
 		}
 	}
 	return true
+}
+
+// satisfiesDependency is the single progression rule. VERIFIED is deliberately
+// not a second spelling of DONE: it only satisfies a dependency when the owning
+// Goal chose Goal-level review and no Gate still withholds authority.
+func (s *State) satisfiesDependency(item Item) bool {
+	if item.Status == Done {
+		return true
+	}
+	goal := s.goal(item.GoalID)
+	return goal != nil && goal.Status == GoalActive && goal.ReviewPolicy == ReviewPerGoal &&
+		item.Status == Verified && s.OpenGateCount(item.ID) == 0
 }
 func workNumber(id string) int { n, _ := parseWorkID(id); return n }
 

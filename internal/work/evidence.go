@@ -70,8 +70,8 @@ func (evidence Evidence) Candidate() Candidate {
 	return Candidate{Kind: evidence.CandidateKind, Revision: evidence.Revision, BaseRevision: evidence.BaseRevision, Digest: evidence.CandidateDigest}
 }
 
-// Verifiable reports whether a Work Item may enter a Verification Run. REVIEW is
-// allowed so that a Work Item whose Evidence has gone Stale can be verified again
+// Verifiable reports whether a Work Item may enter a Verification Run. REVIEW and
+// VERIFIED are allowed so that a Work Item whose Evidence has gone Stale can be verified again
 // against the current revision; re-running against an unchanged revision is also
 // permitted, since Evidence only ever accumulates.
 func (s *State) Verifiable(id string) error {
@@ -82,8 +82,8 @@ func (s *State) Verifiable(id string) error {
 	if err := s.gateBlock(id); err != nil {
 		return err
 	}
-	if item.Status != Running && item.Status != Review {
-		return fmt.Errorf("work item %q is %s; only RUNNING or REVIEW work can be verified", id, item.Status)
+	if item.Status != Running && item.Status != Review && item.Status != Verified {
+		return fmt.Errorf("work item %q is %s; only RUNNING, REVIEW, or VERIFIED work can be verified", id, item.Status)
 	}
 	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
 		return fmt.Errorf("work item %q does not belong to an active goal", id)
@@ -116,14 +116,24 @@ func (s *State) CanBeginVerification(id string) error {
 // RecordVerification appends the Evidence for a finished Verification Run and
 // moves the Work Item accordingly. It never overwrites existing Evidence.
 func (s *State) RecordVerification(id, revision, command string, exitCode int, now time.Time) (Evidence, error) {
+	return s.recordVerification(id, revision, command, exitCode, nil, now)
+}
+
+// RecordVerificationWithRepository records the outcome and uses current
+// repository facts for any dependency promotions caused by a GOAL-policy PASS.
+func (s *State) RecordVerificationWithRepository(id, revision, command string, exitCode int, repository RepositoryState, now time.Time) (Evidence, error) {
+	return s.recordVerification(id, revision, command, exitCode, &repository, now)
+}
+
+func (s *State) recordVerification(id, revision, command string, exitCode int, repository *RepositoryState, now time.Time) (Evidence, error) {
 	result := Pass
 	if exitCode != 0 {
 		result = Fail
 	}
-	return s.appendEvidence(id, revision, command, &exitCode, result, now)
+	return s.appendEvidence(id, revision, command, &exitCode, result, repository, now)
 }
 
-func (s *State) appendEvidence(id, revision, command string, exitCode *int, result Result, now time.Time) (Evidence, error) {
+func (s *State) appendEvidence(id, revision, command string, exitCode *int, result Result, repository *RepositoryState, now time.Time) (Evidence, error) {
 	item := s.item(id)
 	if item == nil {
 		return Evidence{}, fmt.Errorf("unknown work item %q", id)
@@ -167,7 +177,12 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 	item.CurrentRun = nil
 	switch result {
 	case Pass:
-		item.Status = Review
+		if goal.ReviewPolicy == ReviewPerGoal {
+			item.Status = Verified
+			s.refreshDependents(id, repository, now)
+		} else {
+			item.Status = Review
+		}
 	default:
 		item.Status = Running
 	}
@@ -294,6 +309,7 @@ func (s *State) BeginCandidateVerificationWithRuntime(id string, candidate Candi
 	item.CurrentRun = &Run{Revision: candidate.Revision, CandidateKind: candidate.Kind, BaseRevision: candidate.BaseRevision,
 		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, Runtime: copyRuntime(runtime), StartedAt: now}
 	item.UpdatedAt = now
+	s.refreshDependents(id, nil, now)
 	return nil
 }
 
@@ -342,7 +358,7 @@ func (s *State) ReclaimRun(id, command string, now time.Time) (Evidence, string,
 	// docs/adr/0012-verification-log-outside-state.md.
 	abandoned := item.CurrentRun.WorktreePath
 	logPath := item.CurrentRun.LogPath
-	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, command, nil, Interrupted, now)
+	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, command, nil, Interrupted, nil, now)
 	if err != nil {
 		return Evidence{}, "", "", false, err
 	}
@@ -400,15 +416,10 @@ func (s *State) RecordCandidateReview(id string, candidate Candidate, result Res
 	if result != Approved && result != Rejected {
 		return Evidence{}, fmt.Errorf("%q is not a review result", result)
 	}
-	// Only verified work is up for review: reviewing anything else would let a
-	// judgement stand in for a check that never ran.
-	if item.Status != Review {
-		return Evidence{}, fmt.Errorf("work item %q is %s; only REVIEW work can be reviewed", id, item.Status)
+	if err := s.Reviewable(id); err != nil {
+		return Evidence{}, err
 	}
 	goal := s.goal(item.GoalID)
-	if goal == nil {
-		return Evidence{}, fmt.Errorf("work item %q has unknown goal", id)
-	}
 	if err := candidate.validate(); err != nil {
 		return Evidence{}, fmt.Errorf("a review requires a valid candidate: %w", err)
 	}
@@ -452,6 +463,29 @@ func (s *State) RecordCandidateReview(id string, candidate Candidate, result Res
 		s.complete(id, now)
 	}
 	return evidence, nil
+}
+
+// Reviewable checks the durable boundary before a caller resolves repository or
+// reviewer facts. Goal-level policy cannot be turned into a Work Item review by
+// satisfying adapter preconditions first.
+func (s *State) Reviewable(id string) error {
+	item := s.item(id)
+	if item == nil {
+		return fmt.Errorf("unknown work item %q", id)
+	}
+	goal := s.goal(item.GoalID)
+	if goal == nil {
+		return fmt.Errorf("work item %q has unknown goal", id)
+	}
+	if goal.ReviewPolicy == ReviewPerGoal {
+		return fmt.Errorf("work item %q belongs to a Goal with GOAL review policy; review happens at the Goal final-review boundary", id)
+	}
+	// Only verified work is up for review: reviewing anything else would let a
+	// judgement stand in for a check that never ran.
+	if item.Status != Review {
+		return fmt.Errorf("work item %q is %s; only REVIEW work can be reviewed", id, item.Status)
+	}
+	return nil
 }
 
 // ResolveReviewCandidate applies the distinct review targeting contracts. A

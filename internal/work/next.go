@@ -13,14 +13,17 @@ const (
 	NextActionReverify        NextActionKind = "REVERIFY"
 	NextActionStart           NextActionKind = "START"
 	NextActionWaitHumanReview NextActionKind = "WAIT_HUMAN_REVIEW"
+	NextActionWaitGoalReview  NextActionKind = "WAIT_GOAL_REVIEW"
 	NextActionWaitGate        NextActionKind = "WAIT_GATE"
 	NextActionWaitGoal        NextActionKind = "WAIT_GOAL"
 )
 
 // NextAction is the read-only answer to what an agent can legally do next.
-// Item is empty only when Kind is NextActionNone.
+// Goal is populated only for a Goal final-review wait. Item is empty for that
+// action and when Kind is NextActionNone.
 type NextAction struct {
 	Item   Item
+	Goal   Goal
 	Kind   NextActionKind
 	Reason string
 }
@@ -42,12 +45,13 @@ func (s *State) ActionableNext(repository RepositoryState) NextAction {
 	}
 
 	for _, item := range items {
-		if item.Status == Review && s.Verifiable(item.ID) == nil && s.CandidateStale(item.ID, repository.Revision, repository.SnapshotDigest) {
+		if (item.Status == Review || item.Status == Verified) && s.Verifiable(item.ID) == nil &&
+			s.CandidateStale(item.ID, repository.Revision, repository.SnapshotDigest) {
 			return NextAction{Item: item, Kind: NextActionReverify, Reason: "verified candidate is stale"}
 		}
 	}
 
-	if item, ok := s.Next(); ok {
+	if item, ok := s.NextWithRepository(repository); ok {
 		return NextAction{Item: item, Kind: NextActionStart, Reason: "earliest READY work"}
 	}
 
@@ -72,6 +76,13 @@ func (s *State) ActionableNext(repository RepositoryState) NextAction {
 				!s.CandidateStale(item.ID, repository.Revision, repository.SnapshotDigest) {
 				return NextAction{Item: item, Kind: NextActionWaitHumanReview, Reason: "human review required"}
 			}
+		}
+	}
+
+	for _, goal := range s.Goals {
+		summary, err := s.GoalSummary(goal.ID, repository)
+		if err == nil && summary.Completion == GoalAwaitingFinalReview {
+			return NextAction{Goal: goal, Kind: NextActionWaitGoalReview, Reason: "goal final review required"}
 		}
 	}
 

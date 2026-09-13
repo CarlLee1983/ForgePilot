@@ -29,11 +29,20 @@ func (s *State) BlockGoal(id, reason string, now time.Time) error {
 // UnblockGoal returns a paused Goal to ACTIVE, clearing the reason it was paused
 // for: that reason described a state the Goal is no longer in.
 func (s *State) UnblockGoal(id string, now time.Time) error {
+	return s.unblockGoal(id, nil, now)
+}
+
+func (s *State) UnblockGoalWithRepository(id string, repository RepositoryState, now time.Time) error {
+	return s.unblockGoal(id, &repository, now)
+}
+
+func (s *State) unblockGoal(id string, repository *RepositoryState, now time.Time) error {
 	goal, err := s.goalInStatus(id, "unblock", GoalBlocked)
 	if err != nil {
 		return err
 	}
 	goal.Status, goal.Reason, goal.UpdatedAt = GoalActive, "", now
+	s.refreshGoal(id, repository, now)
 	return nil
 }
 
@@ -45,6 +54,9 @@ func (s *State) CompleteGoal(id string, now time.Time) error {
 	goal, err := s.goalInStatus(id, "complete", GoalActive)
 	if err != nil {
 		return err
+	}
+	if goal.ReviewPolicy == ReviewPerGoal {
+		return fmt.Errorf("goal %q uses GOAL review policy and requires final review before completion", id)
 	}
 	for _, item := range s.WorkItems {
 		if item.GoalID == id && item.Status != Done {

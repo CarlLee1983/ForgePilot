@@ -11,21 +11,93 @@ type RepositoryState struct {
 	SnapshotDigest string
 }
 
+// GoalCompletion is a read-only projection. In particular,
+// GoalAwaitingFinalReview is not a persisted Goal status and cannot complete a
+// Goal without the future Human final-review transition.
+type GoalCompletion string
+
+const (
+	GoalInProgress          GoalCompletion = "in progress"
+	GoalAwaitingFinalReview GoalCompletion = "awaiting goal final review"
+	GoalBlockedCompletion   GoalCompletion = "blocked"
+	GoalDoneCompletion      GoalCompletion = "done"
+	GoalCancelledCompletion GoalCompletion = "cancelled"
+)
+
+type GoalSummary struct {
+	Goal                    Goal
+	Completion              GoalCompletion
+	VerificationEvidenceIDs []string
+}
+
+// GoalSummary projects whether a Goal-level review boundary is ready. Durable
+// VERIFIED state is enough for dependency progression; final review readiness
+// is stricter and requires every Work Item's latest PASS to match the current
+// repository candidate and every Gate to be closed.
+func (s *State) GoalSummary(id string, repository RepositoryState) (GoalSummary, error) {
+	goal := s.goal(id)
+	if goal == nil {
+		return GoalSummary{}, fmt.Errorf("unknown goal %q", id)
+	}
+	summary := GoalSummary{Goal: *goal, Completion: GoalInProgress}
+	switch goal.Status {
+	case GoalBlocked:
+		summary.Completion = GoalBlockedCompletion
+		return summary, nil
+	case GoalCompleted:
+		summary.Completion = GoalDoneCompletion
+		return summary, nil
+	case GoalCancelled:
+		summary.Completion = GoalCancelledCompletion
+		return summary, nil
+	}
+	if goal.ReviewPolicy != ReviewPerGoal {
+		return summary, nil
+	}
+	found := false
+	var verificationIDs []string
+	for _, item := range s.itemsByCreation() {
+		if item.GoalID != id {
+			continue
+		}
+		found = true
+		verification, ok := s.LatestVerification(item.ID)
+		if item.Status != Verified || !ok || verification.Result != Pass || s.OpenGateCount(item.ID) > 0 ||
+			!candidateMatchesRepository(verification, repository) {
+			return summary, nil
+		}
+		verificationIDs = append(verificationIDs, verification.ID)
+	}
+	if found {
+		summary.Completion = GoalAwaitingFinalReview
+		summary.VerificationEvidenceIDs = verificationIDs
+	}
+	return summary, nil
+}
+
+func candidateMatchesRepository(verification Evidence, repository RepositoryState) bool {
+	if verification.CandidateKind == SnapshotCandidate {
+		return repository.SnapshotDigest != "" && verification.CandidateDigest == repository.SnapshotDigest
+	}
+	return repository.Revision != "" && verification.Revision == repository.Revision
+}
+
 // Completion describes the one current action a Work Item summary presents. It
 // is a projection over durable state, never a Work Item lifecycle state.
 type Completion string
 
 const (
-	CompletionNotStarted         Completion = "not started"
-	CompletionImplementing       Completion = "implementing"
-	CompletionVerificationNeeded Completion = "verification required"
-	CompletionVerificationFailed Completion = "verification failed"
-	CompletionVerificationStale  Completion = "verification stale"
-	CompletionAwaitingReview     Completion = "awaiting human review"
-	CompletionChangesRequested   Completion = "changes requested"
-	CompletionBlockedByGate      Completion = "blocked by gate"
-	CompletionGoalBlocked        Completion = "goal blocked"
-	CompletionDone               Completion = "done"
+	CompletionNotStarted            Completion = "not started"
+	CompletionImplementing          Completion = "implementing"
+	CompletionVerificationNeeded    Completion = "verification required"
+	CompletionVerificationFailed    Completion = "verification failed"
+	CompletionVerificationStale     Completion = "verification stale"
+	CompletionVerifiedForGoalReview Completion = "verified for goal review"
+	CompletionAwaitingReview        Completion = "awaiting human review"
+	CompletionChangesRequested      Completion = "changes requested"
+	CompletionBlockedByGate         Completion = "blocked by gate"
+	CompletionGoalBlocked           Completion = "goal blocked"
+	CompletionDone                  Completion = "done"
 )
 
 // WorkItemSummary is a read-only view of one Work Item's actionable state.
@@ -131,6 +203,8 @@ func summaryCompletion(summary WorkItemSummary) Completion {
 		return CompletionNotStarted
 	case Running:
 		return CompletionImplementing
+	case Verified:
+		return CompletionVerifiedForGoalReview
 	case Verifying:
 		return CompletionVerificationNeeded
 	default:
