@@ -20,7 +20,7 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|verify|gate|review|status>"
+const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|reconcile|verify|gate|review|status>"
 
 // Asking what the commands are must not require an initialized repository:
 // discovering the CLI is the step before deciding to run it anywhere.
@@ -35,6 +35,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   work add --goal <id> --story <path> [--depends-on <work-id>]
   next                              recommend the next legal agent action
   start <work-id>                   move a READY work item to RUNNING
+  reconcile --goal <goal-id>        recompute one Goal's PENDING/READY readiness
   verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
@@ -78,6 +79,8 @@ func run(args []string, cwd string, output io.Writer) error {
 		return next(args[1:], root, output)
 	case "start":
 		return start(args[1:], root, output)
+	case "reconcile":
+		return reconcile(args[1:], root, output)
 	case "verify":
 		return verify(args[1:], root, output)
 	case "gate":
@@ -296,6 +299,14 @@ func currentCandidateState(state *work.State, root string) (work.RepositoryState
 			needsSnapshotDigest = true
 		}
 	}
+	return candidateState(root, needsCommitRevision, needsSnapshotDigest)
+}
+
+// candidateState resolves exactly the Git facts a caller asked for. Facts that
+// nothing needs are never read: a failure to resolve one is a refusal, so
+// gathering more than the decision requires would refuse commands that did not
+// depend on it.
+func candidateState(root string, needsCommitRevision, needsSnapshotDigest bool) (work.RepositoryState, error) {
 	result := work.RepositoryState{}
 	if needsCommitRevision {
 		revision, err := repository.Head(root)
@@ -317,6 +328,67 @@ func currentCandidateState(state *work.State, root string) (work.RepositoryState
 	return result, nil
 }
 
+// reconcile writes the readiness the current facts imply for one Goal. It is the
+// explicit command that recovers a queue whose persisted PENDING outlived the
+// condition that caused it; it appends no Evidence, answers no Gate and changes
+// no review policy.
+func reconcile(args []string, root string, output io.Writer) error {
+	values, err := flags(args, map[string]bool{"goal": false})
+	if err != nil {
+		return err
+	}
+	id := values.one("goal")
+	if id == "" {
+		return errors.New("usage: forgepilot reconcile --goal <goal-id>")
+	}
+	var changes []work.ReadinessChange
+	if err := storage.Update(root, func(state *work.State) error {
+		// The Goal is checked before any Git call so an unknown or stopped Goal is
+		// refused for what it is, rather than by whatever the repository says.
+		if err := state.ReconcilableGoal(id); err != nil {
+			return err
+		}
+		repositoryState, factsErr := goalReadinessState(state, id, root)
+		if factsErr != nil {
+			return fmt.Errorf("resolve current Candidate before reconciling readiness: %w", factsErr)
+		}
+		var reconcileErr error
+		changes, reconcileErr = state.ReconcileGoalReadiness(id, repositoryState, now())
+		return reconcileErr
+	}); err != nil {
+		return err
+	}
+	if len(changes) == 0 {
+		_, err = fmt.Fprintf(output, "Goal %s readiness unchanged\n", id)
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "Goal %s reconciled\n", id); err != nil {
+		return err
+	}
+	for _, change := range changes {
+		if _, err := fmt.Fprintf(output, "%s %s -> %s\n", change.ItemID, change.From, change.To); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// goalReadinessState resolves only the Candidate facts this Goal's readiness
+// depends on, so an unrelated Goal's SNAPSHOT Evidence cannot make reconciling
+// this one require a workspace digest — or fail when one cannot be computed.
+func goalReadinessState(state *work.State, id, root string) (work.RepositoryState, error) {
+	needsCommitRevision, needsSnapshotDigest := false, false
+	for _, kind := range state.ReadinessCandidateKinds(id) {
+		switch kind {
+		case work.SnapshotCandidate:
+			needsSnapshotDigest = true
+		case work.CommitCandidate:
+			needsCommitRevision = true
+		}
+	}
+	return candidateState(root, needsCommitRevision, needsSnapshotDigest)
+}
+
 func nextActionText(state *work.State, action work.NextAction) string {
 	switch action.Kind {
 	case work.NextActionResume:
@@ -331,6 +403,10 @@ func nextActionText(state *work.State, action work.NextAction) string {
 		return command
 	case work.NextActionStart:
 		return fmt.Sprintf("forgepilot start %s", action.Item.ID)
+	case work.NextActionReconcile:
+		// The recommendation names the Goal because readiness is reconciled a Goal
+		// at a time; the Work Item it is about is already on the Next: line.
+		return fmt.Sprintf("forgepilot reconcile --goal %s", action.Item.GoalID)
 	default:
 		return ""
 	}

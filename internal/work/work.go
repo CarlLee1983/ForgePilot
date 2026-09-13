@@ -3,7 +3,6 @@ package work
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -244,24 +243,12 @@ func (s *State) NextWithRepository(repository RepositoryState) (Item, bool) {
 }
 
 func (s *State) next(repository *RepositoryState) (Item, bool) {
-	items := make([]Item, 0, len(s.WorkItems))
-	for _, item := range s.WorkItems {
-		if item.Status == Ready && s.dependenciesSatisfiedAt(item.DependsOn, repository) && s.OpenGateCount(item.ID) == 0 {
-			if goal := s.goal(item.GoalID); goal != nil && goal.Status == GoalActive {
-				items = append(items, item)
-			}
+	for _, item := range s.itemsByCreation() {
+		if item.Status == Ready && s.advanceable(item, repository) {
+			return item, true
 		}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			return workNumber(items[i].ID) < workNumber(items[j].ID)
-		}
-		return items[i].CreatedAt.Before(items[j].CreatedAt)
-	})
-	if len(items) == 0 {
-		return Item{}, false
-	}
-	return items[0], true
+	return Item{}, false
 }
 
 func (s *State) Start(id string, now time.Time) error {
