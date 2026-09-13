@@ -40,7 +40,9 @@ P0-001 新增 `forgepilot verify WI-001 --snapshot`：不需要先製造 WIP com
 
 P0-002 新增 `forgepilot status --work WI-001 --summary`：以固定的少量行數呈現單一 Work Item 的 current status、最新 Verification／Human Review、未解除 Gate、Goal 狀態與 completion projection；既有 `forgepilot status` 的完整 history 輸出保持不變。
 
-P0-003 擴充 `forgepilot next`：它優先建議續接已 RUNNING 的工作、修復最新 verification FAIL 的工作、或重新驗證 stale REVIEW／VERIFIED candidate；只有沒有這些工作時才推薦最早的 READY Work Item。它只輸出下一個合法 agent action 與原因，不會自動執行 `start`／`verify` 或改寫 state。
+P0-003 擴充 `forgepilot next`：它優先建議續接已 RUNNING 的工作、修復最新 verification FAIL 的工作、或重新驗證 stale REVIEW candidate；接著是可合法前進的工作——已 READY 的建議 `start`，持久化 readiness 落後於事實的建議 `reconcile`；沒有可前進的工作時，才處理 GOAL-policy 的 stale VERIFIED 重驗。它只輸出下一個合法 agent action 與原因，不會自動執行 `start`／`verify`／`reconcile` 或改寫 state。
+
+`forgepilot reconcile --goal <goal-id>` 依目前 repository facts 重算單一 ACTIVE Goal 的 PENDING／READY readiness。Gate 或 Candidate 移動會讓下游退回 PENDING，條件恢復後那個 readiness 不會自己更新——這個命令就是把它寫回去的明確動作。它沿用同一套 dependency progression 判準，不新增 Evidence、不答 Gate、不動 review policy，也不碰 RUNNING／VERIFYING／REVIEW／VERIFIED／DONE；READY 仍不代表可以忽略該工作自己的 Gate。必要的 repository facts 讀不到時整個命令拒絕，不做部分更新。詳見 [ADR-0017](docs/adr/0017-readiness-is-a-projection-made-durable.md)。
 
 P1-004 讓 `verify` 先在實際 Candidate checkout 讀取 repository 的 runtime/toolchain 宣告，再以本機已安裝且版本相符的 Node、Go、Python、Rust 建立該次 subprocess environment。caller shell 的預設版本不再決定驗證結果；宣告版本不可用時會在 Verification Run 開始前拒絕，不產生假的 FAIL Evidence。實際版本會保存於 Verification Evidence。
 

@@ -470,3 +470,17 @@ Schema 升至 v8：Goal 加入必填 `review_policy`；v7 與更舊 state migrat
 6. **Risks / Open Questions**：未解風險、操作限制與下一階段前置決策。
 
 只有 acceptance criteria 與 required checks 實際通過才能宣告 milestone 完成；文件或測試 fixture 不代表產品能力已實作。
+
+## Readiness Recovery 與 GOAL-policy 重驗排序
+
+`forgepilot reconcile --goal <goal-id>` 是新增的唯一寫入指令。
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot reconcile --goal <goal-id>` | 依目前 repository facts 重算該 Goal 的 PENDING／READY readiness。有變更時輸出 `Goal <id> reconciled` 與每筆 `WI-00n PENDING -> READY`；沒有變更時輸出 `Goal <id> readiness unchanged`。 |
+
+Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計算的 projection，不新增 durable state、不升 schema。允許的移動只有 `PENDING → READY` 與 `READY → PENDING`；RUNNING、VERIFYING、REVIEW、VERIFIED、DONE 一律不動，Verification Evidence、Review Evidence、Gate 決策與 Review Policy 也一律不動。判準完全沿用既有的 dependency progression predicate，CLI 不另寫一套。Goal 必須存在且為 ACTIVE，BLOCKED／CANCELLED／COMPLETED 都拒絕並說明原因。Goal 的存在與狀態在取 Git facts 之前檢查；facts 在 `storage.Update` 的受鎖 callback 內解析，且只解析這個 Goal 的 PENDING／READY 工作其 prerequisite 實際需要的種類——其他 Goal 的 SNAPSHOT Evidence 不會讓這個 Goal 需要 workspace digest。任何必要 facts 取得失敗即拒絕整個命令，不做部分更新，也不把 unknown 當 fresh。相同 state 與 facts 下重複執行不產生 domain 變更，未改變的項目 `UpdatedAt` 不動。state lock 只序列化 ForgePilot 自己的 state 交易，不是 Git workspace lock。
+
+`next` 新增 `RECONCILE` action，並改為以下順序：合法 RUNNING 的 RESUME／REPAIR；WORK_ITEM 模式既有 stale REVIEW 的 REVERIFY；可合法前進的工作（已 READY 為 START，PENDING 但 readiness 可恢復為 RECONCILE，兩者共用同一個 created-at／numeric-ID 排序）；GOAL-policy stale VERIFIED 的 REVERIFY；最後才是既有的等待原因與 WAIT_GOAL_REVIEW。`next` 與 `reconcile` 共用同一個 `advanceable` 判準，因此不會出現「推薦 reconcile 但 reconcile 一直 unchanged」的空轉；`next` 仍是純查詢，不自行執行 reconciliation。本輪只調整合法動作之間的排序，不改變合法性的標準：READY 不足以推薦 START，prerequisite 的 Gate 與 freshness 仍須成立，且 Goal final review boundary 維持既有完整 freshness 要求，中途延後的重驗必須在總審前補完。
+
+驗收：readiness 由 Gate 與 Candidate 移動退回 PENDING、條件恢復後經 `reconcile` 復原的完整 CLI／Git 流程，且復原過程不新增 Verification Evidence；stale prerequisite、未解除的 prerequisite Gate、工作自身的 Gate、BLOCKED／CANCELLED／COMPLETED Goal、未知 Goal 與 facts 取得失敗都 fail closed 且不留部分更新；reconcile Goal A 不改動 Goal B；三張連續任務各自產生新 commit 時 action sequence 為 START／VERIFY 交錯後才 REVERIFY，總計恰好 5 次 Verification Run；SNAPSHOT 以持續演進的 digest 重做同一流程；多 prerequisite 任一不符即不能 START；WORK_ITEM policy 的 REVIEW → Human Approval → DONE 與 stale REVIEW 導航不變；`next` 不寫 state、HEAD、real index 或持久化 refs，重複執行結果穩定，`reconcile` 第二次無 domain 變更。
