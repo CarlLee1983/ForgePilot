@@ -7,20 +7,32 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CarlLee1983/ForgePilot/internal/app"
 	"github.com/CarlLee1983/ForgePilot/internal/repository"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
-	if err := run(args, cwd, stdout); err != nil {
-		fmt.Fprintf(stderr, "forgepilot: %v\n", err)
-		return 1
+	err := run(args, cwd, stdout)
+	if err == nil {
+		return 0
 	}
-	return 0
+	// A run that stops for a Gate, a budget or a goal review has not failed: it
+	// has finished doing what it may legally do. Its exit code says which, and
+	// there is nothing to print as an error.
+	var status *exitStatus
+	if errors.As(err, &status) {
+		if status.err != nil {
+			fmt.Fprintf(stderr, "forgepilot: %v\n", status.err)
+		}
+		return status.code
+	}
+	fmt.Fprintf(stderr, "forgepilot: %v\n", err)
+	return 1
 }
 
-const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|reconcile|verify|gate|review|status>"
+const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|reconcile|verify|run|gate|review|status>"
 
 // Asking what the commands are must not require an initialized repository:
 // discovering the CLI is the step before deciding to run it anywhere.
@@ -37,13 +49,18 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   start <work-id>                   move a READY work item to RUNNING
   reconcile --goal <goal-id>        recompute one Goal's PENDING/READY readiness
   verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
+  run --goal <goal-id> --runtime <codex|fake> --snapshot [--dry-run]
+                                    drive one GOAL-policy goal until a person is needed
+  run status <run-id> [--json]      what that run concluded, and the goal's readiness now
+  run resume <run-id>               continue a stopped run without resetting its budget
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
   review <approve|reject> <work-id> [--pr <owner/name#number>]
   status [--work <work-id> --summary] print full status, or one Work Item's current summary
 
-ForgePilot does not replace ForgeFlow or your coding agent, and makes no
-network requests.
+ForgePilot does not replace ForgeFlow or your coding agent. Nothing here makes
+a network request; the run command launches the local coding CLI you name, and
+that CLI may contact a model service of its own.
 `
 
 func run(args []string, cwd string, output io.Writer) error {
@@ -83,6 +100,8 @@ func run(args []string, cwd string, output io.Writer) error {
 		return reconcile(args[1:], root, output)
 	case "verify":
 		return verify(args[1:], root, output)
+	case "run":
+		return runCommand(args[1:], root, output)
 	case "gate":
 		return gate(args[1:], root, output)
 	case "review":
@@ -185,7 +204,7 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 		case work.GoalBlocked:
 			return state.BlockGoal(id, reason, now())
 		case work.GoalActive:
-			repositoryState, err := currentCandidateState(state, root)
+			repositoryState, err := app.CandidateFacts(state, root)
 			if err != nil {
 				return fmt.Errorf("resolve current Candidate before unblocking: %w", err)
 			}
@@ -219,7 +238,7 @@ func addWork(args []string, root string, output io.Writer) error {
 	}
 	var added work.Item
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := currentCandidateState(state, root)
+		repositoryState, factsErr := app.CandidateFacts(state, root)
 		if factsErr != nil {
 			return fmt.Errorf("resolve current Candidate before adding work: %w", factsErr)
 		}
@@ -274,58 +293,7 @@ func next(args []string, root string, output io.Writer) error {
 // recommendations still work in a repository without a commit, just as next
 // did before candidate-aware selection existed.
 func nextRepositoryState(state *work.State, root string) (work.RepositoryState, error) {
-	return currentCandidateState(state, root)
-}
-
-// currentCandidateState gathers the external facts needed to decide whether
-// persisted REVIEW/VERIFIED Evidence, or a Verification currently finishing,
-// still names the repository's current Candidate. Callers pass the values into
-// internal/work; that package remains filesystem- and Git-free.
-func currentCandidateState(state *work.State, root string) (work.RepositoryState, error) {
-	needsCommitRevision, needsSnapshotDigest := false, false
-	for _, item := range state.WorkItems {
-		kind := work.CandidateKind("")
-		if item.Status == work.Verifying && item.CurrentRun != nil {
-			kind = item.CurrentRun.CandidateKind
-		} else if item.Status == work.Review || item.Status == work.Verified {
-			if verification, ok := state.LatestVerification(item.ID); ok {
-				kind = verification.CandidateKind
-			}
-		}
-		switch kind {
-		case work.CommitCandidate:
-			needsCommitRevision = true
-		case work.SnapshotCandidate:
-			needsSnapshotDigest = true
-		}
-	}
-	return candidateState(root, needsCommitRevision, needsSnapshotDigest)
-}
-
-// candidateState resolves exactly the Git facts a caller asked for. Facts that
-// nothing needs are never read: a failure to resolve one is a refusal, so
-// gathering more than the decision requires would refuse commands that did not
-// depend on it.
-func candidateState(root string, needsCommitRevision, needsSnapshotDigest bool) (work.RepositoryState, error) {
-	result := work.RepositoryState{}
-	if needsCommitRevision {
-		revision, err := repository.Head(root)
-		if err != nil {
-			return work.RepositoryState{}, err
-		}
-		result.Revision = revision
-	}
-	if needsSnapshotDigest {
-		workspace, err := repository.InspectSnapshot(root)
-		if err != nil {
-			return work.RepositoryState{}, err
-		}
-		result.SnapshotDigest = workspace.Digest
-		if result.Revision == "" {
-			result.Revision = workspace.BaseRevision
-		}
-	}
-	return result, nil
+	return app.CandidateFacts(state, root)
 }
 
 // reconcile writes the readiness the current facts imply for one Goal. It is the
@@ -341,21 +309,8 @@ func reconcile(args []string, root string, output io.Writer) error {
 	if id == "" {
 		return errors.New("usage: forgepilot reconcile --goal <goal-id>")
 	}
-	var changes []work.ReadinessChange
-	if err := storage.Update(root, func(state *work.State) error {
-		// The Goal is checked before any Git call so an unknown or stopped Goal is
-		// refused for what it is, rather than by whatever the repository says.
-		if err := state.ReconcilableGoal(id); err != nil {
-			return err
-		}
-		repositoryState, factsErr := goalReadinessState(state, id, root)
-		if factsErr != nil {
-			return fmt.Errorf("resolve current Candidate before reconciling readiness: %w", factsErr)
-		}
-		var reconcileErr error
-		changes, reconcileErr = state.ReconcileGoalReadiness(id, repositoryState, now())
-		return reconcileErr
-	}); err != nil {
+	changes, err := app.ReconcileGoal(root, id, now)
+	if err != nil {
 		return err
 	}
 	if len(changes) == 0 {
@@ -371,22 +326,6 @@ func reconcile(args []string, root string, output io.Writer) error {
 		}
 	}
 	return nil
-}
-
-// goalReadinessState resolves only the Candidate facts this Goal's readiness
-// depends on, so an unrelated Goal's SNAPSHOT Evidence cannot make reconciling
-// this one require a workspace digest — or fail when one cannot be computed.
-func goalReadinessState(state *work.State, id, root string) (work.RepositoryState, error) {
-	needsCommitRevision, needsSnapshotDigest := false, false
-	for _, kind := range state.ReadinessCandidateKinds(id) {
-		switch kind {
-		case work.SnapshotCandidate:
-			needsSnapshotDigest = true
-		case work.CommitCandidate:
-			needsCommitRevision = true
-		}
-	}
-	return candidateState(root, needsCommitRevision, needsSnapshotDigest)
 }
 
 func nextActionText(state *work.State, action work.NextAction) string {
@@ -416,54 +355,11 @@ func start(args []string, root string, output io.Writer) error {
 	if len(args) != 1 {
 		return errors.New("usage: forgepilot start <work-id>")
 	}
-	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, err := startRepositoryState(state, args[0], root)
-		if err != nil {
-			return err
-		}
-		return state.StartWithRepository(args[0], repositoryState, now())
-	}); err != nil {
+	if err := app.StartWork(root, args[0], now); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(output, "%s RUNNING\n", args[0])
 	return err
-}
-
-func startRepositoryState(state *work.State, id, root string) (work.RepositoryState, error) {
-	summary, err := state.WorkSummary(id, work.RepositoryState{})
-	if err != nil {
-		return work.RepositoryState{}, err
-	}
-	needsCommit, needsSnapshot := false, false
-	for _, dependencyID := range summary.Item.DependsOn {
-		if state.WorkItemStatus(dependencyID) != work.Verified {
-			continue
-		}
-		verification, ok := state.LatestVerification(dependencyID)
-		if !ok {
-			continue
-		}
-		if verification.CandidateKind == work.SnapshotCandidate {
-			needsSnapshot = true
-		} else {
-			needsCommit = true
-		}
-	}
-	if needsSnapshot {
-		workspace, err := repository.InspectSnapshot(root)
-		if err != nil {
-			return work.RepositoryState{}, err
-		}
-		return work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}, nil
-	}
-	if needsCommit {
-		revision, err := repository.Head(root)
-		if err != nil {
-			return work.RepositoryState{}, err
-		}
-		return work.RepositoryState{Revision: revision}, nil
-	}
-	return work.RepositoryState{}, nil
 }
 
 func status(args []string, root string, output io.Writer) error {
@@ -689,6 +585,7 @@ func (f flagValues) one(name string) string {
 	}
 	return ""
 }
+
 func (f flagValues) all(name string) []string { return append([]string(nil), f[name]...) }
 func now() time.Time                          { return time.Now().UTC() }
 

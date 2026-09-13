@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/CarlLee1983/ForgePilot/internal/app"
 	"github.com/CarlLee1983/ForgePilot/internal/repository"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
@@ -65,7 +66,7 @@ func resolveGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := currentCandidateState(state, root)
+		repositoryState, factsErr := app.CandidateFacts(state, root)
 		if factsErr != nil {
 			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
 		}
@@ -94,7 +95,7 @@ func cancelGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := currentCandidateState(state, root)
+		repositoryState, factsErr := app.CandidateFacts(state, root)
 		if factsErr != nil {
 			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
 		}

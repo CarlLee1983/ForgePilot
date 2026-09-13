@@ -35,7 +35,21 @@ type NextAction struct {
 // next, sharing Next's ordering; GOAL-policy re-verification of history comes
 // last, because it is owed at the Goal boundary rather than owed right now.
 func (s *State) ActionableNext(repository RepositoryState) NextAction {
-	items := s.itemsByCreation()
+	return s.actionableNext("", repository)
+}
+
+// ActionableNextForGoal answers the same question within one Goal. Scoping
+// happens before the priority rules, never after: taking the global answer and
+// discarding it when it belongs to another Goal would let an unrelated Goal
+// manufacture a stall here. Only the candidate set narrows — dependency and
+// freshness rules still read the whole State, so a prerequisite is judged by
+// what it actually is. See docs/adr/0019-runner-executes-forgepilot-decides.md.
+func (s *State) ActionableNextForGoal(goalID string, repository RepositoryState) NextAction {
+	return s.actionableNext(goalID, repository)
+}
+
+func (s *State) actionableNext(goalID string, repository RepositoryState) NextAction {
+	items := s.itemsByCreationInGoal(goalID)
 
 	for _, item := range items {
 		if item.Status != Running || s.Verifiable(item.ID) != nil {
@@ -107,6 +121,9 @@ func (s *State) ActionableNext(repository RepositoryState) NextAction {
 	}
 
 	for _, goal := range s.Goals {
+		if goalID != "" && goal.ID != goalID {
+			continue
+		}
 		summary, err := s.GoalSummary(goal.ID, repository)
 		if err == nil && summary.Completion == GoalAwaitingFinalReview {
 			return NextAction{Goal: goal, Kind: NextActionWaitGoalReview, Reason: "goal final review required"}
@@ -125,7 +142,19 @@ func (s *State) staleReverifiable(item Item, repository RepositoryState) bool {
 }
 
 func (s *State) itemsByCreation() []Item {
-	items := append([]Item(nil), s.WorkItems...)
+	return s.itemsByCreationInGoal("")
+}
+
+// itemsByCreationInGoal orders the candidate Work Items a selection may choose
+// from. An empty goalID means every Goal, which is what keeps the global and
+// Goal-scoped queries one implementation rather than two orderings.
+func (s *State) itemsByCreationInGoal(goalID string) []Item {
+	var items []Item
+	for _, item := range s.WorkItems {
+		if goalID == "" || item.GoalID == goalID {
+			items = append(items, item)
+		}
+	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
 			return workNumber(items[i].ID) < workNumber(items[j].ID)
