@@ -22,6 +22,7 @@
 | [0014](0014-working-tree-snapshot-is-a-candidate.md) | Working tree snapshot 是保留在 ForgePilot ref 下的 Candidate，不是 branch、stash 或 Work Item target | accepted |
 | [0015](0015-runtime-contract-belongs-to-candidate.md) | Runtime Contract 從 Candidate checkout 解析；只固定該次 subprocess environment，actual versions 隨 run 進 Evidence | accepted |
 | [0016](0016-goal-level-review-is-policy.md) | Goal-level review 是持久化 policy，不是略過 Human review 的捷徑 | accepted |
+| [0017](0017-readiness-is-a-projection-made-durable.md) | Readiness 由 `reconcile` 明確重算；GOAL-policy stale VERIFIED 的重驗延後到無法前進時，仍欠在總審邊界 | accepted |
 
 ## 什麼時候該加一份
 

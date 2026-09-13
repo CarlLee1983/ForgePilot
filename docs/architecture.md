@@ -85,6 +85,7 @@ M2 為驗證建立的 worktree 不在此限：它們是短暫的、detached 的�
 - 候選按 `created_at` 升冪排序，同時間以 Work Item ID 的配發序號升冪決勝。
 - `Next()` 是 READY selection 的純規則；`next` command 在 P0-003 以它作為最後一層候選，不 claim、不 start、不改寫 READY 狀態。
 - `start` 必須在寫交易內重查 Goal 與依賴；不能只相信保存的 READY 值。
+- `reconcile --goal <goal-id>` 是唯一把 readiness 重新對齊事實的寫入指令。readiness 是持久化欄位，但推導它的 facts 不是：Gate 或 Candidate 移動讓下游退回 PENDING 後，條件恢復不會自己更新那個值。它沿用同一個 progression predicate，只允許 `PENDING ↔ READY`，不碰其他狀態、Evidence、Gate 或 review policy；Goal 必須存在且 ACTIVE，facts 在受鎖 callback 內只解析這個 Goal 實際需要的種類，取得失敗即拒絕整個命令。相同 state 與 facts 下重複執行不產生變更，未改變的項目 `UpdatedAt` 不動。詳見 [ADR-0017](adr/0017-readiness-is-a-projection-made-durable.md)。
 - 不限制全域只能存在一個 RUNNING；`status` 必須能列出多個進行中的工作。
 
 M3 完成某個 Work Item 時，在同一 state transaction 中只更新該 prerequisite 的直接 dependents；只有全部依賴 DONE 且符合適用條件時才 READY。Goal-level Review Policy 下，同一個 transaction 也可由無 OPEN Gate、且以 CLI 在受鎖 callback 內解析的 repository facts 證實仍 fresh 的 VERIFIED dependency 推進 READY；沒有 facts 時採 fail-closed，保留 PENDING。若該 prerequisite 開始重驗或新增 OPEN Gate 而不再滿足同一 predicate，受影響的 READY downstream 會回到 PENDING，fresh PASS 或帶 current facts 的 Gate closure／Goal unblock 後再回到 READY；局部 refresh 不改寫無關 Goal 的 READY。Goal BLOCKED 仍保留 Work Item status 不變；這不放寬 Goal ACTIVE、Gate、verification FAIL／INTERRUPTED 或 stale Candidate 的既有規則。
@@ -211,9 +212,9 @@ Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_r
 
 ### P0-003 Actionable Next
 
-`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING、可驗證條件成立且 candidate stale 的 REVIEW／VERIFIED、再來才是以 `NextWithRepository()` 套用 READY selection 與 dependency freshness。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；其餘 RUNNING 稱為 resume。REVIEW／VERIFIED 的 freshness 一律復用 Candidate identity：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
+`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING；可驗證條件成立且 candidate stale 的 REVIEW；可合法前進的工作——已 READY 者建議 `start`，PENDING 但依賴已滿足者建議 `reconcile`，兩者共用同一個 created-at／numeric-ID 排序與同一個 `advanceable` 判準；再來才是 GOAL-policy 下 candidate stale 的 VERIFIED 重驗。GOAL policy 每換一個 Candidate 都會讓先前 VERIFIED 變 stale，若讓它們永遠優先，連續任務會在每一步重驗整條歷史；延後不放寬 freshness，Goal final review boundary 仍要求每件工作都有匹配目前 Candidate 的 PASS，欠下的重驗必須在總審前補完。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；其餘 RUNNING 稱為 resume。REVIEW／VERIFIED 的 freshness 一律復用 Candidate identity：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
 
-Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW／VERIFIED 是否仍可重驗由 `Verifiable` 決定，READY 是否可開始由同一 policy-aware dependency predicate 決定。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、fresh PASS REVIEW 缺 Work Item Human Review，或完整 Goal candidate 等待 final review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
+Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW／VERIFIED 是否仍可重驗由 `Verifiable` 決定，READY 是否可開始、PENDING 是否可恢復都由同一個 `advanceable` predicate 決定——這也是 `next` 不會推薦一個 `reconcile` 隨即回報 unchanged 的原因。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、fresh PASS REVIEW 缺 Work Item Human Review，或完整 Goal candidate 等待 final review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
 
 completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。GOAL policy 的 fresh VERIFIED 顯示 `verified for goal review`，stale 時仍顯示 `verification stale`。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。summary 只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
 

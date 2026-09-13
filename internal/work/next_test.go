@@ -139,17 +139,28 @@ func TestActionableNextReportsOnlyHumanBlockersWhenNothingCanAdvance(t *testing.
 
 	t.Run("dependency pending is not a waiting recommendation", func(t *testing.T) {
 		state, now, _ := summaryFixture(t)
-		state.WorkItems[0].Status = Done
+		// WI-001 has not finished, so the dependency is genuinely unsatisfied: a
+		// PENDING downstream item is neither a human-only wait nor a readiness
+		// that has merely fallen out of date.
+		if err := state.Start("WI-001", now); err != nil {
+			t.Fatal(err)
+		}
 		blocked, err := state.AddWork("goal", "specs/stories/two", []string{"WI-001"}, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		state.WorkItems[1].Status = Pending
-		if blocked.Status != Ready {
+		if blocked.Status != Pending {
 			t.Fatalf("fixture status = %s", blocked.Status)
 		}
+		if action := state.ActionableNext(RepositoryState{}); action.Kind != NextActionResume || action.Item.ID != "WI-001" {
+			t.Fatalf("action = %#v", action)
+		}
+		state.WorkItems[0].Status = Done
+		state.WorkItems[1].Status = Pending
+		// With the dependency actually satisfied, the out-of-date persisted
+		// readiness is an agent action — a reconciliation — not a human wait.
 		action := state.ActionableNext(RepositoryState{})
-		if action.Kind != NextActionNone {
+		if action.Kind != NextActionReconcile || action.Item.ID != blocked.ID {
 			t.Fatalf("action = %#v", action)
 		}
 	})

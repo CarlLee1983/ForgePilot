@@ -52,6 +52,9 @@ _Avoid_：最新版本、branch name、PR number 單獨作為版本身分
 **PR Reference**：一筆 Human Review 所聲明的 pull request 出處，形式為 `owner/name#number`。它是使用者輸入的識別字串；ForgePilot 只驗格式，不查證該 PR 存在或其 HEAD 為何。
 _Avoid_：經過查證的 PR 狀態、merge authorization、review target 本身
 
+**Readiness**：Work Item 持久化的 `PENDING`／`READY` 值，表達「依賴在上次計算時是否已依 Goal 的 progression policy 滿足」。它是可由目前 state 與 repository facts 重算的 projection，只是被保存下來；Gate 或 Candidate 移動使它退回 PENDING 後，條件恢復不會自動改寫它，要由 `reconcile` 明確重算。READY 不表示可以忽略該工作自己的 Gate。
+_Avoid_：可以開始工作的保證、Gate 已解除、第二份狀態來源
+
 **Actionable Work**：屬於可執行 Goal、處於 READY、依賴已依 Goal 的 progression policy 滿足（WORK_ITEM 為 DONE；GOAL 可為 fresh VERIFIED）且沒有未解決 Gate 的工作。
 _Avoid_：RUNNING 工作、所有未完成工作
 
