@@ -60,11 +60,14 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	if pullRequest, present := values["pr"]; present && strings.TrimSpace(pullRequest[0]) == "" {
 		return errors.New("--pr requires a value of the form owner/name#number")
 	}
-	reviewer, err := decisionMaker(root, values.one("by"))
+	state, err := storage.Load(root)
 	if err != nil {
 		return err
 	}
-	state, err := storage.Load(root)
+	if err := state.Reviewable(id); err != nil {
+		return fmt.Errorf("%s %s: %w", verb, id, err)
+	}
+	reviewer, err := decisionMaker(root, values.one("by"))
 	if err != nil {
 		return err
 	}
@@ -174,7 +177,10 @@ func completionSummary(state *work.State, id string) string {
 // reviewSummary describes a Work Item's latest Human Review. Work nobody has
 // reviewed says so: silence about a missing judgement would read as an untroubled
 // one, which is the whole thing this command exists to prevent.
-func reviewSummary(state *work.State, id string) string {
+func reviewSummary(state *work.State, id string, policy work.ReviewPolicy) string {
+	if policy == work.ReviewPerGoal {
+		return "not applicable (GOAL policy)"
+	}
 	latest, ok := state.LatestReview(id)
 	if !ok {
 		return "not reviewed"

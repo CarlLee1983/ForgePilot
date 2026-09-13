@@ -64,6 +64,9 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 	if err != nil || len(state.WorkItems) != 3 {
 		t.Fatalf("state = %#v, err=%v", state, err)
 	}
+	if len(state.Goals) != 1 || state.Goals[0].ReviewPolicy != work.ReviewPerWorkItem {
+		t.Fatalf("default Goal review policy = %#v", state.Goals)
+	}
 	if err := os.WriteFile(filepath.Join(root, ".forgepilot", "state.json"), []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -414,6 +417,23 @@ func rewindToV1(t *testing.T, path string) {
 			}
 		}
 	}
+	v1GoalFields := map[string]bool{"id": true, "title": true, "description": true, "repository": true,
+		"status": true, "reason": true, "created_at": true, "updated_at": true}
+	goals, ok := snapshot["goals"].([]any)
+	if !ok || len(goals) == 0 {
+		t.Fatalf("snapshot has no goals to rewind: %s", contents)
+	}
+	for _, entry := range goals {
+		goal, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected goal shape in %s", contents)
+		}
+		for field := range goal {
+			if !v1GoalFields[field] {
+				delete(goal, field)
+			}
+		}
+	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -578,6 +598,122 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(filepath.Join(root, ".forgepilot", "worktrees")); err == nil && len(entries) != 0 {
 		t.Fatalf("verification worktrees were left behind: %v", entries)
+	}
+}
+
+func TestGoalReviewPolicyRunsAcrossWorkItemsToFinalReviewBoundary(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", "bypass"); err == nil || !strings.Contains(output, "work-item or goal") {
+		t.Fatalf("invalid review policy = %q, %v", output, err)
+	}
+	for _, unsupported := range []string{"work_item", "WORK_ITEM", "GOAL"} {
+		if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", unsupported); err == nil || !strings.Contains(output, "work-item or goal") {
+			t.Fatalf("unsupported review policy %q = %q, %v", unsupported, output, err)
+		}
+	}
+	if output, err := command(binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal"); err != nil {
+		t.Fatalf("create GOAL-policy Goal = %q, %v", output, err)
+	}
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+	output, err := command(binary, root, "verify", "WI-001")
+	if err != nil {
+		t.Fatalf("verify first = %q, %v", output, err)
+	}
+	for _, want := range []string{"WI-001 VERIFIED", "EV-001 PASS"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("first verify output %q does not contain %q", output, want)
+		}
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.WorkItemStatus("WI-002") != work.Ready {
+		t.Fatalf("WI-002 = %s, want READY", state.WorkItemStatus("WI-002"))
+	}
+	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	if err != nil {
+		t.Fatalf("Work Item summary = %q, %v", output, err)
+	}
+	for _, want := range []string{"Review policy: GOAL", "Review: not applicable (GOAL policy)", "Completion: verified for goal review"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("Work Item summary %q does not contain %q", output, want)
+		}
+	}
+	output, err = command(binary, root, "next")
+	if err != nil || !strings.Contains(output, "Action: forgepilot start WI-002") {
+		t.Fatalf("next after first VERIFIED = %q, %v", output, err)
+	}
+	mustRun(t, binary, root, "start", "WI-002")
+	output, err = command(binary, root, "verify", "WI-002")
+	if err != nil || !strings.Contains(output, "WI-002 VERIFIED") {
+		t.Fatalf("verify second = %q, %v", output, err)
+	}
+	output, err = command(binary, root, "status")
+	if err != nil {
+		t.Fatalf("status = %q, %v", output, err)
+	}
+	for _, want := range []string{"Review policy: GOAL", "Goal review: awaiting goal final review", "WI-001 VERIFIED", "WI-002 VERIFIED"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("status %q does not contain %q", output, want)
+		}
+	}
+	output, err = command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next at final review boundary = %q, %v", output, err)
+	}
+	for _, want := range []string{"No agent-actionable work.", "Waiting: Goal queue", "Reason: goal final review required"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "unreviewable.txt"), []byte("dirty\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if output, err = command(binary, root, "review", "approve", "WI-001"); err == nil || !strings.Contains(output, "GOAL review policy") {
+		t.Fatalf("Work Item review under GOAL policy = %q, %v", output, err)
+	}
+	if err := os.Remove(filepath.Join(root, "unreviewable.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if output, err = command(binary, root, "goal", "complete", "queue"); err == nil || !strings.Contains(output, "final review") {
+		t.Fatalf("direct Goal completion under GOAL policy = %q, %v", output, err)
+	}
+}
+
+func TestGoalReviewPolicyDoesNotStartWorkBehindAStaleVerifiedDependency(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
+	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "move Goal candidate")
+
+	status, err := command(binary, root, "status")
+	if err != nil || !strings.Contains(status, "stale") || !strings.Contains(status, "Next: none") {
+		t.Fatalf("status behind stale VERIFIED dependency = %q, %v", status, err)
+	}
+	if output, err := command(binary, root, "start", "WI-002"); err == nil || !strings.Contains(output, "stale dependency") {
+		t.Fatalf("start behind stale VERIFIED dependency = %q, %v", output, err)
+	}
+	output, err := command(binary, root, "next")
+	if err != nil {
+		t.Fatalf("next behind stale VERIFIED dependency = %q, %v", output, err)
+	}
+	for _, want := range []string{"Next: WI-001", "Action: forgepilot verify WI-001", "Reason: verified candidate is stale"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("next output %q does not contain %q", output, want)
+		}
 	}
 }
 
@@ -1234,13 +1370,13 @@ func TestWorkItemStatusSummary(t *testing.T) {
 	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
 	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
 
-	// The original no-argument status is deliberately a separate, stable view.
-	// This exact assertion catches summary work accidentally changing it.
+	// The no-argument status is deliberately a separate, stable view. This exact
+	// assertion includes the policy because status must make its review boundary explicit.
 	full, err := command(binary, root, "status")
 	if err != nil {
 		t.Fatalf("status = %q, %v", full, err)
 	}
-	const wantFull = "Goal queue ACTIVE: Queue\n  WI-001 READY specs/stories/a.md\n    not verified\n    not reviewed\n    Gates: 0 open\nNext: WI-001\n"
+	const wantFull = "Goal queue ACTIVE: Queue\n  Review policy: WORK_ITEM\n  WI-001 READY specs/stories/a.md\n    not verified\n    not reviewed\n    Gates: 0 open\nNext: WI-001\n"
 	if full != wantFull {
 		t.Fatalf("status changed\nwant:\n%s\ngot:\n%s", wantFull, full)
 	}
@@ -1249,7 +1385,7 @@ func TestWorkItemStatusSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary = %q, %v", output, err)
 	}
-	const wantReady = "WI-001 READY\nGoal: queue ACTIVE\nStory: specs/stories/a.md\nVerification: not run\nReview: not reviewed\nBlocking gates: none\nCompletion: not started\n"
+	const wantReady = "WI-001 READY\nGoal: queue ACTIVE\nReview policy: WORK_ITEM\nStory: specs/stories/a.md\nVerification: not run\nReview: not reviewed\nBlocking gates: none\nCompletion: not started\n"
 	if output != wantReady {
 		t.Fatalf("ready summary\nwant:\n%s\ngot:\n%s", wantReady, output)
 	}
@@ -2799,7 +2935,7 @@ func TestHelpDoesNotRequireInitializedState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s in an uninitialized repository: %v: %s", argument, err, output)
 		}
-		for _, want := range []string{"usage: forgepilot", "verify", "gate", "review"} {
+		for _, want := range []string{"usage: forgepilot", "verify", "gate", "review", "--review-policy"} {
 			if !strings.Contains(output, want) {
 				t.Fatalf("%s output does not mention %q: %s", argument, want, output)
 			}

@@ -30,7 +30,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
 
   init                              create .forgepilot state in the current repository
   migrate                           upgrade state written by an older binary
-  goal create --id <id> --title <t> declare a goal
+  goal create --id <id> --title <t> [--review-policy <work-item|goal>]
   goal <block|unblock|complete|cancel> <goal-id>
   work add --goal <id> --story <path> [--depends-on <work-id>]
   next                              recommend the next legal agent action
@@ -128,15 +128,23 @@ func goal(args []string, root string, output io.Writer) error {
 }
 
 func createGoal(args []string, root string, output io.Writer) error {
-	flags, err := flags(args, map[string]bool{"id": false, "title": false, "description": false})
+	flags, err := flags(args, map[string]bool{"id": false, "title": false, "description": false, "review-policy": false})
 	if err != nil {
 		return err
 	}
 	if flags.one("id") == "" || flags.one("title") == "" {
 		return errors.New("--id and --title are required")
 	}
+	policy := work.ReviewPerWorkItem
+	switch flags.one("review-policy") {
+	case "", "work-item":
+	case "goal":
+		policy = work.ReviewPerGoal
+	default:
+		return errors.New("--review-policy must be work-item or goal")
+	}
 	if err := storage.Update(root, func(state *work.State) error {
-		return state.AddGoal(flags.one("id"), flags.one("title"), flags.one("description"), root, now())
+		return state.AddGoalWithReviewPolicy(flags.one("id"), flags.one("title"), flags.one("description"), root, policy, now())
 	}); err != nil {
 		return err
 	}
@@ -174,7 +182,11 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 		case work.GoalBlocked:
 			return state.BlockGoal(id, reason, now())
 		case work.GoalActive:
-			return state.UnblockGoal(id, now())
+			repositoryState, err := currentCandidateState(state, root)
+			if err != nil {
+				return fmt.Errorf("resolve current Candidate before unblocking: %w", err)
+			}
+			return state.UnblockGoalWithRepository(id, repositoryState, now())
 		case work.GoalCompleted:
 			return state.CompleteGoal(id, now())
 		default:
@@ -204,8 +216,12 @@ func addWork(args []string, root string, output io.Writer) error {
 	}
 	var added work.Item
 	if err := storage.Update(root, func(state *work.State) error {
+		repositoryState, factsErr := currentCandidateState(state, root)
+		if factsErr != nil {
+			return fmt.Errorf("resolve current Candidate before adding work: %w", factsErr)
+		}
 		var addErr error
-		added, addErr = state.AddWork(flags.one("goal"), story, flags.all("depends-on"), now())
+		added, addErr = state.AddWorkWithRepository(flags.one("goal"), story, flags.all("depends-on"), repositoryState, now())
 		return addErr
 	}); err != nil {
 		return err
@@ -238,6 +254,8 @@ func next(args []string, root string, output io.Writer) error {
 	switch action.Kind {
 	case work.NextActionNone:
 		_, err = fmt.Fprintln(output, "No actionable work.")
+	case work.NextActionWaitGoalReview:
+		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: Goal %s\nReason: %s\n", action.Goal.ID, action.Reason)
 	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
 		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: %s\nReason: %s\n", action.Item.ID, action.Reason)
 	default:
@@ -248,37 +266,55 @@ func next(args []string, root string, output io.Writer) error {
 	return err
 }
 
-// nextRepositoryState gathers Git facts only when a REVIEW Work Item can
+// nextRepositoryState gathers Git facts only when a REVIEW or VERIFIED Work Item can
 // actually be re-verified or is waiting for a Human Review. READY and RUNNING
 // recommendations still work in a repository without a commit, just as next
 // did before candidate-aware selection existed.
 func nextRepositoryState(state *work.State, root string) (work.RepositoryState, error) {
-	needsCommitRevision := false
+	return currentCandidateState(state, root)
+}
+
+// currentCandidateState gathers the external facts needed to decide whether
+// persisted REVIEW/VERIFIED Evidence, or a Verification currently finishing,
+// still names the repository's current Candidate. Callers pass the values into
+// internal/work; that package remains filesystem- and Git-free.
+func currentCandidateState(state *work.State, root string) (work.RepositoryState, error) {
+	needsCommitRevision, needsSnapshotDigest := false, false
 	for _, item := range state.WorkItems {
-		if item.Status != work.Review || state.Verifiable(item.ID) != nil {
-			continue
-		}
-		verification, ok := state.LatestVerification(item.ID)
-		if !ok {
-			continue
-		}
-		if verification.CandidateKind == work.SnapshotCandidate {
-			workspace, err := repository.InspectSnapshot(root)
-			if err != nil {
-				return work.RepositoryState{}, err
+		kind := work.CandidateKind("")
+		if item.Status == work.Verifying && item.CurrentRun != nil {
+			kind = item.CurrentRun.CandidateKind
+		} else if item.Status == work.Review || item.Status == work.Verified {
+			if verification, ok := state.LatestVerification(item.ID); ok {
+				kind = verification.CandidateKind
 			}
-			return work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}, nil
 		}
-		needsCommitRevision = true
+		switch kind {
+		case work.CommitCandidate:
+			needsCommitRevision = true
+		case work.SnapshotCandidate:
+			needsSnapshotDigest = true
+		}
 	}
+	result := work.RepositoryState{}
 	if needsCommitRevision {
 		revision, err := repository.Head(root)
 		if err != nil {
 			return work.RepositoryState{}, err
 		}
-		return work.RepositoryState{Revision: revision}, nil
+		result.Revision = revision
 	}
-	return work.RepositoryState{}, nil
+	if needsSnapshotDigest {
+		workspace, err := repository.InspectSnapshot(root)
+		if err != nil {
+			return work.RepositoryState{}, err
+		}
+		result.SnapshotDigest = workspace.Digest
+		if result.Revision == "" {
+			result.Revision = workspace.BaseRevision
+		}
+	}
+	return result, nil
 }
 
 func nextActionText(state *work.State, action work.NextAction) string {
@@ -304,11 +340,54 @@ func start(args []string, root string, output io.Writer) error {
 	if len(args) != 1 {
 		return errors.New("usage: forgepilot start <work-id>")
 	}
-	if err := storage.Update(root, func(state *work.State) error { return state.Start(args[0], now()) }); err != nil {
+	if err := storage.Update(root, func(state *work.State) error {
+		repositoryState, err := startRepositoryState(state, args[0], root)
+		if err != nil {
+			return err
+		}
+		return state.StartWithRepository(args[0], repositoryState, now())
+	}); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(output, "%s RUNNING\n", args[0])
 	return err
+}
+
+func startRepositoryState(state *work.State, id, root string) (work.RepositoryState, error) {
+	summary, err := state.WorkSummary(id, work.RepositoryState{})
+	if err != nil {
+		return work.RepositoryState{}, err
+	}
+	needsCommit, needsSnapshot := false, false
+	for _, dependencyID := range summary.Item.DependsOn {
+		if state.WorkItemStatus(dependencyID) != work.Verified {
+			continue
+		}
+		verification, ok := state.LatestVerification(dependencyID)
+		if !ok {
+			continue
+		}
+		if verification.CandidateKind == work.SnapshotCandidate {
+			needsSnapshot = true
+		} else {
+			needsCommit = true
+		}
+	}
+	if needsSnapshot {
+		workspace, err := repository.InspectSnapshot(root)
+		if err != nil {
+			return work.RepositoryState{}, err
+		}
+		return work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}, nil
+	}
+	if needsCommit {
+		revision, err := repository.Head(root)
+		if err != nil {
+			return work.RepositoryState{}, err
+		}
+		return work.RepositoryState{Revision: revision}, nil
+	}
+	return work.RepositoryState{}, nil
 }
 
 func status(args []string, root string, output io.Writer) error {
@@ -340,6 +419,18 @@ func status(args []string, root string, output io.Writer) error {
 		if _, err := fmt.Fprintln(output, heading); err != nil {
 			return err
 		}
+		if _, err := fmt.Fprintf(output, "  Review policy: %s\n", goal.ReviewPolicy); err != nil {
+			return err
+		}
+		if goal.ReviewPolicy == work.ReviewPerGoal {
+			summary, summaryErr := state.GoalSummary(goal.ID, work.RepositoryState{Revision: revision, SnapshotDigest: digest})
+			if summaryErr != nil {
+				return summaryErr
+			}
+			if _, err := fmt.Fprintf(output, "  Goal review: %s\n", summary.Completion); err != nil {
+				return err
+			}
+		}
 		for _, item := range state.WorkItems {
 			if item.GoalID != goal.ID {
 				continue
@@ -353,7 +444,7 @@ func status(args []string, root string, output io.Writer) error {
 				note = " (runner is gone; run forgepilot verify to recover)"
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
-				verificationSummary(&state, item.ID, revision, digest), reviewSummary(&state, item.ID)); err != nil {
+				verificationSummary(&state, item.ID, revision, digest), reviewSummary(&state, item.ID, goal.ReviewPolicy)); err != nil {
 				return err
 			}
 			if unfinished := completionSummary(&state, item.ID); unfinished != "" {
@@ -368,7 +459,7 @@ func status(args []string, root string, output io.Writer) error {
 			}
 		}
 	}
-	if next, ok := state.Next(); ok {
+	if next, ok := state.NextWithRepository(work.RepositoryState{Revision: revision, SnapshotDigest: digest}); ok {
 		_, err = fmt.Fprintf(output, "Next: %s\n", next.ID)
 	} else {
 		_, err = fmt.Fprintln(output, "Next: none")
@@ -448,9 +539,10 @@ func writeWorkSummary(output io.Writer, summary work.WorkItemSummary) error {
 		}
 		blocking = strings.Join(ids, ", ")
 	}
-	_, err := fmt.Fprintf(output, "%s %s\nGoal: %s %s\nStory: %s\nVerification: %s\nReview: %s\nBlocking gates: %s\nCompletion: %s\n",
+	_, err := fmt.Fprintf(output, "%s %s\nGoal: %s %s\nReview policy: %s\nStory: %s\nVerification: %s\nReview: %s\nBlocking gates: %s\nCompletion: %s\n",
 		summary.Item.ID, summary.Item.Status,
 		summary.Goal.ID, summary.Goal.Status,
+		summary.Goal.ReviewPolicy,
 		summary.Item.StoryRef,
 		workVerificationSummary(summary),
 		workReviewSummary(summary),
@@ -474,6 +566,9 @@ func workVerificationSummary(summary work.WorkItemSummary) string {
 }
 
 func workReviewSummary(summary work.WorkItemSummary) string {
+	if summary.Goal.ReviewPolicy == work.ReviewPerGoal {
+		return "not applicable (GOAL policy)"
+	}
 	if !summary.HasReview {
 		return "not reviewed"
 	}

@@ -65,7 +65,11 @@ func resolveGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		return state.ResolveGate(id, values.one("option"), values.one("note"), decidedBy, now())
+		repositoryState, factsErr := currentCandidateState(state, root)
+		if factsErr != nil {
+			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
+		}
+		return state.ResolveGateWithRepository(id, values.one("option"), values.one("note"), decidedBy, repositoryState, now())
 	}); err != nil {
 		return err
 	}
@@ -90,7 +94,11 @@ func cancelGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		return state.CancelGate(id, values.one("reason"), decidedBy, now())
+		repositoryState, factsErr := currentCandidateState(state, root)
+		if factsErr != nil {
+			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
+		}
+		return state.CancelGateWithRepository(id, values.one("reason"), decidedBy, repositoryState, now())
 	}); err != nil {
 		return err
 	}

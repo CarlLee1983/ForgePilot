@@ -129,9 +129,16 @@ func runVerification(id, root string, output io.Writer, snapshot bool) error {
 
 	var evidence work.Evidence
 	var status work.Status
+	var factsErr error
 	if err := storage.Update(root, func(state *work.State) error {
 		var recordErr error
-		evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, now())
+		repositoryState, err := currentCandidateState(state, root)
+		if err != nil {
+			factsErr = err
+			evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, now())
+		} else {
+			evidence, recordErr = state.RecordVerificationWithRepository(id, candidate.Revision, repository.CanonicalCommand, exitCode, repositoryState, now())
+		}
 		if recordErr == nil {
 			status = state.WorkItemStatus(id)
 		}
@@ -141,8 +148,21 @@ func runVerification(id, root string, output io.Writer, snapshot bool) error {
 	}
 	// Non-PASS output no longer floods stdout: the log just printed above is
 	// where it lives now. See docs/adr/0012-verification-log-outside-state.md.
-	_, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\n", evidence.ID, evidence.Result, evidence.Revision, id, status)
+	if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\n", evidence.ID, evidence.Result, evidence.Revision, id, status); err != nil {
+		return err
+	}
+	if factsErr != nil {
+		_, err = fmt.Fprintf(output, "warning: dependency readiness was not refreshed: %v; Evidence was preserved; repair repository access and rerun %s\n", factsErr, verificationRetryCommand(id, candidate))
+	}
 	return err
+}
+
+func verificationRetryCommand(id string, candidate work.Candidate) string {
+	command := fmt.Sprintf("forgepilot verify %s", id)
+	if candidate.Kind == work.SnapshotCandidate {
+		command += " --snapshot"
+	}
+	return command
 }
 
 // reclaimOrphan closes out a run that was abandoned, recording it as INTERRUPTED
