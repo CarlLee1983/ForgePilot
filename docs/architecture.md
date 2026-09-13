@@ -2,7 +2,7 @@
 
 ## 文件狀態與範圍
 
-MVP 的 M1–M5、P0-001–P0-003 與 P1-004 Deterministic Runtime Resolution 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
+MVP 的 M1–M5、P0-001–P0-003、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
@@ -45,7 +45,7 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/Forg
 
 | 物件 | 目標欄位 | 啟用階段 |
 |---|---|---|
-| Goal | `id`, `title`, `description`, `repository`, `status`, `created_at`, `updated_at` | M1 |
+| Goal | `id`, `title`, `description`, `repository`, `status`, `review_policy`, `created_at`, `updated_at` | M1；`review_policy` 於 Goal-level Review Policy 加入 |
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
 | Work Item run | `current_run`（Candidate identity、worktree path、started_at、log path、resolved runtime；閒置時為 null） | M2；`log path` 於 M5、Candidate kind／base／digest 於 P0-001、runtime 於 P1-004 加入 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
@@ -54,7 +54,7 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/Forg
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
-Work Item statuses：`PENDING`, `READY`, `RUNNING`, `VERIFYING`, `REVIEW`, `DONE`。M1 可到達的狀態只有前三者，M2 加上 `VERIFYING` 與 `REVIEW`，`DONE` 自 M3 起由 `review approve` 在條件滿足時達成。
+Work Item statuses：`PENDING`, `READY`, `RUNNING`, `VERIFYING`, `REVIEW`, `VERIFIED`, `DONE`。M1 可到達的狀態只有前三者，M2 加上 `VERIFYING` 與 `REVIEW`，`DONE` 自 M3 起由 `review approve` 在條件滿足時達成。`VERIFIED` 只屬於 `GOAL` Review Policy：它表示目前 Candidate 的 machine PASS，可滿足該 policy 下的依賴 progression，絕不表示 Human acceptance 或 DONE。
 
 沒有 `BLOCKED` 或 `WAITING_HUMAN`：阻擋由「該 Work Item 有沒有未解除的 Gate」表達，不佔用狀態欄。狀態描述工作在生命週期的位置，Gate 是另一個維度的條件；兩處各表達一次同一事實，就會需要「記住進入阻擋前是什麼狀態」這種只為修補覆寫而存在的欄位。詳見 [ADR-0007](adr/0007-blocking-is-not-a-status.md)。Goal 的 `BLOCKED` 保留，它是刻意的不對稱——擋整個 Goal 用 Goal 狀態，擋一件工作用 Gate。
 
@@ -80,34 +80,43 @@ M2 為驗證建立的 worktree 不在此限：它們是短暫的、detached 的�
 - `--depends-on` 使用 Work Item ID，不使用 Story path 或 Story 名稱。
 - 依賴必須已存在且屬於同一 Goal；拒絕未知、自我或重複依賴，禁止 cycle。
 - M1 只允許建立時指定依賴，不提供修改或刪除操作。依賴指向既有節點，因此新增操作不能產生 cycle；載入 state 仍需驗證完整資料一致性。
-- 新增時全部依賴 DONE 則為 READY，否則 PENDING。無依賴時視為已滿足。
-- 候選必須屬於 ACTIVE Goal、為 READY、全部依賴 DONE，且沒有 unresolved Gate。Gate 條件在 M3 啟用。
+- 新增時全部依賴滿足該 Goal 的 progression policy 則為 READY，否則 PENDING：`WORK_ITEM` 要求 DONE；`GOAL` 可接受無 OPEN Gate 的 VERIFIED。無依賴時視為已滿足。
+- 候選必須屬於 ACTIVE Goal、為 READY、全部依賴滿足同一 progression policy 且 Candidate freshness 適用，並且沒有 unresolved Gate。Gate 條件在 M3 啟用。
 - 候選按 `created_at` 升冪排序，同時間以 Work Item ID 的配發序號升冪決勝。
 - `Next()` 是 READY selection 的純規則；`next` command 在 P0-003 以它作為最後一層候選，不 claim、不 start、不改寫 READY 狀態。
 - `start` 必須在寫交易內重查 Goal 與依賴；不能只相信保存的 READY 值。
 - 不限制全域只能存在一個 RUNNING；`status` 必須能列出多個進行中的工作。
 
-M3 完成某個 Work Item 時，在同一 state transaction 中更新受影響的 PENDING 工作；只有全部依賴 DONE 且符合適用條件時才 READY。
+M3 完成某個 Work Item 時，在同一 state transaction 中只更新該 prerequisite 的直接 dependents；只有全部依賴 DONE 且符合適用條件時才 READY。Goal-level Review Policy 下，同一個 transaction 也可由無 OPEN Gate、且以 CLI 在受鎖 callback 內解析的 repository facts 證實仍 fresh 的 VERIFIED dependency 推進 READY；沒有 facts 時採 fail-closed，保留 PENDING。若該 prerequisite 開始重驗或新增 OPEN Gate 而不再滿足同一 predicate，受影響的 READY downstream 會回到 PENDING，fresh PASS 或帶 current facts 的 Gate closure／Goal unblock 後再回到 READY；局部 refresh 不改寫無關 Goal 的 READY。Goal BLOCKED 仍保留 Work Item status 不變；這不放寬 Goal ACTIVE、Gate、verification FAIL／INTERRUPTED 或 stale Candidate 的既有規則。
 
 ## Central transition policy
 
 | Transition | 條件與階段 |
 |---|---|
 | 建立 → PENDING／READY | 依賴規則決定；M1 |
-| PENDING → READY | 全部依賴 DONE，且符合 Goal／Gate 條件；M1 測試規則，M3 提供真實完成來源 |
-| READY → RUNNING | ACTIVE Goal、依賴 DONE、無 unresolved Gate；M1 |
+| PENDING → READY | 全部依賴滿足 Goal 的 progression policy（WORK_ITEM 為 DONE，GOAL 可為無 OPEN Gate 的 VERIFIED），且符合 Goal／Gate 條件；M1 測試規則，M3 提供真實完成來源 |
+| READY → RUNNING | ACTIVE Goal、依賴滿足同一 progression policy（VERIFIED dependency 另須 Candidate fresh）、無 unresolved Gate；M1，Goal-level Review Policy 擴充 |
 | RUNNING → VERIFYING | 允許開始 canonical verification；M2 |
-| VERIFYING → REVIEW | PASS evidence 對應受驗證且目前有效的 revision；M2 |
+| VERIFYING → REVIEW | `WORK_ITEM` policy 下 PASS evidence 對應受驗證且目前有效的 Candidate；M2 |
+| VERIFYING → VERIFIED | `GOAL` policy 下 PASS evidence；只滿足依賴 progression，不是 Human acceptance；Goal-level Review Policy |
 | VERIFYING → RUNNING | Verification FAIL，或回收中斷的 Verification Run；M2 |
 | REVIEW → VERIFYING | 由明確的 `verify` 命令觸發；stale 本身不改變狀態；M2 |
 | REVIEW → RUNNING | Human Review REJECTED；M3 |
-| REVIEW → DONE | 同一 revision 的最新 Verification 為 PASS 且最新 Human Review 為 APPROVED，且無 unresolved Gate；由 `review approve` 在同一交易內達成；M3 |
+| REVIEW → DONE | `WORK_ITEM` policy：同一 Candidate 的最新 Verification 為 PASS 且最新 Human Review 為 APPROVED，且無 unresolved Gate；由 `review approve` 在同一交易內達成；M3 |
 
 非法 transition 回傳明確 domain error，不能偷偷改成另一個操作。M1 不提供任意 state setter、complete 或測試專用 approve 指令。
 
 開啟或關閉 Gate 不是 transition：它不改變 Work Item 的狀態，只改變它能否推進。Gate 可以開在任何非 DONE 的工作上。
 
 DONE 是終態，不因後續 commit 重開，也沒有 reopen 操作；需要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄。詳見 [ADR-0006](adr/0006-done-is-terminal.md)。不能把「Gate 已 resolve」直接等同於 READY 或 DONE。
+
+### Goal-level Review Policy 與 schema v8
+
+Goal 的 `review_policy` 是持久化 enum：`WORK_ITEM` 為預設且完整保留既有行為，`GOAL` 把例行 Human Review 邊界移至 Goal final review。CLI 僅在 `goal create` 接受 `--review-policy work-item|goal`；它不是 `--skip-review` 或每次命令可選的 bypass。`GOAL` 下 Work Item PASS 轉為 VERIFIED，只有它可依 policy 推進下游；其 prerequisite 進入重驗或新開 OPEN Gate 時，已 READY downstream 依同一 central predicate 回到 PENDING，並在 fresh PASS／Gate closure 後重新 READY。Goal BLOCKED 只阻擋推進、保留既有 status；verification FAIL／INTERRUPTED 與 Candidate freshness 均照常阻擋或要求重驗。
+
+Goal final readiness 是 fail-closed 的純 projection，不是 Goal status、transition 或自動完成：只在 ACTIVE、非空的 `GOAL` Goal 中，所有 Work Item 都為 VERIFIED、其 latest Verification 都是 PASS 且仍匹配目前 COMMIT／SNAPSHOT Candidate、並且沒有 OPEN Gate 時成立。它保留構成 target 的 Verification Evidence IDs，供將來建立精確 aggregate Evidence。`status` 呈現 policy 與此 readiness；`next` 在沒有合法 agent action 時回報等待 Goal final review，stale VERIFIED 則仍優先建議 reverify。
+
+此切片尚未提供 goal-level `review approve`／`reject`、Goal Evidence 或 Runner；因此 `goal complete` 對 `GOAL` policy 一律拒絕。這刻意分開「可安全推進工程」和「Human final acceptance」，避免 machine PASS 被誤當作完成。未來只能在這個 projection 上加入接受精確 Evidence ID 集合的 Goal Evidence 與 Runner，而不能回頭將 VERIFIED 解釋為 DONE。Schema v8 對 Goal 新增必填 `review_policy`；migration 將 v7 與更舊 state 明確填為 `WORK_ITEM`，先備份 `state.json.v<n>.bak`。rollback 是手動還原該備份，沒有 downgrade。
 
 ## Durable local storage
 
@@ -202,11 +211,11 @@ Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_r
 
 ### P0-003 Actionable Next
 
-`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING、可驗證條件成立且 candidate stale 的 REVIEW、再來才是既有 `Next()` 的 READY selection。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；其餘 RUNNING 稱為 resume。REVIEW 的 freshness 一律復用 `CandidateStale`：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
+`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING、可驗證條件成立且 candidate stale 的 REVIEW／VERIFIED、再來才是以 `NextWithRepository()` 套用 READY selection 與 dependency freshness。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；其餘 RUNNING 稱為 resume。REVIEW／VERIFIED 的 freshness 一律復用 Candidate identity：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
 
-Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW 是否仍可前進由 `Verifiable` 決定，READY 是否可開始仍由 `Next()` 決定。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、或 fresh PASS REVIEW 缺 Human Review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
+Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW／VERIFIED 是否仍可重驗由 `Verifiable` 決定，READY 是否可開始由同一 policy-aware dependency predicate 決定。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、fresh PASS REVIEW 缺 Work Item Human Review，或完整 Goal candidate 等待 final review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
 
-completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。完整 `status` 的歷史輸出維持原樣；summary 則只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
+completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。GOAL policy 的 fresh VERIFIED 顯示 `verified for goal review`，stale 時仍顯示 `verification stale`。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。summary 只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
 
 ### P1-004 Deterministic Runtime Resolution 與 schema v7
 
@@ -240,7 +249,7 @@ HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revisi
 
    回收發生在任何拒絕之前，且不受 Gate 或 Goal 狀態約束——中斷是已經發生的事實，而阻擋擋的是開始新的執行。因此被拒絕的 `verify` 在有孤兒時會寫入那一筆 INTERRUPTED（並印在輸出上），在沒有孤兒時什麼都不寫。見 [ADR-0009](adr/0009-reclaim-before-refusing.md)。
 4. **Crash consistency**：Evidence 保存在 `state.json` 內，與 Work Item 共用同一次受鎖的原子替換，因此不存在單邊寫入的中間態。見 [ADR-0001](adr/0001-evidence-in-state-snapshot.md)。
-5. **Stale 觸發**：M2 的 COMMIT Evidence 以 SHA 是否等於目前 HEAD 判斷；P0-001 的 SNAPSHOT Evidence 改以 candidate digest 是否等於目前 workspace 判斷。它不造成任何自動 transition；REVIEW → VERIFYING 只由明確的 `verify` 命令推動。`next` 與 `status` 呈現 stale 但不寫入。
+5. **Stale 觸發**：M2 的 COMMIT Evidence 以 SHA 是否等於目前 HEAD 判斷；P0-001 的 SNAPSHOT Evidence 改以 candidate digest 是否等於目前 workspace 判斷。它不造成任何自動 transition；REVIEW／VERIFIED → VERIFYING 只由明確的 `verify` 命令推動。`next` 與 `status` 呈現 stale 但不寫入，`start` 不接受 stale VERIFIED dependency。
 
 Revision 只存在於 Evidence 與 `current_run`，Work Item 本身不保存 `target_revision`；該欄位的刪除見 [ADR-0003](adr/0003-no-work-item-target-revision.md)。
 

@@ -2,7 +2,7 @@
 
 ## 計畫狀態
 
-M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next 與 P1-004 Deterministic Runtime Resolution 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
@@ -447,6 +447,16 @@ resolver 只使用 caller PATH 或 mise／asdf／nvm／pyenv／rustup 的本機�
 Schema 升至 v7：`current_run` 與 Verification Evidence 新增選填 `runtime` map，保存 resolver 實際驗證的版本；INTERRUPTED 從原 run 保留同一 metadata。v6→v7 migration 不推測舊執行環境，舊 Evidence 沒有 `runtime` 仍合法。Human Review Evidence 不攜帶 runtime。
 
 驗收：無 declaration 維持舊流程；全部支援的 declaration source、相同／不可用版本、conflict、multiple runtimes 均有 repository tests；integration tests 證明錯誤 shell default 不進 canonical check、runtime failure 不留 FAIL Evidence、COMMIT 與 SNAPSHOT 都從 detached checkout 解析，且 Evidence 記錄 actual runtime。完整 gates 為 `make verify` 與 `go test -race -count=1 ./...`。
+
+## Goal-level Review Policy
+
+Goal 在建立時可持久化 `--review-policy work-item|goal`；`work-item` 是預設，完全保留既有 per-Work-Item Human Review 與 `review approve` → DONE。`goal` 不是 skip-review：PASS 只令 Work Item 成為 `VERIFIED`，讓它在 Gate 已解除、Goal ACTIVE、Candidate fresh 的前提下滿足依賴；prerequisite 重驗或新開 OPEN Gate 會令受影響的 READY downstream 回到 PENDING，fresh PASS 或 Gate closure 後再 READY，保持 stored READY 與同一 progression predicate 一致。所有可能 promotion 的 domain API 都必須接收 CLI 在 `storage.Update` callback 內解析出的 current repository facts；缺少 facts 時 fail closed、保留 PENDING。refresh 僅限直接 dependents 或被 unblock 的 Goal，不可使無關 Goal 倒退。Goal BLOCKED 則維持既有 Work Item status；FAIL、INTERRUPTED 與 stale candidate 的語意不變。
+
+`status` 顯示 Goal policy 與每件工作的 policy-aware projection；GOAL-policy Work Item 的 Human Review 顯示不適用。`next` 會重新驗證 stale VERIFIED Work Item，所有條件都已滿足但無 agent action 時才回報等待 Goal final review。final readiness 是 fail-closed pure projection：ACTIVE Goal 必須非空、全部 Work Item VERIFIED、每筆 latest Verification 是仍匹配目前 Candidate 的 PASS、且無 OPEN Gate；projection 保留所用 Verification Evidence IDs。此版本沒有 goal review approve/reject、Goal Evidence 或 Runner，故 `goal complete` 對 GOAL policy 拒絕；final acceptance 保留給以該 exact Evidence set 為輸入的未來切片。
+
+Schema 升至 v8：Goal 加入必填 `review_policy`；v7 與更舊 state migration 明確填 `WORK_ITEM`，先備份 `state.json.v<n>.bak`。不自動升級、不提供 downgrade；rollback 是手動還原備份。
+
+驗收：預設及 migration 都維持 WORK_ITEM compatibility；GOAL PASS → VERIFIED 並僅作 progression；READY 在 prerequisite 重驗或 OPEN Gate 新增時回到 PENDING，fresh PASS／Gate closure 後再 READY，而 Goal BLOCKED 保持 Work Item status；Gate／Goal／failure／interruption／freshness 不可被繞過；Work Item review 和 direct `goal complete` 在 GOAL policy 都被拒；readiness 對 inactive、empty、stale、non-PASS 或 OPEN Gate fail closed，並保留 exact Verification Evidence IDs。
 
 ## 每階段交付格式
 

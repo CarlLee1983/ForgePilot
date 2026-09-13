@@ -7,6 +7,9 @@ ForgePilot 管理工程工作的可執行性、進度與決策證據；工程要
 **Goal**：需要跨多次工程工作推進的長期目標。
 _Avoid_：Story、Work Item
 
+**Goal Review Policy**：Goal 持久化的 Human Review 邊界選擇；`WORK_ITEM`（預設）逐件工作審查，`GOAL` 只允許機器驗證後的工作推進依賴，並把 Human acceptance 留在 Goal 的最終審查邊界。
+_Avoid_：skip review、單次指令的權限、Work Item 的可選屬性
+
 **Work Item**：歸屬一個 Goal、參照一個 ForgeFlow Story 的工程工作單位，具有自己的狀態與依賴。
 _Avoid_：Story、Task（作為另一種獨立工作物件）
 
@@ -49,11 +52,14 @@ _Avoid_：最新版本、branch name、PR number 單獨作為版本身分
 **PR Reference**：一筆 Human Review 所聲明的 pull request 出處，形式為 `owner/name#number`。它是使用者輸入的識別字串；ForgePilot 只驗格式，不查證該 PR 存在或其 HEAD 為何。
 _Avoid_：經過查證的 PR 狀態、merge authorization、review target 本身
 
-**Actionable Work**：屬於可執行 Goal、處於 READY、依賴已完成且沒有未解決 Gate 的工作。
+**Actionable Work**：屬於可執行 Goal、處於 READY、依賴已依 Goal 的 progression policy 滿足（WORK_ITEM 為 DONE；GOAL 可為 fresh VERIFIED）且沒有未解決 Gate 的工作。
 _Avoid_：RUNNING 工作、所有未完成工作
 
 **Human Review**：對特定 revision 所記錄的工程審查結果，為 APPROVED 或 REJECTED。
 _Avoid_：Verification PASS、merge authorization、Human Decision
+
+**VERIFIED**：採 `GOAL` Review Policy 的 Work Item 已在某個 immutable Candidate 上取得機器 PASS 的狀態；它可依 policy 滿足下游依賴，但不是 Human acceptance、DONE 或 Goal 完成，Candidate 後來 stale 時仍必須重驗。
+_Avoid_：APPROVED、DONE、跳過審查
 
 **DONE**：工作在某個確切 revision 上滿足驗證與人工審查條件後的終態。它記錄的是已經發生的事，後續的 commit 不會使其失效，也不會使其重開。
 _Avoid_：Agent 停止執行、RUNNING、已 merge、已 release、可重開的狀態

@@ -26,7 +26,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 ## 目前狀態
 
-**M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next 與 P1-004 Deterministic Runtime Resolution 已實作。**
+**M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已實作。**
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
@@ -40,9 +40,11 @@ P0-001 新增 `forgepilot verify WI-001 --snapshot`：不需要先製造 WIP com
 
 P0-002 新增 `forgepilot status --work WI-001 --summary`：以固定的少量行數呈現單一 Work Item 的 current status、最新 Verification／Human Review、未解除 Gate、Goal 狀態與 completion projection；既有 `forgepilot status` 的完整 history 輸出保持不變。
 
-P0-003 擴充 `forgepilot next`：它優先建議續接已 RUNNING 的工作、修復最新 verification FAIL 的工作、或重新驗證 stale REVIEW candidate；只有沒有這些工作時才推薦最早的 READY Work Item。它只輸出下一個合法 agent action 與原因，不會自動執行 `start`／`verify` 或改寫 state。
+P0-003 擴充 `forgepilot next`：它優先建議續接已 RUNNING 的工作、修復最新 verification FAIL 的工作、或重新驗證 stale REVIEW／VERIFIED candidate；只有沒有這些工作時才推薦最早的 READY Work Item。它只輸出下一個合法 agent action 與原因，不會自動執行 `start`／`verify` 或改寫 state。
 
 P1-004 讓 `verify` 先在實際 Candidate checkout 讀取 repository 的 runtime/toolchain 宣告，再以本機已安裝且版本相符的 Node、Go、Python、Rust 建立該次 subprocess environment。caller shell 的預設版本不再決定驗證結果；宣告版本不可用時會在 Verification Run 開始前拒絕，不產生假的 FAIL Evidence。實際版本會保存於 Verification Evidence。
+
+Goal 可選擇持久化的 Review Policy：`WORK_ITEM`（預設）維持既有每件工作 PASS 後 Human Review 至 DONE；`GOAL` 則讓 PASS 工作進入 `VERIFIED`，可在 Gate、Goal 狀態、verification failure／interruption 與 Candidate freshness 全數仍符合規則時推進下游依賴。`VERIFIED` 不是 Human acceptance 或 DONE。Goal 的 final-review readiness 是 fail-closed 的 read-only projection：ACTIVE Goal 的非空 Work Item 必須全為 VERIFIED、各自最新 Verification 為對應目前 Candidate 的 PASS，且沒有 OPEN Gate；projection 會保留那些 Verification Evidence IDs。現階段沒有 goal-level `review approve`、Goal Evidence 或 Runner，`goal complete` 也會拒絕 `GOAL` policy；`status` 顯示 policy／readiness，`next` 在準備好時回報等待 Goal final review。詳見 [ADR-0016](docs/adr/0016-goal-level-review-is-policy.md)。
 
 初始支援平台是 macOS 的本機檔案系統，使用 Go 1.25.5。state 由程序鎖與原子替換保護；其他平台尚未宣稱支援。
 
@@ -91,6 +93,14 @@ forgepilot start WI-001
 forgepilot status
 ```
 
+若要把例行審查邊界設在整個 Goal，建立時明確選擇：
+
+```bash
+forgepilot goal create --id dbcli-dba --title "DBA Workflow Support" --review-policy goal
+```
+
+接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 只改變 Work Item 間的 progression；Goal 最終 Human acceptance 的 command／Evidence／Runner 尚未實作。
+
 `--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 ForgeFlowV2 執行工程工作。
 
 若 `work add` 發現該 Story 尚未提交，它會在成功輸出後提供兩條下一步：使用剛配發的 Work Item ID 執行 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行不帶 flag 的 commit-mode verification。
@@ -103,7 +113,7 @@ Agent 可以選擇驗證已提交 revision：
 forgepilot verify WI-001
 ```
 
-ForgePilot 會確認工作樹乾淨、解析目前的 HEAD，在 `.forgepilot/worktrees/` 底下建立該 commit 的 detached worktree，於其中解析 `mise.toml`、`.tool-versions`、language-specific version files 與支援的 ecosystem manifests，再用本機已安裝且符合宣告的 runtime 執行你的專案所定義的 `make verify`，然後保存 Evidence。通過則 `WI-001` 進入 REVIEW，失敗則退回 RUNNING 讓 Agent 繼續修。repository 沒有支援的 runtime declaration 時維持原本 PATH；有宣告但找不到符合版本時直接拒絕，不記成 Verification FAIL。
+ForgePilot 會確認工作樹乾淨、解析目前的 HEAD，在 `.forgepilot/worktrees/` 底下建立該 commit 的 detached worktree，於其中解析 `mise.toml`、`.tool-versions`、language-specific version files 與支援的 ecosystem manifests，再用本機已安裝且符合宣告的 runtime 執行你的專案所定義的 `make verify`，然後保存 Evidence。通過時，`WORK_ITEM` policy 讓 `WI-001` 進入 REVIEW，`GOAL` policy 則進入 VERIFIED；失敗一律退回 RUNNING 讓 Agent 繼續修。repository 沒有支援的 runtime declaration 時維持原本 PATH；有宣告但找不到符合版本時直接拒絕，不記成 Verification FAIL。
 
 因為 commit-mode 驗證跑在隔離的 checkout，**你的 `make verify` 必須能在全新 checkout 上執行**——需要 `.env`、本機已安裝依賴或既有 build cache 的專案會失敗。這與 CI 的要求相同。不帶 flag 的 `verify` 在工作樹不乾淨（含未追蹤檔案）時會拒絕執行，因為 commit 無法描述未提交的內容；要驗證那些內容則使用下方的 snapshot mode。
 
