@@ -484,3 +484,92 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 `next` 新增 `RECONCILE` action，並改為以下順序：合法 RUNNING 的 RESUME／REPAIR；WORK_ITEM 模式既有 stale REVIEW 的 REVERIFY；可合法前進的工作（已 READY 為 START，PENDING 但 readiness 可恢復為 RECONCILE，兩者共用同一個 created-at／numeric-ID 排序）；GOAL-policy stale VERIFIED 的 REVERIFY；最後才是既有的等待原因與 WAIT_GOAL_REVIEW。`next` 與 `reconcile` 共用同一個 `advanceable` 判準，因此不會出現「推薦 reconcile 但 reconcile 一直 unchanged」的空轉；`next` 仍是純查詢，不自行執行 reconciliation。本輪只調整合法動作之間的排序，不改變合法性的標準：READY 不足以推薦 START，prerequisite 的 Gate 與 freshness 仍須成立，且 Goal final review boundary 維持既有完整 freshness 要求，中途延後的重驗必須在總審前補完。
 
 驗收：readiness 由 Gate 與 Candidate 移動退回 PENDING、條件恢復後經 `reconcile` 復原的完整 CLI／Git 流程，且復原過程不新增 Verification Evidence；stale prerequisite、未解除的 prerequisite Gate、工作自身的 Gate、BLOCKED／CANCELLED／COMPLETED Goal、未知 Goal 與 facts 取得失敗都 fail closed 且不留部分更新；reconcile Goal A 不改動 Goal B；三張連續任務各自產生新 commit 時 action sequence 為 START／VERIFY 交錯後才 REVERIFY，總計恰好 5 次 Verification Run；SNAPSHOT 以持續演進的 digest 重做同一流程；多 prerequisite 任一不符即不能 START；WORK_ITEM policy 的 REVIEW → Human Approval → DONE 與 stale REVIEW 導航不變；`next` 不寫 state、HEAD、real index 或持久化 refs，重複執行結果穩定，`reconcile` 第二次無 domain 變更。
+
+## Long-running Runner MVP
+
+`forgepilot run` 是這一輪新增的執行命令。設計主張與範圍見 [docs/specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)；界線見 [ADR-0018](adr/0018-runner-may-launch-a-local-coding-cli.md)、[ADR-0019](adr/0019-runner-executes-forgepilot-decides.md) 與 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `forgepilot run --goal <goal-id> --runtime <codex\|fake> --snapshot` | 對指定 Goal 執行 Runner 迴圈。Goal 必須 ACTIVE、非空且 review policy 為 `GOAL`。`--snapshot` 必須明確傳入。逐步輸出 step、action、Work Item 與結果，結束時輸出 run id 與停止原因 |
+| `forgepilot run --goal <goal-id> --runtime <name> --snapshot --dry-run` | 只讀取、檢查並呈現計畫：Goal 條件、runtime executable 與版本、預算設定、目前的第一個合法 action。不呼叫模型、不 start／reconcile／verify、不新增 run record、不建立 snapshot |
+| `forgepilot run status <run-id>` | 輸出該 run 當時的停止結果，以及目前重新計算的 Goal readiness，兩者分開呈現 |
+| `forgepilot run status <run-id> --json` | 同上，單一 JSON 物件 |
+| `forgepilot run resume <run-id>` | 沿用原本的 workspace、Goal、runtime 設定與已消耗預算繼續執行。需要實作時仍建立新 session；不延長 deadline |
+
+`run` 的其餘 flag 與預設值：
+
+```text
+--max-steps                 100
+--max-attempts-per-work      3
+--max-duration              8h
+--agent-timeout             30m
+--verify-timeout            30m
+--runtime-command           （選填）覆寫 runtime executable 路徑，測試用
+--max-handoff-bytes       65536
+--max-agent-output-bytes 1048576
+--max-run-bytes          16777216
+--max-runs-bytes        134217728
+```
+
+`--max-steps` 計算 start、reconcile、Agent attempt 與 verification。`--max-attempts-per-work` 計算同一 run 對同一 Work Item 啟動 Agent 的次數，含失敗與中斷，且在啟動前先保存。`--max-duration` 從第一次啟動計算。**任何限制都不接受 `0` 或負值**——預算與三個容量上限都在啟動前驗證，三個容量上限還必須由內而外遞增（單次寫入 ≤ 單 run ≤ 全部 runs）。`resume` 沿用 run record 裡的預算與容量上限，不套用命令列預設值。
+
+`--max-agent-output-bytes` 是 agent session 自己產出的上限（console log 與結構化結果），不套用在 ForgePilot 自己的 run record 上：run record 的大小已由其結構決定（保留的 attempt 數乘以截斷後的摘要長度，加上每件工作一筆），而因為一個 console 輸出旗標設太小就寫不出 run record，會讓已啟動的 worker 失去可恢復的紀錄。單 run 與全部 runs 的總量上限仍然涵蓋它。
+
+`run` 與 `run resume` 的退出碼：
+
+| 退出碼 | 意義 |
+|---|---|
+| 0 | 已達到等待 Goal final review 的條件——不表示 Goal 完成 |
+| 2 | 因 Gate、Goal 狀態或需要外部處理的條件停止（含 `needs_human`、scope changed、recovery blocked） |
+| 3 | 達到預算、timeout 或無進展限制 |
+| 1 | 參數、runtime、repository、storage 或其他執行錯誤 |
+
+SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 130／143 退出。`run status` 與 `--dry-run` 的成功退出不代表 Goal 已準備好總檢。既有命令的退出碼與文字輸出契約不變；`run` 不新增 schema 版本，`state.json` 不因 Runner 增加欄位。
+
+執行紀錄落在 `.forgepilot/runs/<run-id>/`，涵蓋在既有 `.forgepilot/` ignore 範圍內，因此不改變 Candidate digest。本版不自動刪除 artifacts；容量不足時拒絕並指出可清理的目錄。
+
+### Runner MVP 驗收矩陣
+
+每一列都對應實際存在且通過的測試。fake subprocess adapter 是產品程式碼，不是測試替身——它遵守與 Codex 相同的 session 契約，所以這些測試驗的是產品路徑。
+
+| 驗收 | 測試 |
+|---|---|
+| A → B → C 相依工作循序完成、各 attempt 新 session、最後待總檢而非 DONE | `TestRunnerDrivesDependentWorkToTheGoalReviewBoundary` |
+| 多依賴／匯合依賴：必要依賴 stale 時仍先重驗 | `TestConvergingDependenciesPayTheirDeferredReverifications` |
+| 同 repository 多個 Goal：只執行指定 Goal，不因全域排序假停滯 | `TestRunnerDrivesOnlyTheNamedGoal`、`internal/work` 的 `TestActionableNextForGoalAnswersOnlyTheNamedGoal`、`TestActionableNextForGoalDoesNotBorrowAnotherGoalsBlocker` |
+| 篩 Goal 不影響依賴判斷所需的完整 state | `internal/work` 的 `TestActionableNextForGoalStillJudgesDependenciesAgainstFullState` |
+| Agent exit 0、結果不合法：協定錯誤，不視為完成 | `TestAgentCleanExitWithoutAResultIsNotCompletion`、`internal/agent` 的 `TestCleanExitWithoutAResultIsAProtocolError`、`TestDecodeResultAcceptsOnlyTheThreeOutcomes` |
+| verification 命令正常退出但 Evidence 為 FAIL：有限 repair，不當成 PASS | `TestVerificationFailureLeadsToBoundedRepairThenPass` |
+| 認證、runtime、toolchain 問題正確分類，不產生假的工程 FAIL | `TestAgentExecutionFailedStopsWithoutInventingAVerificationFailure`、`TestAnUnsatisfiableToolchainStopsWithoutFakeFailEvidence`、`internal/app` 的 `TestRefusalSurvivesWrappingAndDoesNotSwallowOtherFailures` |
+| 可恢復 PENDING readiness 經既有 reconcile 推進 | `TestRunnerRecoversWithheldReadinessThroughReconcile` |
+| `NONE` 且有 VERIFYING／未滿足依賴：不回報完成或可總檢 | `TestALiveVerificationElsewhereStopsTheRunWithoutClaimingCompletion`、`internal/work` 的 `TestGoalStallClassifiesWhyNothingCanAdvance` |
+| Gate／Goal 狀態改變：不啟動被禁止的新工作，不自動解除 | `TestAnOpenGateStopsTheRunWithoutBeingResolved`、`TestABlockedGoalStopsTheRun`、`TestNeedsHumanStopsAndRecordsAGate`、`TestNeedsHumanWithoutOptionsStopsWithoutFabricatingAGate` |
+| 第二個 Runner／symlink 路徑：拒絕重疊 writer，且 `status` 仍可回答 | `TestASecondRunnerIsRefusedThroughAnAliasToo` |
+| Crash window、signal、timeout 有明確恢復結果；不確定時拒絕續跑 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestResumeRefusesWhenAWorkerCannotBeConfirmed`、`TestRunnerReclaimsAnAbandonedVerificationRun`、`internal/agent` 的 `TestTimeoutStopsTheWholeProcessGroup`、`TestInspectDistinguishesGoneFromOursFromUnrelated` |
+| Evidence 保存後崩潰：依最新 domain state 恢復，不重複實作 | `TestResumeKeepsBudgetAndDoesNotReimplementVerifiedWork` |
+| Resume：新 session，預算與 deadline 不重置 | `TestResumeContinuesAfterTheBlockerIsCleared`、`TestResumeKeepsBudgetAndDoesNotReimplementVerifiedWork` |
+| 無進展、預算、容量超限：有界停止，不無限重試 | `TestARunThatChangesNothingStopsForNoProgress`、`TestMaxAttemptsPerWorkIsBounded`、`TestMaxStepsStopsTheRun`、`TestExceedingTheArtifactBudgetStopsSafely`、`internal/runner` 的 `TestBudgetRefusesAnyCancelledLimit` |
+| Runner artifacts 寫入不影響 Candidate digest | `TestRunnerArtifactsDoNotChangeTheCandidateDigest` |
+| 全新 `run`（不只 `resume`）也要先處理前一個 run 遺留的 worker；無法確認時拒絕且不新增 run | `TestAFreshRunRefusesWhileAnEarlierWorkerCannotBeConfirmed` |
+| Session 寫入 `.forgepilot/state.json` 時停止，且偽造的 VERIFIED 不被當成總檢依據 | `TestASessionThatWritesForgePilotStateStopsTheRun` |
+| 容量上限不可被旗標關閉，且必須由內而外遞增 | `internal/runner` 的 `TestArtifactLimitsRefuseAnyCancelledBound` |
+| `resume` 沿用原本的容量上限與 Goal／runtime，不套用命令列預設 | `internal/runner` 的 `TestResumeInheritsTheLimitsTheRunStartedWith` |
+| 交接有上限、超限不靜默刪除驗收條件、不含憑證 | `internal/agent` 的 `TestHandoffKeepsRequirementsAndMarksWhatItTrimmed` |
+| Dry-run 不呼叫模型、不改 state、不產生 snapshot 或 run record | `TestDryRunInspectsWithoutChangingAnything` |
+| `run status` 區分當時的停止結果與目前的 Goal readiness | `TestRunStatusSeparatesTheStoredResultFromCurrentReadiness` |
+| 退出碼分類，未分類的停止原因落在錯誤而非成功 | `internal/runner` 的 `TestExitCodesSeparateReviewFromEveryOtherEnding` |
+| 拒絕 WORK_ITEM policy、空 Goal、未知 Goal | `TestRunRefusesGoalsItMayNotDrive` |
+| 缺少 `--snapshot` 時拒絕，不自動 commit | `TestRunRefusesWithoutSnapshotAndNeverCommits` |
+| 較多 Work Items 的 deterministic soak，不以 sleep 冒充長跑 | `TestSoakSchedulesManyWorkItemsAcrossSessions` |
+| 既有功能回歸：全域 `next`、WORK_ITEM policy、`verify`、`review`、`status` | `integration_test.go` 與 `readiness_integration_test.go` 全數未修改即通過 |
+| 真實 Codex smoke | `TestCodexSmokeDrivesOneWorkItem`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑 |
+
+### Runner MVP Exit checklist
+
+- [x] ADR-0018／0019／0020 與 spec、tickets 寫在實作之前；ADR-0010 加註例外並保留原本的失效條件。
+- [x] `internal/work` 仍是純狀態機：goal-scoped 查詢與全域查詢共用一份實作，沒有新增 interface、filesystem、Git 或 subprocess。
+- [x] verification orchestration 只有一份，在 `internal/app`；`internal/cli/verify.go` 是薄殼，既有輸出文字與退出碼不變。
+- [x] Runner 只寫 execution history，lifecycle 更新全部走既有 transition；state schema 未升版。
+- [x] `make verify` 與 `go test -race -count=1 ./...` 實跑通過。
+- [x] 針對狀態機繞過、錯誤成功判定、跨 Goal 執行、重疊 writer、crash window、預算重置、Candidate freshness 與無上限輸出做過 code review。

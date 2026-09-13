@@ -327,3 +327,59 @@ Schema v4 相對 v3 只有新增：`schema_version` 改為 4、Evidence 加入�
 ### M4 呈現規則
 
 `status` 在顯示最新一筆 Human Review 時，若該筆帶有 PR Reference 就一併顯示，沒有就什麼都不印。它是描述而非警告，不因缺少 PR 而提示任何事——缺 PR 是合法狀態，不是問題。[ADR-0008](adr/0008-approval-completes-work.md) 要求 `status` 不對未完成的原因沉默，而 PR 不是完成條件之一，因此不在該要求的範圍內。
+
+## Long-running Runner：`forgepilot run`
+
+Runner 由使用者明確啟動，對單一 Goal 循序執行：取得下一個合法動作、必要時開一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續。範圍與驗收見 [specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)。
+
+責任分工是全部：**Runner 負責執行，ForgePilot 負責判定，ForgeFlowV2 負責工程驗證規範。**
+
+### 分層與新的 package
+
+| Package | 責任 |
+|---|---|
+| `internal/app` | CLI 與 Runner 共用的 orchestration：Goal-scoped typed 查詢、start、reconcile、verification、Gate 開立 |
+| `internal/agent` | Agent runtime 邊界：啟動本機 coding CLI、交接內容、結果驗證、程序群組控制 |
+| `internal/runner` | 執行迴圈、session 邊界、預算、停止條件、execution history |
+
+`internal/work` 仍是純狀態機，沒有新增 interface；Git 仍只在 `internal/repository`；原子保存與鎖仍只在 `internal/storage`。verification orchestration 從 `internal/cli/verify.go` 搬到 `internal/app`，CLI 的 `verify` 變成薄殼，輸出文字與退出碼不變——Runner 使用的是同一段程式，不是複製品。
+
+Agent runtime（Codex 等 coding CLI）與 Verification toolchain（Candidate checkout 宣告的 Go／Node／Python）是兩個不同的邊界。agent adapter 不進入 [P1-004](#p1-004-deterministic-runtime-resolution-與-schema-v7) 的 runtime resolution。
+
+### 判定只有一份
+
+Runner 呼叫 `State.ActionableNextForGoal(goalID, repository)` 取得有型別的 `NextAction`，不解析任何 CLI 輸出。Goal-scoped 與全域查詢共用同一份 priority／legality 實作；篩選只作用在候選集合，依賴與 freshness 仍然看完整 state。`State.GoalStall` 把「沒有合法動作」分類成 VERIFYING、Gate、依賴未滿足、Goal 非 ACTIVE、空 Goal 或未知；VERIFYING 是 live 還是 orphan 由 `internal/app` 以既有的 flock 判斷，因為那不是狀態機能回答的事。
+
+Runner 能做的寫入只有三種：既有的 start transition、既有的 goal readiness reconciliation、既有的 verification orchestration。它不寫 VERIFIED、不寫 DONE、不核准 review、不解除 Gate、不完成 Goal。理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
+
+### 網路邊界
+
+[ADR-0010](adr/0010-no-outbound-network-requests.md) 的「不主動發出網路請求」對所有既有命令完整適用。唯一的例外是使用者明確執行 `run` 時，Runner 可以啟動一個指定的本機 coding CLI，而該 CLI 會連線到模型服務。ForgePilot 自身沒有 HTTP client、不取得憑證、不代理任何遠端狀態，Evidence 的 result 集合也沒有改變。見 [ADR-0018](adr/0018-runner-may-launch-a-local-coding-cli.md)。
+
+### Session 邊界與結果契約
+
+每張工作、每次 repair 都是新的 session；不使用 `codex resume --last`。以 executable 加 argument array 啟動，prompt 走 stdin 與一份受控檔案，workspace 以 `--cd` 明確指定，權限為 `--sandbox workspace-write`，不使用任何 bypass flag。
+
+結果是三選一的結構化 JSON：`implementation_finished`、`needs_human`、`execution_failed`。解碼是嚴格的（拒絕未知欄位、拒絕多餘值、檢查每個 outcome 的必要欄位），exit code 0 但沒有合法結果是 protocol error 而不是完成。`implementation_finished` 只表示這次實作結束——PASS 只能來自 Candidate checkout 上的 canonical check。`needs_human` 一律停止；當它列出至少兩個選項時，透過既有 Gate service 開一個 OPEN Gate，選項照原樣保存，ForgePilot 不代答也不自行解除。
+
+交接內容有位元組上限。必要段落（工作識別、Story 與其驗收要求、禁止事項、結果契約）先寫且不截斷；依賴摘要、前次 attempt 摘要與 verification 失敗摘錄排在後面並在超限時截斷，截斷一定留下明說的標記與檔案路徑。不放完整環境變數、token 或認證檔。
+
+### 執行保護
+
+Workspace lock 涵蓋整段 Runner，鍵是 canonical path，因此 symlink 別名無法啟動第二個 Runner。它不是 per-work 的 verification lock，也不是 state 交易鎖——模型或 canonical check 執行期間 `status` 仍可回答。
+
+那個 lock 只證明「沒有活著的 Runner」，不證明「沒有活著的 worker」：被 SIGKILL 的 Runner 會釋放 lock，而它啟動的 coding CLI 還活著。因此 `run` 與 `run resume` **都**會在取得 lock 之後掃描既有 run record，對每一筆仍宣稱有 worker 的記錄套用同一套四值判定；任何一筆判不出來就 recovery blocked，不新增 run、不啟動 writer。
+
+Agent session 拿到的是 workspace 寫入權限，而 `.forgepilot/` 在 workspace 裡。交接內容裡的禁令是對未受信任模型的請求，不是機制；機制是 session 前後各取一次 `state.json` 的 digest，不同即以 `AGENT_WROTE_FORGEPILOT_STATE` 停止，且不採信該次 attempt 的任何回報。這偵測得到已經發生的事，防不了正在發生的事——限度與理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
+
+程序 ownership 以 pgid 加「啟動時由作業系統自己報回的 start time 與 command」比對判定，四種結果分別對應繼續、停止自己的程序群組、不得發送 signal、以及 recovery blocked。詳見 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。attempt 預算在程序啟動前先保存；程序啟動後立即補記 identity。
+
+無進展以語意事實判斷——每張工作的 status、最新 verification 結果、freshness、open gate 數、Goal 狀態、本次 action 與目前 Candidate。Evidence ID、timestamp、attempt 編號與 log 量刻意不在其中，因為它們正是「什麼都沒動」時仍會變的東西。連續三輪語意事實完全相同即停止。
+
+### 執行紀錄與容量
+
+`.forgepilot/runs/<run-id>/` 保存 `run.json`（原子替換）、`steps.jsonl` 與每次 session 的 `handoff.md`、`session.log`、`result.json`。它落在 `init` 寫入的既有 `.forgepilot/` ignore 範圍內，因此不改變 Candidate digest。
+
+單次寫入、單 run 與全部 runs 的總容量各有有限上限，全部可注入，且都在啟動前驗證：不接受 `0`，也不接受由內而外不遞增的組合。單次寫入的上限管的是 agent session 自己產出的東西，不套用在 run record 上——run record 的大小由其結構決定，而因為一個 console 輸出旗標就寫不出 run record，會讓已啟動的 worker 失去可恢復的紀錄。session 會自己寫檔，所以啟動前先預留空間；console log 超過單次上限即截斷並在 log 內明說。超限是停止，不是清理的理由——總檢需要的 artifacts、Evidence 與 snapshot refs 不會被自動刪除，拒絕訊息指出該檢查哪個目錄。
+
+`run status` 分開呈現「當時的停止結果」與「目前重新計算的 Goal readiness」，並標示 scope 是否已經改變。這兩者在 workspace 變動後會不一致，把儲存的結論當成現況陳述正是要避免的事。

@@ -64,5 +64,20 @@ _Avoid_：Verification PASS、merge authorization、Human Decision
 **VERIFIED**：採 `GOAL` Review Policy 的 Work Item 已在某個 immutable Candidate 上取得機器 PASS 的狀態；它可依 policy 滿足下游依賴，但不是 Human acceptance、DONE 或 Goal 完成，Candidate 後來 stale 時仍必須重驗。
 _Avoid_：APPROVED、DONE、跳過審查
 
+**Runner**：由使用者明確啟動、對單一 Goal 依 ForgePilot 判定循序執行的本機執行迴圈。它保存的是 execution history——step、attempt、預算、程序 ownership、停止原因——不保存 Work Item 的 lifecycle，每一步都重新向 domain 取得下一個合法動作。
+_Avoid_：daemon、排程器、第二套工作狀態機、自動核准者
+
+**Agent Session**：Runner 為一張 Work Item 的一次 attempt 所啟動的一個全新 coding CLI 程序。每次實作或修復都是新的 session，不延續前一次對話。
+_Avoid_：長對話、跨 Work Item 的脈絡、Verification Run
+
+**Agent Result**：一次 Agent Session 交回的結構化結果，為 `implementation_finished`、`needs_human` 或 `execution_failed`。它是未受信任的模型輸出，只作為摘要與停止理由；`implementation_finished` 只表示這次實作結束。
+_Avoid_：PASS、Evidence、完成宣告、授權
+
+**Run Record**：某一次 Runner 執行的持久化 execution history，存在 `.forgepilot/runs/<run-id>/`。恢復時以 ForgePilot 最新 domain state 為準，Run Record 只提供預算與程序 ownership 的核對材料。
+_Avoid_：第二份 lifecycle、進度來源、Verification Log
+
+**Workspace Ownership**：同一個 workspace 同時只能有一個 Runner 的協調機制，以 canonical path 上的鎖表達；symlink 別名視為同一個 workspace。它只協調 Runner，不宣稱能阻止其他程序修改檔案。
+_Avoid_：Verification Run 的 per-work lock、state 交易鎖、Git 鎖
+
 **DONE**：工作在某個確切 revision 上滿足驗證與人工審查條件後的終態。它記錄的是已經發生的事，後續的 commit 不會使其失效，也不會使其重開。
 _Avoid_：Agent 停止執行、RUNNING、已 merge、已 release、可重開的狀態

@@ -4,7 +4,7 @@
 
 ## 這是什麼
 
-管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5 全部實作完成，roadmap 沒有下一個 milestone；後續工作來自 dogfood，開在 issue tracker 上。
+管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5、P0／P1 與 Goal-level Review Policy 全部實作完成，另有 Long-running Runner MVP（`forgepilot run`）；roadmap 沒有下一個 milestone，後續工作來自 dogfood，開在 issue tracker 上。
 
 ## 讀的順序
 
@@ -30,6 +30,10 @@
 - **決策者身分不做認證。** 半套的認證比不做更危險，它會讓人以為那個名字有保證——ADR-0005
 - **不發出任何網路請求。** 不自行 HTTP，不 spawn `gh`。PR Reference 是使用者輸入的字串，只驗格式，不查證那個 PR 存在——ADR-0010
 - **`verify` 先無條件回收孤兒，再判斷能不能開始新的執行。** `internal/cli/verify.go` 有一段被縮小的承諾，那是 M3 刻意改的——ADR-0009
+- **Runner 不保存 Work Item lifecycle。** `internal/runner/` 只有 execution history——step、attempt、預算、程序 ownership、停止原因。每一步都重新向 `internal/work` 的 typed query 取得合法動作，不解析 CLI 輸出、不快取啟動時的清單。看到「run record 裡沒有進度」不是疏漏——ADR-0019
+- **verification orchestration 只有一份，在 `internal/app`。** `internal/cli/verify.go` 是薄殼。要在 Runner 加驗證流程時，改的是 `internal/app/verify.go`，不是複製一份到 `internal/runner/`——ADR-0019
+- **Runner 啟動本機 coding CLI 是 ADR-0010 的明確例外，不是它被推翻。** 既有命令仍然完全離線；ForgePilot 沒有 HTTP client，也不持有憑證。不要因為 Runner 存在就往 `internal/repository` 或 `internal/work` 加網路呼叫——ADR-0018
+- **Worker 存活判定不只看 pid。** pid 會重用，所以識別是 pid 加「啟動時由 `ps` 自己報回的 start time 與 command」。判不出來時 fail-closed 回報 recovery blocked，不猜、不殺——ADR-0020
 - **`Validate` 不檢查 DONE 的四項條件。** 加上去會讓 Validate 與當下的完成規則綁死，日後規則一改，舊的合法 DONE 就變成讀不進來的 state
 
 ## 地雷
@@ -42,6 +46,8 @@
 
 **每次 schema 升版，兩處 fixture 的版本號必須跟著往上調**——`internal/storage/storage_test.go` 中驗證「較新 schema 應被拒讀」的那一筆，與 `internal/work/work_test.go` 中區分較舊／較新 schema 錯誤的那一筆。它們壞掉的方式不是變紅，是在無人察覺下改為驗證一個合法的 state。M2 踩過一次。同一個檔案裡還有一處用字串替換改寫版本號的測試，改動時確認它仍然抓得到你要它抓的東西。
 
+**Runner 的測試不能全用記憶體 mock。** 程序群組、flock、crash recovery 都必須用真的 subprocess 驗證——`--runtime fake` 的 adapter 就是為此存在的產品程式碼，不是測試替身。fake 跑綠只證明 ForgePilot 的程序、鎖與恢復處理正確，不證明無人值守跑真實模型會成功。真實 Codex smoke test 是 opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。
+
 **測試的註解不算數，斷言才算數。** M4 有一條測試，註解寫「同一 revision 上標不同 PR 的兩筆 review 仍互相取代」、變數也叫 `rejecting`，但整段只記了一筆 review。它照樣通過，exit checklist 也照樣被勾成完成。寫完一條測試後讀一遍：註解宣稱的事，斷言真的驗到了嗎。
 
 **驗收條件可能與 ADR 抵觸。** M4 的票 03 原本寫「同一件工作在 HEAD 改變後重新 verify 與 approve」——那需要 reopen，而 ADR-0006 說 DONE 是終態。實作前把每一條驗收條件對一次 ADR，不要因為它寫在 ticket 上就假定它成立。
@@ -53,6 +59,9 @@
 ## 分層
 
 - `internal/cli` — 參數、呈現、錯誤映射。不自行決定 transition 合法性
+- `internal/app` — CLI 與 Runner 共用的 orchestration。唯一可以同時碰 `work`、`storage`、`repository` 的地方
+- `internal/agent` — Agent runtime 邊界：啟動本機 coding CLI、交接內容、結果驗證、程序群組控制。與 Candidate 的 verification toolchain 是兩件事，不要合併
+- `internal/runner` — 執行迴圈、預算、停止條件、execution history
 - `internal/work` — 純狀態機。**沒有任何 interface**，外部事實一律以純值參數傳入（時間是 `now time.Time`，執行結果是 exit code）。不碰 filesystem、Git 或 subprocess
 - `internal/repository` — **唯一允許碰 Git 的地方**。所有 git 呼叫走檔尾一個未匯出的 `git(root, args...)` helper
 - `internal/storage` — snapshot、交易鎖、decode／validate、原子保存。唯一的回呼形態是 `storage.Update(root, func(*work.State) error)`

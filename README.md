@@ -26,7 +26,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 ## 目前狀態
 
-**M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已實作。**
+**M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next、P1-004 Deterministic Runtime Resolution、Goal-level Review Policy 與 Long-running Runner MVP 已實作。**
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
@@ -46,7 +46,11 @@ P0-003 擴充 `forgepilot next`：它優先建議續接已 RUNNING 的工作、�
 
 P1-004 讓 `verify` 先在實際 Candidate checkout 讀取 repository 的 runtime/toolchain 宣告，再以本機已安裝且版本相符的 Node、Go、Python、Rust 建立該次 subprocess environment。caller shell 的預設版本不再決定驗證結果；宣告版本不可用時會在 Verification Run 開始前拒絕，不產生假的 FAIL Evidence。實際版本會保存於 Verification Evidence。
 
-Goal 可選擇持久化的 Review Policy：`WORK_ITEM`（預設）維持既有每件工作 PASS 後 Human Review 至 DONE；`GOAL` 則讓 PASS 工作進入 `VERIFIED`，可在 Gate、Goal 狀態、verification failure／interruption 與 Candidate freshness 全數仍符合規則時推進下游依賴。`VERIFIED` 不是 Human acceptance 或 DONE。Goal 的 final-review readiness 是 fail-closed 的 read-only projection：ACTIVE Goal 的非空 Work Item 必須全為 VERIFIED、各自最新 Verification 為對應目前 Candidate 的 PASS，且沒有 OPEN Gate；projection 會保留那些 Verification Evidence IDs。現階段沒有 goal-level `review approve`、Goal Evidence 或 Runner，`goal complete` 也會拒絕 `GOAL` policy；`status` 顯示 policy／readiness，`next` 在準備好時回報等待 Goal final review。詳見 [ADR-0016](docs/adr/0016-goal-level-review-is-policy.md)。
+Goal 可選擇持久化的 Review Policy：`WORK_ITEM`（預設）維持既有每件工作 PASS 後 Human Review 至 DONE；`GOAL` 則讓 PASS 工作進入 `VERIFIED`，可在 Gate、Goal 狀態、verification failure／interruption 與 Candidate freshness 全數仍符合規則時推進下游依賴。`VERIFIED` 不是 Human acceptance 或 DONE。Goal 的 final-review readiness 是 fail-closed 的 read-only projection：ACTIVE Goal 的非空 Work Item 必須全為 VERIFIED、各自最新 Verification 為對應目前 Candidate 的 PASS，且沒有 OPEN Gate；projection 會保留那些 Verification Evidence IDs。現階段沒有 goal-level `review approve` 或 Goal Evidence，`goal complete` 也會拒絕 `GOAL` policy；`status` 顯示 policy／readiness，`next` 在準備好時回報等待 Goal final review。詳見 [ADR-0016](docs/adr/0016-goal-level-review-is-policy.md)。
+
+Long-running Runner MVP 新增 `forgepilot run`：對單一 `GOAL` policy 的 Goal 循序執行——取得下一個合法動作、為每張工作（與每次修復）啟動一個**全新的** coding agent session、跑正式 snapshot verification、重新讀取狀態再繼續，直到停在等待 Goal final review、遇到需要人的條件，或撞到預算上限。Runner 只保存 execution history，判定完全交給既有 domain：它不寫 VERIFIED／DONE、不核准 review、不解除 Gate、不完成 Goal。Agent 宣稱完成、agent exit code 0、verification 命令 exit code 0 都不是 PASS——只有 Candidate checkout 上的 canonical check 算數。詳見 [ADR-0019](docs/adr/0019-runner-executes-forgepilot-decides.md)。
+
+這是這個產品第一次允許啟動會連線到模型服務的程序，而例外只有這一處：核心治理命令與狀態判定仍然完全離線，ForgePilot 自己沒有 HTTP client，也不持有任何憑證。見 [ADR-0018](docs/adr/0018-runner-may-launch-a-local-coding-cli.md)。
 
 初始支援平台是 macOS 的本機檔案系統，使用 Go 1.25.5。state 由程序鎖與原子替換保護；其他平台尚未宣稱支援。
 
@@ -152,6 +156,25 @@ forgepilot gate cancel GATE-002 --reason "這個問題問錯了"
 
 `resolve` 只接受列出的選項之一。選項全都不對時就 `cancel` 並附理由，再開一個問對的 Gate；`cancel` 同樣解除阻擋，但它留下不可變的紀錄並顯示在 `status`，所以撤銷無法悄悄發生。決策者身分預設取自 Git 的 `user.email`，可用 `--by` 覆寫——那是**自述**的身分，ForgePilot 不做認證。
 
+### 交給 Runner 連續跑
+
+```bash
+forgepilot run --goal dbcli-dba --runtime codex --snapshot --dry-run
+forgepilot run --goal dbcli-dba --runtime codex --snapshot
+forgepilot run status run-20260913t150703-983c11
+forgepilot run resume run-20260913t150703-983c11
+```
+
+`--snapshot` 必須明確傳入：這一版驗證的是 working-tree snapshot，不會替你 commit，也不會偷偷改用 HEAD verification。`--dry-run` 走完整條判定路徑而不寫任何東西——不呼叫模型、不 start／reconcile／verify、不建立 snapshot、不留 run record。
+
+預設限制是 `--max-steps 100`、`--max-attempts-per-work 3`、`--max-duration 8h`、`--agent-timeout 30m`、`--verify-timeout 30m`，都不接受以 `0` 取消。`resume` 沿用原本的 workspace、Goal、runtime 與**已消耗的**預算，也不延長 deadline；需要實作時仍然開新 session，不續接上一段 Codex 對話。
+
+退出碼有四種意義：`0` 已達到等待 Goal final review 的條件（**不是**Goal 完成）、`2` 因 Gate、Goal 狀態或需要外部處理的條件停止、`3` 撞到預算或 timeout、`1` 執行錯誤。`forgepilot run status` 分開呈現「那次 run 停下來時的結論」與「現在重新計算的 Goal readiness」——workspace 動過之後這兩者就會不一樣。
+
+同一個 workspace 同時只能有一個 Runner，symlink 別名也算同一個。被中斷時 Runner 會停掉 worker 的整個程序群組並留下可恢復的紀錄；無法確認舊 worker 是否還在寫這個 workspace 時，它拒絕啟動新的 writer 而不是猜（[ADR-0020](docs/adr/0020-worker-ownership-is-fail-closed.md)）。
+
+`--runtime fake` 搭配 `--runtime-command` 會啟動你指定的本機 executable 而不是模型，測試用；它遵守與 Codex 完全相同的 session 契約。
+
 ### 人工審查與完成
 
 ```bash
@@ -189,7 +212,7 @@ forgepilot migrate
 
 MVP 包含本機 CLI、Goal、Work Item、Gate、Evidence、受規則約束的狀態轉移、deterministic next-work selection、Story reference 與 `make verify` 整合。
 
-不包含 Web UI、雲端服務、資料庫服務、daemon、multi-agent scheduler、Agent spawning、token quota、generic workflow DSL、plugin framework、network API、通訊平台整合或 research／ML workflows。
+Long-running Runner MVP 加入使用者明確啟動的單一 Goal 循序執行，其餘不變：不包含 Web UI、雲端服務、資料庫服務、daemon、排程器、multi-agent 平行執行、多 Goal 自動切換、token quota、generic workflow DSL、plugin framework、network API、遠端執行、通訊平台整合或 research／ML workflows。
 
 ForgePilot 不自動產生 Story、不以 LLM 判斷 PASS、不自動決定架構，也不自動 merge、release 或執行 production writes。
 
