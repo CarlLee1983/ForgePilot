@@ -569,7 +569,8 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 
 | session 正常結束也終止整個 process group，不留下背景子孫程序 | `internal/agent` 的 `TestACleanExitStillStopsTheWholeProcessGroup` |
 | 引用失敗 log 的節錄會說自己被截斷，且不從半行開始 | `internal/runner` 的 `TestTailSaysWhenItCut`、`TestTailQuotesAShortLogWhole` |
 | SIGINT 與 SIGTERM 分別以 130／143 退出，`run status` 也據實回報 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestTerminationExitsWithItsOwnCode` |
-| 真實 Codex smoke | `TestCodexSmokeDrivesOneWorkItem`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。**截至目前從未對真實模型執行過**，因此這一列尚無真實模型行為的證據 |
+| 真實 Codex smoke | `TestCodexSmokeDrivesOneWorkItem`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。2026-09-14 對 codex-cli 0.154.0 實跑通過：一次 attempt 完成實作，正式 verification 產生 PASS Evidence，停在 `AWAITING_GOAL_REVIEW`，40.5 秒 |
+| 結構化結果的 schema 符合 strict structured output（每個物件的 `required` 涵蓋全部 `properties`） | `internal/agent` 的 `TestResultSchemaSatisfiesStrictStructuredOutput`、`TestDecodeResultAcceptsTheNullsTheSchemaRequires` |
 
 ### Runner MVP Exit checklist
 

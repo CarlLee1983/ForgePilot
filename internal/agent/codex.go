@@ -94,25 +94,25 @@ func (codex Codex) Plan(request Request) (Plan, error) {
 const ResultSchema = `{
   "type": "object",
   "additionalProperties": false,
-  "required": ["outcome", "summary"],
+  "required": ["outcome", "summary", "unfinished", "needs_human", "error"],
   "properties": {
     "outcome": {
       "type": "string",
       "enum": ["implementation_finished", "needs_human", "execution_failed"]
     },
     "summary": { "type": "string" },
-    "unfinished": { "type": "array", "items": { "type": "string" } },
+    "unfinished": { "type": ["array", "null"], "items": { "type": "string" } },
     "needs_human": {
-      "type": "object",
+      "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["question"],
+      "required": ["question", "options", "context"],
       "properties": {
         "question": { "type": "string" },
-        "options": { "type": "array", "items": { "type": "string" } },
-        "context": { "type": "string" }
+        "options": { "type": ["array", "null"], "items": { "type": "string" } },
+        "context": { "type": ["string", "null"] }
       }
     },
-    "error": { "type": "string" }
+    "error": { "type": ["string", "null"] }
   }
 }
 `

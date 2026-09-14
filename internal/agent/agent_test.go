@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,4 +306,61 @@ printf '{"outcome":"implementation_finished","summary":"done"}' > "$result"
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("grandchild %s outlived the session that spawned it", pid)
+}
+
+// The schema is handed to a runtime that applies it strictly: every key a
+// object declares must also be listed as required, and anything genuinely
+// optional says so by allowing null. A schema that breaks the rule is rejected
+// by the API before the model ever sees the briefing, which arrives here as a
+// session that exited 1 with no result — a protocol error whose cause is ours.
+func TestResultSchemaSatisfiesStrictStructuredOutput(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(ResultSchema), &schema); err != nil {
+		t.Fatalf("the schema is not valid JSON: %v", err)
+	}
+	var walk func(path string, node map[string]any)
+	walk = func(path string, node map[string]any) {
+		properties, ok := node["properties"].(map[string]any)
+		if !ok {
+			return
+		}
+		required := map[string]bool{}
+		for _, name := range node["required"].([]any) {
+			required[name.(string)] = true
+		}
+		for name, child := range properties {
+			if !required[name] {
+				t.Errorf("%s.%s is declared but not required", path, name)
+			}
+			if nested, ok := child.(map[string]any); ok {
+				walk(path+"."+name, nested)
+			}
+		}
+	}
+	walk("result", schema)
+}
+
+// The strict schema requires every key, so a runtime that has nothing to put in
+// one sends null. Those are the ordinary shape of a result now, not a
+// malformed one.
+func TestDecodeResultAcceptsTheNullsTheSchemaRequires(t *testing.T) {
+	result, err := DecodeResult([]byte(`{"outcome":"implementation_finished","summary":"done","unfinished":null,"needs_human":null,"error":null}`))
+	if err != nil {
+		t.Fatalf("a result with the nulls the schema requires was rejected: %v", err)
+	}
+	if result.Outcome != ImplementationFinished || result.Summary != "done" {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Question != nil || result.Unfinished != nil || result.Error != "" {
+		t.Fatalf("nulls did not decode as absent: %+v", result)
+	}
+
+	asked, err := DecodeResult([]byte(`{"outcome":"needs_human","summary":"which store?","unfinished":null,"error":null,` +
+		`"needs_human":{"question":"which store?","options":["postgres","sqlite"],"context":null}}`))
+	if err != nil {
+		t.Fatalf("a needs_human result with a null context was rejected: %v", err)
+	}
+	if asked.Question == nil || len(asked.Question.Options) != 2 {
+		t.Fatalf("question = %+v", asked.Question)
+	}
 }
