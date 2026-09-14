@@ -14,9 +14,11 @@ import (
 
 func review(args []string, root string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot review <approve|reject>")
+		return errors.New("usage: forgepilot review <request|approve|reject>")
 	}
 	switch args[0] {
+	case "request":
+		return requestReview(args[1:], root, output)
 	case "approve":
 		return recordReview(args[1:], root, output, work.Approved)
 	case "reject":
@@ -24,6 +26,48 @@ func review(args []string, root string, output io.Writer) error {
 	default:
 		return fmt.Errorf("unknown review subcommand %q", args[0])
 	}
+}
+
+func requestReview(args []string, root string, output io.Writer) error {
+	if len(args) != 1 || strings.HasPrefix(args[0], "--") {
+		return errors.New("usage: forgepilot review request <work-id>")
+	}
+	id := args[0]
+	state, err := storage.Load(root)
+	if err != nil {
+		return err
+	}
+	verification, found := state.LatestVerification(id)
+	if !found || verification.Result != work.Pass {
+		return fmt.Errorf("review request %s: work item has no passing verification to submit for review", id)
+	}
+	repositoryState := work.RepositoryState{}
+	if verification.CandidateKind == work.SnapshotCandidate {
+		workspace, inspectErr := repository.InspectSnapshot(context.Background(), root)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		repositoryState = work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}
+	} else {
+		if cleanErr := repository.EnsureClean(context.Background(), root, "requesting review"); cleanErr != nil {
+			return cleanErr
+		}
+		revision, headErr := repository.Head(context.Background(), root)
+		if headErr != nil {
+			return headErr
+		}
+		repositoryState.Revision = revision
+	}
+	if err := storage.Update(root, func(state *work.State) error {
+		if err := state.RequestReviewWithRepository(id, verification.ID, repositoryState, now()); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("review request %s: %w", id, err)
+	}
+	_, err = fmt.Fprintf(output, "%s REVIEW\nSubmitted for human review with %s PASS at %s\n", id, verification.ID, shortRevision(verification.Revision))
+	return err
 }
 
 func recordReview(args []string, root string, output io.Writer, result work.Result) error {

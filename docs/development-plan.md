@@ -180,7 +180,7 @@ M2 新增兩個指令，不新增其他：
 
 | 指令 | 輸入與成功結果 |
 |---|---|
-| `forgepilot verify <work-id>` | 於隔離 worktree 執行受管理專案的 `make verify`，append Evidence；PASS → REVIEW，FAIL → RUNNING |
+| `forgepilot verify <work-id>` | 於隔離 worktree 執行受管理專案的 `make verify`，append Evidence；WORK_ITEM PASS／FAIL → RUNNING，GOAL PASS → VERIFIED；送審見 ADR-0023 |
 | `forgepilot migrate` | 備份後將 v1 state 升級為 v2；已是 v2 時回報並成功結束 |
 
 `status` 擴充為顯示每件工作最新一筆 Evidence 的 result 與 SHA，以及是否 stale。不提供 `evidence` 查詢指令，不提供 `--json`。
@@ -189,12 +189,12 @@ M2 新增兩個指令，不新增其他：
 
 交付切片依序為：schema v2 與 `migrate`；`internal/repository` 的 revision resolver 與 worktree 隔離；canonical runner 與 Evidence append；`verify` 指令與 transition；`status` 的 stale 呈現。
 
-Integration fixture 加入 Makefile 與真實 commit。驗收：PASS → REVIEW、FAIL → RUNNING、新 commit 不沿用舊 PASS、髒工作樹被拒、缺少 `make verify` 被拒且不留 Evidence、程序中斷回收為 INTERRUPTED 且不產生假 PASS、隔離 worktree 看不到主樹未提交內容、`git worktree` 殘骸被 prune 清除。另以既有 M1 state fixture 驗證 v1 被拒讀、`migrate` 的備份與重複執行安全，以及備份檔已存在時的拒絕。M2 仍不提供 DONE。
+Integration fixture 加入 Makefile 與真實 commit。驗收：WORK_ITEM PASS／FAIL → RUNNING、明確 `review request` 才 → REVIEW、新 commit 不沿用舊 PASS、髒工作樹被拒、缺少 `make verify` 被拒且不留 Evidence、程序中斷回收為 INTERRUPTED 且不產生假 PASS、隔離 worktree 看不到主樹未提交內容、`git worktree` 殘骸被 prune 清除。另以既有 M1 state fixture 驗證 v1 被拒讀、`migrate` 的備份與重複執行安全，以及備份檔已存在時的拒絕。M2 仍不提供 DONE。
 
 ### M2 Exit checklist
 
 - [x] `verify` 與 `migrate` 可穩定執行，且 scope 未越過 M2。
-- [x] PASS → REVIEW、FAIL → RUNNING；Evidence 綁定完整 commit SHA 且只累積不覆寫。
+- [x] WORK_ITEM PASS／FAIL → RUNNING，只有明確 `review request` → REVIEW；Evidence 綁定完整 commit SHA 且只累積不覆寫。
 - [x] 髒工作樹（含未追蹤檔案）與缺少 `make verify` 均被拒絕且不留 Evidence。
 - [x] 驗證在隔離的 detached worktree 執行，並以測試證明它看不到主工作樹的未提交內容。
 - [x] 驗證進行中 `status` 與 `next` 仍可執行；同一 Work Item 不可並行驗證，不同 Work Item 可以。

@@ -74,7 +74,7 @@ func TestRuntimeValidationAllowsLegacyVerificationButRejectsReviewOrBlankMetadat
 	}
 }
 
-// reviewFixture returns state with WI-001 verified PASS and sitting in REVIEW,
+// reviewFixture returns state with WI-001 explicitly submitted for review,
 // plus WI-002 depending on it.
 func reviewFixture(t *testing.T) (State, time.Time, string) {
 	t.Helper()
@@ -100,10 +100,103 @@ func reviewFixture(t *testing.T) (State, time.Time, string) {
 	if _, err := state.RecordVerification(first.ID, revision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, &state, first.ID, now)
 	if state.WorkItemStatus(first.ID) != Review {
 		t.Fatalf("fixture did not reach REVIEW: %s", state.WorkItemStatus(first.ID))
 	}
 	return state, now, revision
+}
+
+func submitForReview(t *testing.T, state *State, id string, now time.Time) {
+	t.Helper()
+	verification, ok := state.LatestVerification(id)
+	if !ok {
+		t.Fatalf("%s has no verification", id)
+	}
+	repository := RepositoryState{Revision: verification.Revision}
+	if verification.CandidateKind == SnapshotCandidate {
+		repository.SnapshotDigest = verification.CandidateDigest
+	}
+	if err := state.RequestReviewWithRepository(id, verification.ID, repository, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPassingVerificationStaysRunningUntilReviewIsRequested(t *testing.T) {
+	state, now := verifiableState(t)
+	if err := state.BeginVerification("WI-001", "abc123", "/tmp/worktree", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := state.WorkItemStatus("WI-001"); got != Running {
+		t.Fatalf("PASS left work as %s, want RUNNING", got)
+	}
+	if err := state.Reviewable("WI-001"); err == nil {
+		t.Fatal("a passing verification became reviewable without an explicit request")
+	}
+	submitForReview(t, &state, "WI-001", now)
+	if got := state.WorkItemStatus("WI-001"); got != Review {
+		t.Fatalf("request left work as %s, want REVIEW", got)
+	}
+}
+
+func TestReviewRequestFailsClosedOnCurrentState(t *testing.T) {
+	newPassedState := func(t *testing.T) (State, time.Time, Evidence, RepositoryState) {
+		t.Helper()
+		state, now := verifiableState(t)
+		candidate := Candidate{Kind: CommitCandidate, Revision: "abc123"}
+		if err := state.BeginCandidateVerification("WI-001", candidate, "/tmp/worktree", "", now); err != nil {
+			t.Fatal(err)
+		}
+		verification, err := state.RecordVerification("WI-001", candidate.Revision, "make verify", 0, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state, now, verification, RepositoryState{Revision: candidate.Revision}
+	}
+
+	t.Run("stale candidate", func(t *testing.T) {
+		state, now, verification, _ := newPassedState(t)
+		if err := state.RequestReviewWithRepository("WI-001", verification.ID, RepositoryState{Revision: "def456"}, now); err == nil {
+			t.Fatal("submitted a stale candidate")
+		}
+		if got := state.WorkItemStatus("WI-001"); got != Running {
+			t.Fatalf("stale submission changed status to %s", got)
+		}
+	})
+
+	t.Run("open gate and inactive goal", func(t *testing.T) {
+		state, now, verification, repository := newPassedState(t)
+		if _, err := state.OpenGate("WI-001", "Choose", []string{"one", "two"}, "", now); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err == nil {
+			t.Fatal("submitted work with an open Gate")
+		}
+
+		state, now, verification, repository = newPassedState(t)
+		if err := state.BlockGoal("g", "paused", now); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err == nil {
+			t.Fatal("submitted work in an inactive Goal")
+		}
+	})
+
+	t.Run("later rejection at the same timestamp", func(t *testing.T) {
+		state, now, verification, repository := newPassedState(t)
+		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := state.RecordReview("WI-001", verification.Revision, Rejected, "human@example.com", "fix it", "", now); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err == nil {
+			t.Fatal("re-submitted a rejected candidate without a later verification")
+		}
+	})
 }
 
 func TestRecordReviewBindsAJudgementToAnExactRevision(t *testing.T) {
@@ -255,6 +348,7 @@ func TestCompletionRequiresAPassAtTheApprovedRevision(t *testing.T) {
 	if _, err := state.RecordVerification("WI-001", other, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, &state, "WI-001", now)
 	approveAt(t, &state, "WI-001", other, now)
 	if got := state.WorkItemStatus("WI-001"); got != Done {
 		t.Fatalf("status = %s, want DONE", got)
@@ -291,6 +385,7 @@ func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
 	if _, err := state.RecordVerification("WI-001", revision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, &state, "WI-001", now)
 	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "found a leak", "", now); err != nil {
 		t.Fatal(err)
 	}
@@ -527,6 +622,7 @@ func TestPRReferenceChangesNothingAboutCompletionOrStaleness(t *testing.T) {
 	if _, err := replaced.RecordVerification("WI-001", replacedRevision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, &replaced, "WI-001", now)
 	if _, err := replaced.RecordReview("WI-001", replacedRevision, Approved, "carl@example.com", "", "carl/forgepilot#456", now); err != nil {
 		t.Fatal(err)
 	}

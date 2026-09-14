@@ -97,11 +97,11 @@ M2 不提供 DONE。REVIEW 是這個階段的終點。
 
 **`internal/repository` 新增的 Git 與 exec 函式不單獨以 mock 測試。** 它們是薄的傳遞層，沒有值得隔離的邏輯，覆蓋由 process seam 提供。硬要為它們造介面只會增加 seam 數量並讓測試驗到 mock 而非真實的 Git 行為。
 
-**必測行為**：PASS 進 REVIEW；FAIL 回 RUNNING；髒工作樹被拒且不留 Evidence；未追蹤檔案也算髒；缺少 `make verify` 被拒且不留 Evidence；新 commit 之後舊 PASS 顯示為 stale 且不被沿用；中斷後回收為 INTERRUPTED 並退回 RUNNING，且絕不產生 PASS；隔離 worktree 看不見主工作樹的未提交內容；驗證進行中 `status` 仍可執行；同一 Work Item 的並行驗證被拒；不同 Work Item 可並行；worktree 殘骸被清除；既有 M1 state 被 v2 binary 拒讀；`migrate` 正確備份、重複執行安全、備份已存在時拒絕、升級後資料完整。
+**必測行為**：WORK_ITEM PASS 回 RUNNING 並保留 Evidence，只有明確 `review request` 進 REVIEW（ADR-0023）；FAIL 回 RUNNING；髒工作樹被拒且不留 Evidence；未追蹤檔案也算髒；缺少 `make verify` 被拒且不留 Evidence；新 commit 之後舊 PASS 顯示為 stale 且不被沿用；中斷後回收為 INTERRUPTED 並退回 RUNNING，且絕不產生 PASS；隔離 worktree 看不見主工作樹的未提交內容；驗證進行中 `status` 仍可執行；同一 Work Item 的並行驗證被拒；不同 Work Item 可並行；worktree 殘骸被清除；既有 M1 state 被 v2 binary 拒讀；`migrate` 正確備份、重複執行安全、備份已存在時拒絕、升級後資料完整。
 
 ## Out of Scope
 
-DONE 狀態與依賴解鎖、Gate、Human Decision、Human Review、`review approve`——全部屬於 M3。M2 的終點是 REVIEW。
+DONE 狀態與依賴解鎖、Gate、Human Decision、Human Review、`review approve`——全部屬於 M3。M2 的驗證終點是 PASS Evidence；進入 REVIEW 需要 ADR-0023 定義的明確送審。
 
 PR number 與 HEAD SHA 的 review target 屬於 M4。
 

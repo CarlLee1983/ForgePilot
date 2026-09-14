@@ -201,6 +201,7 @@ func TestWorkItemReviewPolicyKeepsReviewAndDependencyLifecycle(t *testing.T) {
 	if _, err := state.RecordVerificationWithRepository(first.ID, revision, "make verify", 0, RepositoryState{Revision: revision}, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, &state, first.ID, now)
 	if state.WorkItemStatus(first.ID) != Review || state.WorkItemStatus(second.ID) != Pending {
 		t.Fatalf("after PASS: first=%s second=%s", state.WorkItemStatus(first.ID), state.WorkItemStatus(second.ID))
 	}

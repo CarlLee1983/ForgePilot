@@ -255,6 +255,7 @@ func TestReconcileFailsClosedAndStaysInsideOneGoal(t *testing.T) {
 		mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
 		mustRun(t, binary, root, "start", "WI-001")
 		mustRun(t, binary, root, "verify", "WI-001")
+		mustRun(t, binary, root, "review", "request", "WI-001")
 		mustRun(t, binary, root, "review", "approve", "WI-001", "--by", "carl")
 		mustRun(t, binary, root, "goal", "complete", "queue")
 		before := readState(t, root)
@@ -610,8 +611,8 @@ func TestWorkItemPolicyIsUnchangedByReadinessReconciliation(t *testing.T) {
 	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
 	mustRun(t, binary, root, "start", "WI-001")
 	mustRun(t, binary, root, "verify", "WI-001")
-	if got := workStatus(t, root, "WI-001"); got != work.Review {
-		t.Fatalf("WI-001 after PASS = %s, want REVIEW", got)
+	if got := workStatus(t, root, "WI-001"); got != work.Running {
+		t.Fatalf("WI-001 after PASS = %s, want RUNNING", got)
 	}
 	if got := workStatus(t, root, "WI-002"); got != work.Pending {
 		t.Fatalf("WI-002 before approval = %s, want PENDING", got)
@@ -627,6 +628,7 @@ func TestWorkItemPolicyIsUnchangedByReadinessReconciliation(t *testing.T) {
 		t.Fatalf("started work behind an unapproved dependency: %q", output)
 	}
 
+	mustRun(t, binary, root, "review", "request", "WI-001")
 	// A stale REVIEW still outranks other work: next sends the agent back to it.
 	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -637,6 +639,7 @@ func TestWorkItemPolicyIsUnchangedByReadinessReconciliation(t *testing.T) {
 		t.Fatalf("next with a stale REVIEW = %q, %v", output, err)
 	}
 	mustRun(t, binary, root, "verify", "WI-001")
+	mustRun(t, binary, root, "review", "request", "WI-001")
 	mustRun(t, binary, root, "review", "approve", "WI-001", "--by", "carl")
 	if got := workStatus(t, root, "WI-001"); got != work.Done {
 		t.Fatalf("WI-001 after approval = %s, want DONE", got)

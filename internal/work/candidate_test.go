@@ -32,6 +32,7 @@ func TestSnapshotCandidateFlowsFromVerificationThroughReview(t *testing.T) {
 	if got := evidence.Candidate(); got != candidate {
 		t.Fatalf("verification candidate = %#v, want %#v", got, candidate)
 	}
+	submitForReview(t, &state, "WI-001", now)
 
 	reviewCandidate, err := state.ResolveReviewCandidate("WI-001", evidence.ID, baseRevision, snapshotDigest)
 	if err != nil {
@@ -64,6 +65,7 @@ func TestSnapshotReviewRefusesChangedWorkspace(t *testing.T) {
 	if _, err := state.RecordVerification("WI-001", snapshotRevision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, &state, "WI-001", now)
 	latest, _ := state.LatestVerification("WI-001")
 	_, err := state.ResolveReviewCandidate("WI-001", latest.ID, baseRevision,
 		"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

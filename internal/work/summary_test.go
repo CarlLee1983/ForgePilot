@@ -83,6 +83,7 @@ func TestWorkSummaryProjectsCurrentActionableState(t *testing.T) {
 		if _, err := state.RecordVerification("WI-001", revision, "make verify", 0, now); err != nil {
 			t.Fatal(err)
 		}
+		submitForReview(t, &state, "WI-001", now)
 		summary := mustWorkSummary(t, &state, RepositoryState{Revision: revision})
 		if summary.Review.Result != Rejected || !summary.HasVerification || summary.Completion != CompletionAwaitingReview {
 			t.Fatalf("summary = %#v", summary)
@@ -166,6 +167,7 @@ func TestWorkSummaryProjectsCurrentActionableState(t *testing.T) {
 		if _, err := state.RecordVerification("WI-001", newRevision, "make verify", 0, now); err != nil {
 			t.Fatal(err)
 		}
+		submitForReview(t, &state, "WI-001", now)
 		summary := mustWorkSummary(t, &state, RepositoryState{Revision: newRevision})
 		if summary.Completion != CompletionAwaitingReview || !summary.ApprovalNeedsRerecord {
 			t.Fatalf("summary = %#v", summary)
@@ -234,6 +236,7 @@ func passVerification(t *testing.T, state *State, now time.Time, candidate Candi
 	if _, err := state.RecordVerification("WI-001", candidate.Revision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, state, "WI-001", now)
 }
 
 func mustWorkSummary(t *testing.T, state *State, repository RepositoryState) WorkItemSummary {

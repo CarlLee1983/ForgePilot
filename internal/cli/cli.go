@@ -56,6 +56,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   run resume <run-id>               continue a stopped run without resetting its budget
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
+  review request <work-id>            submit a passing WORK_ITEM candidate for human review
   review <approve|reject> <work-id> [--pr <owner/name#number>]
   status [--work <work-id> --summary] print full status, or one Work Item's current summary
 

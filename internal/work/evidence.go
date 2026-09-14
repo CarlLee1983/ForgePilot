@@ -181,13 +181,82 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 			item.Status = Verified
 			s.refreshDependents(id, repository, now)
 		} else {
-			item.Status = Review
+			item.Status = Running
 		}
 	default:
 		item.Status = Running
 	}
 	item.UpdatedAt = now
 	return evidence, nil
+}
+
+// RequestReviewWithRepository moves a WORK_ITEM-policy Work Item with a newly verified PASS
+// to the Human Review boundary. Verification deliberately only records machine
+// evidence and returns the item to RUNNING: an agent may keep working and
+// re-verify without manufacturing a human-only stop after every passing run.
+//
+// A rejection still requires a later verification before it can be submitted
+// again. This preserves the old repair contract: a request cannot turn the
+// same rejected candidate back into REVIEW without new machine evidence.
+func (s *State) RequestReviewWithRepository(id, expectedVerificationID string, repository RepositoryState, now time.Time) error {
+	item := s.item(id)
+	if item == nil {
+		return fmt.Errorf("unknown work item %q", id)
+	}
+	goal := s.goal(item.GoalID)
+	if goal == nil {
+		return fmt.Errorf("work item %q has unknown goal", id)
+	}
+	if goal.ReviewPolicy == ReviewPerGoal {
+		return fmt.Errorf("work item %q belongs to a Goal with GOAL review policy; review happens at the Goal final-review boundary", id)
+	}
+	if item.Status != Running {
+		return fmt.Errorf("work item %q is %s; only RUNNING work can be submitted for review", id, item.Status)
+	}
+	if err := s.gateBlock(id); err != nil {
+		return err
+	}
+	if goal.Status != GoalActive {
+		return fmt.Errorf("work item %q does not belong to an active goal", id)
+	}
+	verification, verified := s.LatestVerification(id)
+	if !verified || verification.Result != Pass {
+		return fmt.Errorf("work item %q has no passing verification to submit for review", id)
+	}
+	if verification.ID != expectedVerificationID {
+		return errors.New("verification changed while preparing review request; retry the request")
+	}
+	if !candidateMatchesRepository(verification, repository) {
+		return fmt.Errorf("work item %q has a stale verified candidate; run forgepilot verify %s%s", id, id, verificationRetrySuffix(verification.Candidate()))
+	}
+	for i := len(s.Evidence) - 1; i >= 0; i-- {
+		evidence := s.Evidence[i]
+		if evidence.WorkItemID != id || evidence.Type != ReviewEvidence {
+			continue
+		}
+		if i > s.latestVerificationIndex(id) {
+			return fmt.Errorf("work item %q needs a new passing verification after its latest human review", id)
+		}
+		break
+	}
+	item.Status, item.UpdatedAt = Review, now
+	return nil
+}
+
+func verificationRetrySuffix(candidate Candidate) string {
+	if candidate.Kind == SnapshotCandidate {
+		return " --snapshot"
+	}
+	return ""
+}
+
+func (s *State) latestVerificationIndex(id string) int {
+	for i := len(s.Evidence) - 1; i >= 0; i-- {
+		if s.Evidence[i].WorkItemID == id && s.Evidence[i].Type == VerificationEvidence {
+			return i
+		}
+	}
+	return -1
 }
 
 func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) error {
