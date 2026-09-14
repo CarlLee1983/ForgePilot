@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/CarlLee1983/ForgePilot/internal/process"
 )
 
 // Liveness is what can be established about a recorded worker process. It is
@@ -115,6 +118,9 @@ func ObserveIdentity(pid int, executable string, now time.Time) ProcessIdentity 
 // TerminateOwned stops a recorded worker's whole process group. It refuses
 // unless the identity was confirmed as ours: signalling a pid that has been
 // reused would kill an unrelated program, which is worse than not recovering.
+// The stop is confirmed rather than assumed: a group that survived both signals
+// is reported, because "we sent SIGKILL" is not the same statement as "nothing
+// is writing this workspace".
 func TerminateOwned(identity ProcessIdentity) error {
 	liveness, err := Inspect(identity)
 	if err != nil {
@@ -126,30 +132,7 @@ func TerminateOwned(identity ProcessIdentity) error {
 	case Unknown:
 		return fmt.Errorf("cannot confirm whether pid %d is still the worker", identity.PID)
 	}
-	terminateGroup(identity.PGID)
-	return nil
-}
-
-// terminationGrace is how long a signalled process group has to exit on its own
-// before it is killed outright.
-const terminationGrace = 5 * time.Second
-
-// terminateGroup signals a whole process group. A coding CLI spawns compilers,
-// test runners and shells; stopping only the outermost process leaves those
-// running and still writing the workspace.
-func terminateGroup(pgid int) {
-	if pgid <= 0 {
-		return
-	}
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	deadline := time.Now().Add(terminationGrace)
-	for time.Now().Before(deadline) {
-		if syscall.Kill(-pgid, 0) != nil {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	return process.Stop(identity.PGID)
 }
 
 // bounded stops writing once limit bytes have been accepted, leaving one note
@@ -196,6 +179,7 @@ type Session struct {
 
 	command *exec.Cmd
 	output  *os.File
+	drain   func()
 	done    chan error
 }
 
@@ -233,13 +217,22 @@ func Start(runtime Runtime, request Request, now time.Time) (*Session, error) {
 	command := exec.Command(plan.Executable, plan.Args...)
 	command.Dir = request.Workspace
 	command.Stdin = strings.NewReader(request.Handoff)
-	command.Stdout = console
-	command.Stderr = console
 	if len(plan.Environment) > 0 {
 		command.Env = append(os.Environ(), plan.Environment...)
 	}
+	// The bound is applied on this side of a descriptor we own. Handing os/exec
+	// an io.Writer would make it create the pipe and the copy goroutine, and
+	// Wait would then not return until every descriptor the session passed on
+	// had been closed — a background grandchild holding it open is how a Ctrl-C
+	// comes to hang forever. See internal/process.
+	drain, err := process.Attach(command, console)
+	if err != nil {
+		output.Close()
+		return nil, err
+	}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
+		drain()
 		output.Close()
 		return nil, fmt.Errorf("start %s: %w", plan.Executable, err)
 	}
@@ -249,40 +242,58 @@ func Start(runtime Runtime, request Request, now time.Time) (*Session, error) {
 		OutputPath: outputPath,
 		command:    command,
 		output:     output,
+		drain:      drain,
 		done:       make(chan error, 1),
 	}
 	go func() { session.done <- command.Wait() }()
 	return session, nil
 }
 
-// Wait blocks until the session ends, its timeout expires, or stop is closed.
-// A timeout or a stop signal terminates the whole process group before
-// returning, so no worker outlives the call that was supposed to own it.
-func (session *Session) Wait(timeout time.Duration, stop <-chan struct{}) (Result, error) {
-	defer session.output.Close()
-	var timer <-chan time.Time
-	if timeout > 0 {
-		ticker := time.NewTimer(timeout)
-		defer ticker.Stop()
-		timer = ticker.C
+// Wait blocks until the session ends or ctx does. The caller owns every limit
+// that can end it early — its own timeout, the run's total deadline, a signal —
+// so this reports only that the session was stopped and hands back the context's
+// cause; deciding which limit it was belongs to whoever set them, not here.
+//
+// The whole process group is settled before returning on every path, including
+// a clean exit: whatever the session forked is still ours, still writing this
+// workspace, and — for the Runner — now past the digest taken around the
+// session.
+func (session *Session) Wait(ctx context.Context) (Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	var waitErr error
+	completed := false
 	select {
-	case err := <-session.done:
-		// The session process is over; the group it was given is not necessarily
-		// empty. Whatever it forked is still ours, still writing this workspace,
-		// and — for the Runner — now past the digest taken around the session, so
-		// it is stopped here rather than left for the next recovery to puzzle over.
-		terminateGroup(session.Identity.PGID)
-		return session.collect(err)
-	case <-timer:
-		terminateGroup(session.Identity.PGID)
-		<-session.done
-		return Result{}, fmt.Errorf("%w after %s", ErrTimedOut, timeout)
-	case <-stop:
-		terminateGroup(session.Identity.PGID)
-		<-session.done
-		return Result{}, ErrStopped
+	case waitErr = <-session.done:
+		completed = true
+	case <-ctx.Done():
+		// A session that reached its own end in the same instant is not thrown
+		// away by the cancellation beside it; nothing is waited for here, so a
+		// cancellation that arrived first still wins.
+		select {
+		case waitErr = <-session.done:
+			completed = true
+		default:
+			_ = process.StopLeader(session.Identity.PGID, session.done)
+		}
 	}
+	// Settled after the session process has been reaped: an unreaped zombie is
+	// still a member of its own group. Output already produced is collected
+	// afterwards, within its own bound.
+	cleanup := process.Stop(session.Identity.PGID)
+	session.drain()
+	session.output.Close()
+	if !completed {
+		return Result{}, &StoppedError{Cause: context.Cause(ctx), Cleanup: cleanup}
+	}
+	result, err := session.collect(waitErr)
+	if cleanup != nil {
+		// Both survive: why the session ended and whether anything it started is
+		// still running are two questions, and the caller acts on both.
+		return result, errors.Join(err, cleanup)
+	}
+	return result, err
 }
 
 // collect reads the structured result. The exit code is diagnostic only: a

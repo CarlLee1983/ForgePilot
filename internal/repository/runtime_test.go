@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,7 +23,7 @@ func TestResolveRuntimeUsesInstalledNodeMatchingCandidateDeclaration(t *testing.
 	t.Setenv("PATH", wrong+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("NVM_DIR", nvm)
 
-	runtime, err := ResolveRuntime(checkout)
+	runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,22 +31,23 @@ func TestResolveRuntimeUsesInstalledNodeMatchingCandidateDeclaration(t *testing.
 	if got, want := runtime.Versions(), map[string]string{"node": "24.8.0"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Versions() = %#v, want %#v", got, want)
 	}
-	if err := EnsureCanonicalCheck(checkout); err == nil {
+	if err := EnsureCanonicalCheckInContext(context.Background(), checkout, RuntimeEnvironment{}); err == nil {
 		t.Fatal("canonical precheck unexpectedly accepted the caller's wrong Node")
 	}
-	if err := EnsureCanonicalCheckWithRuntime(checkout, runtime); err != nil {
+	if err := EnsureCanonicalCheckInContext(context.Background(), checkout, runtime); err != nil {
 		t.Fatalf("EnsureCanonicalCheckWithRuntime = %v", err)
 	}
 
 	log := new(strings.Builder)
-	exitCode, err := RunCanonicalCheckWithRuntime(checkout, runtime, log)
+	run, err := RunCanonicalCheckInContext(context.Background(), checkout, runtime, log)
+	exitCode := run.ExitCode
 	if err != nil || exitCode != 0 {
-		t.Fatalf("RunCanonicalCheckWithRuntime = %d, %v", exitCode, err)
+		t.Fatalf("RunCanonicalCheckInContext = %d, %v (cleanup %v)", exitCode, err, run.Cleanup)
 	}
 }
 
 func TestResolveRuntimeKeepsCurrentEnvironmentWithoutDeclarations(t *testing.T) {
-	runtime, err := ResolveRuntime(t.TempDir())
+	runtime, err := ResolveRuntimeInContext(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +71,7 @@ echo 'go version go1.25.5 darwin/arm64'
 	t.Setenv("MISE_DATA_DIR", t.TempDir())
 	t.Setenv("ASDF_DATA_DIR", t.TempDir())
 
-	runtime, err := ResolveRuntime(checkout)
+	runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestResolveRuntimeDiscoversSupportedDeclarations(t *testing.T) {
 			t.Setenv("MISE_DATA_DIR", t.TempDir())
 			t.Setenv("ASDF_DATA_DIR", t.TempDir())
 			t.Setenv("PYENV_ROOT", t.TempDir())
-			runtime, err := ResolveRuntime(checkout)
+			runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,9 +125,9 @@ func TestResolveRuntimeRejectsConflictingDeclarations(t *testing.T) {
 	checkout := t.TempDir()
 	writeRuntimeFixture(t, checkout, ".node-version", "24\n")
 	writeRuntimeFixture(t, checkout, ".nvmrc", "22\n")
-	_, err := ResolveRuntime(checkout)
+	_, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err == nil || !strings.Contains(err.Error(), "conflicting runtime declarations") {
-		t.Fatalf("ResolveRuntime error = %v", err)
+		t.Fatalf("ResolveRuntimeInContext error = %v", err)
 	}
 }
 
@@ -143,7 +145,7 @@ func TestResolveRuntimeAcceptsCompatibleDeclarationsByPrecedence(t *testing.T) {
 	t.Setenv("MISE_DATA_DIR", t.TempDir())
 	t.Setenv("ASDF_DATA_DIR", t.TempDir())
 
-	runtime, err := ResolveRuntime(checkout)
+	runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +187,7 @@ func TestPackageEngineSupportsNPMRanges(t *testing.T) {
 			t.Setenv("NVM_DIR", t.TempDir())
 			t.Setenv("MISE_DATA_DIR", t.TempDir())
 			t.Setenv("ASDF_DATA_DIR", t.TempDir())
-			runtime, err := ResolveRuntime(checkout)
+			runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 			if test.available {
 				if err != nil {
 					t.Fatal(err)
@@ -209,9 +211,9 @@ func TestResolveRuntimeRefusesUnavailableDeclaration(t *testing.T) {
 	writeRuntimeExecutable(t, bin, "node", "#!/bin/sh\necho v22.17.1\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
 	t.Setenv("NVM_DIR", t.TempDir())
-	_, err := ResolveRuntime(checkout)
+	_, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err == nil || !strings.Contains(err.Error(), "Node 99 required") || !strings.Contains(err.Error(), "resolved 22.17.1") {
-		t.Fatalf("ResolveRuntime error = %v", err)
+		t.Fatalf("ResolveRuntimeInContext error = %v", err)
 	}
 }
 
@@ -240,7 +242,7 @@ func TestResolveRuntimeBuildsOneEnvironmentForMultipleManagers(t *testing.T) {
 	t.Setenv("MISE_DATA_DIR", mise)
 	t.Setenv("ASDF_DATA_DIR", asdf)
 
-	runtime, err := ResolveRuntime(checkout)
+	runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +250,8 @@ func TestResolveRuntimeBuildsOneEnvironmentForMultipleManagers(t *testing.T) {
 	if got, want := runtime.Summary(), "go 1.25.5, node 24.8.0, python 3.12.2"; got != want {
 		t.Fatalf("Summary() = %q, want %q", got, want)
 	}
-	if exitCode, err := RunCanonicalCheckWithRuntime(checkout, runtime, new(strings.Builder)); err != nil || exitCode != 0 {
-		t.Fatalf("canonical check = %d, %v", exitCode, err)
+	if run, err := RunCanonicalCheckInContext(context.Background(), checkout, runtime, new(strings.Builder)); err != nil || run.ExitCode != 0 || run.Cleanup != nil {
+		t.Fatalf("canonical check = %+v, %v", run, err)
 	}
 }
 
@@ -263,7 +265,7 @@ func TestResolveRuntimeQueriesManagerShimFromCandidateCheckout(t *testing.T) {
 	t.Setenv("MISE_DATA_DIR", t.TempDir())
 	t.Setenv("ASDF_DATA_DIR", t.TempDir())
 
-	runtime, err := ResolveRuntime(checkout)
+	runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +284,7 @@ func TestResolveRuntimeUsesInstalledNamedRustToolchain(t *testing.T) {
 	t.Setenv("MISE_DATA_DIR", t.TempDir())
 	t.Setenv("ASDF_DATA_DIR", t.TempDir())
 
-	runtime, err := ResolveRuntime(checkout)
+	runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +306,7 @@ func TestResolveRuntimeUsesInstalledPyenvPython(t *testing.T) {
 	t.Setenv("MISE_DATA_DIR", t.TempDir())
 	t.Setenv("ASDF_DATA_DIR", t.TempDir())
 
-	runtime, err := ResolveRuntime(checkout)
+	runtime, err := ResolveRuntimeInContext(context.Background(), checkout)
 	if err != nil {
 		t.Fatal(err)
 	}

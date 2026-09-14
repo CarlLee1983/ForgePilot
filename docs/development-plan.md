@@ -487,7 +487,7 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 
 ## Long-running Runner MVP
 
-`forgepilot run` 是這一輪新增的執行命令。設計主張與範圍見 [docs/specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)；界線見 [ADR-0018](adr/0018-runner-may-launch-a-local-coding-cli.md)、[ADR-0019](adr/0019-runner-executes-forgepilot-decides.md) 與 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。
+`forgepilot run` 是這一輪新增的執行命令。設計主張與範圍見 [docs/specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)；界線見 [ADR-0018](adr/0018-runner-may-launch-a-local-coding-cli.md)、[ADR-0019](adr/0019-runner-executes-forgepilot-decides.md) 、[ADR-0020](adr/0020-worker-ownership-is-fail-closed.md) 與 [ADR-0021](adr/0021-execution-limits-are-bounded-and-named.md)。
 
 | 指令 | 輸入與成功結果 |
 |---|---|
@@ -512,7 +512,7 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 --max-runs-bytes        134217728
 ```
 
-`--max-steps` 計算 start、reconcile、Agent attempt 與 verification。`--max-attempts-per-work` 計算同一 run 對同一 Work Item 啟動 Agent 的次數，含失敗與中斷，且在啟動前先保存。`--max-duration` 從第一次啟動計算。**任何限制都不接受 `0` 或負值**——預算與三個容量上限都在啟動前驗證，三個容量上限還必須由內而外遞增（單次寫入 ≤ 單 run ≤ 全部 runs）。`resume` 沿用 run record 裡的預算與容量上限，不套用命令列預設值。
+`--max-steps` 計算 start、reconcile、Agent attempt 與 verification。`--max-attempts-per-work` 計算同一 run 對同一 Work Item 啟動 Agent 的次數，含失敗與中斷，且在啟動前先保存。`--max-duration` 從第一次啟動計算，而且約束整段執行而不只是步驟之間的空隙：一次執行的有效期限是 `min(原始 run deadline, 本次開始時間 + 本次 timeout)`，所以 `--agent-timeout` 與 `--verify-timeout` 都不會讓 run 越過總期限。整個 run 到期記 `MAX_DURATION`，單次執行自己逾時才記 `AGENT_TIMEOUT`／`VERIFY_TIMEOUT`；多個原因幾乎同時到達時先成立的算數，完全同時則 signal → 總期限 → 單次 timeout。期限到期之後不再啟動新的業務工作，但終止本身有一段有界的清理寬限（先 SIGTERM、有限等待、必要時 SIGKILL、最後確認程序群組已空）。獨立的 `forgepilot verify` 不繼承這些期限。詳見 [ADR-0021](adr/0021-execution-limits-are-bounded-and-named.md)。**任何限制都不接受 `0` 或負值**——預算與三個容量上限都在啟動前驗證，三個容量上限還必須由內而外遞增（單次寫入 ≤ 單 run ≤ 全部 runs）。`resume` 沿用 run record 裡的預算與容量上限，不套用命令列預設值。
 
 三個容量上限都是 agent session 產出的上限（console log 與結構化結果），**三個都不套用在 ForgePilot 自己的 run record 上**：run record 的大小已由其結構決定（保留的 attempt 數乘以截斷後的摘要長度，加上每件工作一筆），而寫不出 run record 會讓已啟動的 worker 失去可恢復的紀錄。只豁免單次寫入上限並不夠——總量上限同樣擋得住那次存檔，而它偏偏發生在 workspace 最滿的時候，屆時唯一的出路會變成「從 record 裡拿掉東西讓它寫得下」，那正是讓活著的 worker 從紀錄裡消失的路徑。session 寫的每一個 artifact 仍然受三個上限管轄。
 
@@ -525,7 +525,7 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 | 3 | 達到預算、timeout 或無進展限制 |
 | 1 | 參數、runtime、repository、storage 或其他執行錯誤 |
 
-SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 130／143 退出。`run status` 與 `--dry-run` 的成功退出不代表 Goal 已準備好總檢。既有命令的退出碼與文字輸出契約不變；`run` 不新增 schema 版本，`state.json` 不因 Runner 增加欄位。
+SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonical check**，保存恢復資訊後以 130／143 退出。`run status` 與 `--dry-run` 的成功退出不代表 Goal 已準備好總檢。既有命令的退出碼與文字輸出契約不變；`run` 不新增 schema 版本，`state.json` 不因 Runner 增加欄位。
 
 執行紀錄落在 `.forgepilot/runs/<run-id>/`，涵蓋在既有 `.forgepilot/` ignore 範圍內，因此不改變 Candidate digest。本版不自動刪除 artifacts；容量不足時拒絕並指出可清理的目錄。
 
@@ -571,6 +571,24 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 
 | SIGINT 與 SIGTERM 分別以 130／143 退出，`run status` 也據實回報 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestTerminationExitsWithItsOwnCode` |
 | 真實 Codex smoke | `TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。以 disposable Go repository 的三張相依 Story 驗證三次新 session、三份 SNAPSHOT PASS Evidence 與 `AWAITING_GOAL_REVIEW`；不以 fake runtime 紀錄冒充。2026-09-14 對 codex-cli 0.154.0 實跑通過，run `run-20260914t045121-d8bd10` 用 339.28 秒；Candidate 演進後依 freshness 規則補跑 prerequisite，最終 Evidence 為 EV-004、EV-005、EV-003。 |
 | 結構化結果的 schema 符合 strict structured output（每個物件的 `required` 涵蓋全部 `properties`） | `internal/agent` 的 `TestResultSchemaSatisfiesStrictStructuredOutput`、`TestDecodeResultAcceptsTheNullsTheSchemaRequires` |
+| 正式 verification 執行中收到 SIGINT：停止程序群組、退出碼 130、留下 INTERRUPTED 而非 FAIL，且不留下無人結案的 VERIFYING | `TestSignalDuringVerificationStopsTheCheckAndItsProcessGroup` |
+| 正式 verification 執行中收到 SIGTERM：停止程序群組、退出碼 143 | `TestTerminationDuringVerificationExitsWithItsOwnCode` |
+| signal 到達後不啟動下一張工作，已保存的合法 Evidence 不被覆寫 | `TestASignalNeitherStartsTheNextWorkNorRewritesSavedEvidence` |
+| canonical check 正常退出（PASS）後不留下背景子程序 | `TestACanonicalCheckLeavesNoBackgroundChildBehindOnAPass`、`internal/process` 的 `TestACleanExitStillEmptiesItsProcessGroup` |
+| canonical check 非零退出（FAIL）後仍完成清理，且 FAIL Evidence 照常保存 | `TestACanonicalCheckLeavesNoBackgroundChildBehindOnAFailure`、`internal/process` 的 `TestAFailingExitStillEmptiesItsProcessGroup` |
+| 背景子程序繼承輸出描述元時，等待與輸出收集都不無界阻塞 | `internal/process` 的 `TestAnInheritedOutputDescriptorDoesNotHoldTheCommandOpen` |
+| 無法確認清理完成時停止並回報，且不清掉恢復所需的 worker 紀錄 | `internal/agent` 的 `TestAStoppedSessionReportsWhyAndWhetherItsGroupIsSettled` |
+| 子程序不回應 SIGTERM 時仍在有界時間內停止，且清理結果經過確認 | `internal/process` 的 `TestAProcessThatIgnoresTerminationIsStillStoppedWithinBounds`、`TestStopRefusesAnUnrecordedGroup` |
+| 沒有可用結果的執行不算完成，不會以 exit code 0 變成 PASS Evidence | `internal/process` 的 `TestAnUnusableWaitResultIsNotACompletion` |
+| 已完成的執行結果不被同時到達的取消丟棄 | `internal/process` 的 `TestACompletedCommandIsNotDiscardedByALaterCancellation` |
+| 已被叫停的步驟不會是啟動新外部程序的那一個（含 preflight） | `internal/process` 的 `TestAnAlreadyCancelledContextStartsNothing`、`TestNoVerificationStartsAfterTheRunDeadlineHasPassed` |
+| 總期限在 Agent 執行中到達：`MAX_DURATION` | `TestTheRunDeadlineStopsAnAgentSessionInFlight` |
+| 總期限在 verification 執行中到達：`MAX_DURATION`，且不製造工程 FAIL | `TestTheRunDeadlineStopsAVerificationInFlight` |
+| Agent 完成時總期限已到，不再啟動 verification | `TestNoVerificationStartsAfterTheRunDeadlineHasPassed` |
+| `--agent-timeout` 先到仍是 `AGENT_TIMEOUT`，`--verify-timeout` 先到仍是 `VERIFY_TIMEOUT` | `TestAnAgentTimeoutInsideTheRunDeadlineKeepsItsOwnReason`、`TestAVerifyTimeoutInsideTheRunDeadlineKeepsItsOwnReason` |
+| 單次期限取 `min(run deadline, now + timeout)`；多原因同時到達依固定優先序分類 | `internal/runner` 的 `TestAStepIsBoundedByWhicheverLimitComesFirst`、`TestAStepThatOutlivesItsOwnTimeoutSaysSo`、`TestASignalOutranksEveryExpiry`、`TestTheRunDeadlineOutranksACoincidentStepTimeout`、`TestTheFirstReasonToArriveIsTheOneRecorded`、`TestEachCauseMapsOntoItsOwnStopReason` |
+| 已到期的 run 經 `resume` 不啟動新 session，也不重置 deadline、steps 或 attempts | `TestResumingAnExpiredRunStartsNoNewSession` |
+| 獨立 `forgepilot verify` 不繼承 Runner 總期限，PASS／FAIL 輸出與退出行為不變 | `TestStandaloneVerifyKeepsItsOwnContract` |
 
 ### Runner MVP Exit checklist
 
@@ -580,4 +598,5 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 
 - [x] Runner 只寫 execution history，lifecycle 更新全部走既有 transition；state schema 未升版。
 - [x] `make verify` 與 `go test -race -count=1 ./...` 實跑通過。
 - [x] 針對狀態機繞過、錯誤成功判定、跨 Goal 執行、重疊 writer、crash window、預算重置、Candidate freshness 與無上限輸出做過 code review，**且修正本身也經過第二輪 review**——第一輪的六項修正帶進 2 HIGH 與 3 MEDIUM，已各自以先寫失敗測試的方式修掉。
+- [x] 停止訊號、程序清理與兩種期限的執行控制補強（[06-execution-control](specs/runner-mvp/issues/06-execution-control.md)）：SIGINT／SIGTERM 傳達到 canonical check、正常退出也清理程序群組、`--max-duration` 約束整段執行；決定記在 [ADR-0021](adr/0021-execution-limits-are-bounded-and-named.md)。
 - [x] ADR-0019／architecture 已明列兩個 state-write 偵測窗口與信任模型：agent session 比對整份 state，canonical check 只保護正在驗證的 Work Item，並明說這不是全域 state 完整性或 sandbox 保證。

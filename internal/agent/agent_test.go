@@ -1,12 +1,16 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/CarlLee1983/ForgePilot/internal/process"
 )
 
 func TestDecodeResultAcceptsOnlyTheThreeOutcomes(t *testing.T) {
@@ -59,7 +63,7 @@ func TestCleanExitWithoutAResultIsAProtocolError(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := session.Wait(30*time.Second, nil); !IsProtocolError(err) {
+			if _, err := session.Wait(waitContext(t, 30*time.Second)); !IsProtocolError(err) {
 				t.Fatalf("Wait err = %v, want protocol error", err)
 			}
 		})
@@ -90,7 +94,7 @@ printf '{"outcome":"implementation_finished","summary":"wrote two files"}' > "$r
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := session.Wait(30*time.Second, nil)
+	result, err := session.Wait(waitContext(t, 30*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,8 +136,8 @@ sleep 30
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Wait(2*time.Second, nil); err == nil || !strings.Contains(err.Error(), "timeout") {
-		t.Fatalf("Wait err = %v, want a timeout", err)
+	if _, err := session.Wait(waitContext(t, 2*time.Second)); !errors.Is(err, ErrStopped) {
+		t.Fatalf("Wait err = %v, want a stopped session", err)
 	}
 	pid := strings.TrimSpace(readFile(t, filepath.Join(workspace, "grandchild.pid")))
 	deadline := time.Now().Add(5 * time.Second)
@@ -144,6 +148,15 @@ sleep 30
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("grandchild %s survived the timeout", pid)
+}
+
+// waitContext bounds one Wait the way the Runner does: the caller owns the
+// limit, and Wait only reports that the context ended.
+func waitContext(t *testing.T, within time.Duration) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 func TestInspectDistinguishesGoneFromOursFromUnrelated(t *testing.T) {
@@ -189,7 +202,7 @@ func TestInspectDistinguishesGoneFromOursFromUnrelated(t *testing.T) {
 	if err := TerminateOwned(identity); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Wait(10*time.Second, nil); err == nil {
+	if _, err := session.Wait(waitContext(t, 10*time.Second)); err == nil {
 		t.Fatal("Wait reported success for a terminated session")
 	}
 	if liveness, err := Inspect(identity); err != nil || liveness == Ours {
@@ -294,7 +307,7 @@ printf '{"outcome":"implementation_finished","summary":"done"}' > "$result"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Wait(30*time.Second, nil); err != nil {
+	if _, err := session.Wait(waitContext(t, 30*time.Second)); err != nil {
 		t.Fatalf("Wait err = %v", err)
 	}
 	pid := strings.TrimSpace(readFile(t, filepath.Join(workspace, "grandchild.pid")))
@@ -362,5 +375,26 @@ func TestDecodeResultAcceptsTheNullsTheSchemaRequires(t *testing.T) {
 	}
 	if asked.Question == nil || len(asked.Question.Options) != 2 {
 		t.Fatalf("question = %+v", asked.Question)
+	}
+}
+
+// "Why did it stop" and "is anything still running" are two questions, and the
+// second has an answer on the ordinary path too. A caller that could only ask
+// the first would withdraw a worker record — the one thing recovery needs —
+// because the call returned.
+func TestAStoppedSessionReportsWhyAndWhetherItsGroupIsSettled(t *testing.T) {
+	stopped := &StoppedError{Cause: context.DeadlineExceeded, Cleanup: process.ErrNotSettled}
+	if !errors.Is(stopped, ErrStopped) {
+		t.Fatal("a stopped session did not read as stopped")
+	}
+	if !errors.Is(stopped, context.DeadlineExceeded) {
+		t.Fatal("the reason the caller's context ended was lost")
+	}
+	if !errors.Is(stopped, process.ErrNotSettled) {
+		t.Fatal("an unconfirmed process group was not reportable")
+	}
+	settled := &StoppedError{Cause: context.Canceled}
+	if errors.Is(settled, process.ErrNotSettled) {
+		t.Fatal("a settled group read as unconfirmed")
 	}
 }

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/CarlLee1983/ForgePilot/internal/process"
 )
 
 // RuntimeEnvironment is the resolved, validated toolchain environment for one
@@ -82,11 +85,17 @@ type runtimeRequirement struct {
 	declarations              []runtimeDeclaration
 }
 
-// ResolveRuntime discovers the runtime contract inside the candidate checkout,
-// resolves only already-installed executables, and validates their actual
-// versions before returning an environment suitable for the canonical check.
-// Repositories with no supported declaration preserve the caller's environment.
-func ResolveRuntime(checkout string) (RuntimeEnvironment, error) {
+// ResolveRuntimeInContext discovers the runtime contract inside the candidate
+// checkout, resolves only already-installed executables, and validates their
+// actual versions before returning an environment suitable for the canonical
+// check. Repositories with no supported declaration preserve the caller's
+// environment.
+//
+// Version probes are external processes started in the candidate checkout, so
+// they are bound by the caller's context: a manager shim that hangs would
+// otherwise block a Runner that has already been asked to stop, in the one
+// place nothing was watching.
+func ResolveRuntimeInContext(ctx context.Context, checkout string) (RuntimeEnvironment, error) {
 	requirements, err := discoverRuntime(checkout)
 	if err != nil {
 		return RuntimeEnvironment{}, err
@@ -98,7 +107,10 @@ func ResolveRuntime(checkout string) (RuntimeEnvironment, error) {
 	executables := make(map[string]string, len(requirements))
 	var directories []string
 	for _, requirement := range requirements {
-		executable, actual, err := resolveExecutable(checkout, requirement)
+		if err := ctx.Err(); err != nil {
+			return RuntimeEnvironment{}, err
+		}
+		executable, actual, err := resolveExecutable(ctx, checkout, requirement)
 		if err != nil {
 			return RuntimeEnvironment{}, err
 		}
@@ -416,13 +428,22 @@ func normalizeRequirement(name, requirement string) string {
 	return requirement
 }
 
-func resolveExecutable(checkout string, requirement runtimeRequirement) (string, string, error) {
+func resolveExecutable(ctx context.Context, checkout string, requirement runtimeRequirement) (string, string, error) {
 	candidates := runtimeExecutableCandidates(requirement.name)
 	var resolved string
 	current := currentRuntimeExecutable(requirement.name)
 	for _, candidate := range candidates {
-		actual, err := executableVersion(checkout, requirement.name, candidate)
+		if err := ctx.Err(); err != nil {
+			return "", "", err
+		}
+		actual, err := executableVersion(ctx, checkout, requirement.name, candidate)
 		if err != nil {
+			// A probe that could not be confirmed stopped is not a candidate that
+			// failed to match: skipping it would report "no installed runtime" for
+			// something that is only a stop that did not complete.
+			if errors.Is(err, process.ErrNotSettled) {
+				return "", "", err
+			}
 			continue
 		}
 		if resolved == "" || candidate == current {
@@ -438,6 +459,9 @@ func resolveExecutable(checkout string, requirement runtimeRequirement) (string,
 		if matches {
 			return candidate, actual, nil
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
 	}
 	name := runtimeDisplayName(requirement.name)
 	if resolved != "" {
@@ -544,7 +568,7 @@ func currentRuntimeExecutable(name string) string {
 	return ""
 }
 
-func executableVersion(checkout, name, executable string) (string, error) {
+func executableVersion(ctx context.Context, checkout, name, executable string) (string, error) {
 	arguments := []string{"--version"}
 	// Go reports its version through a subcommand, not a --version flag. Keep
 	// the invocation rule here with the output parsing so every runtime still
@@ -555,11 +579,21 @@ func executableVersion(checkout, name, executable string) (string, error) {
 	command := exec.Command(executable, arguments...)
 	command.Dir = checkout
 	command.Env = mergedEnvironment([]string{"MISE_AUTO_INSTALL=0"})
-	output, err := command.CombinedOutput()
+	var collected strings.Builder
+	run, err := process.Start(ctx, command, &collected)
 	if err != nil {
 		return "", err
 	}
-	value := strings.TrimSpace(string(output))
+	if !run.Completed {
+		return "", errors.Join(ctx.Err(), run.Cleanup)
+	}
+	if run.Cleanup != nil {
+		return "", run.Cleanup
+	}
+	if run.ExitCode != 0 {
+		return "", fmt.Errorf("%s exited with code %d", executable, run.ExitCode)
+	}
+	value := strings.TrimSpace(collected.String())
 	switch name {
 	case "node":
 		value = strings.TrimPrefix(value, "v")
