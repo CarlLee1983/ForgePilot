@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/CarlLee1983/ForgePilot/internal/app"
 )
@@ -25,7 +26,25 @@ func verify(args []string, root string, output io.Writer) error {
 		// Reported, not turned into a verdict. The command is over and owns
 		// nothing further, so the PASS or FAIL it just printed still decides its
 		// exit code; what the user needs is to know something may still be running.
-		fmt.Fprintf(output, "warning: the canonical check's process group could not be confirmed stopped: %v\n", result.Cleanup)
+		// The stage is read back rather than assumed: an unconfirmed group can come
+		// from reclaiming an abandoned run, a preflight, the check itself, the
+		// removal of the checkout afterwards or the facts read that follows it, and
+		// naming the wrong one sends the user looking in the wrong place.
+		fmt.Fprintf(output, "warning: %s could not confirm the process group it stopped: %v\n",
+			unresolvedStages(result.Unresolved), result.Cleanup)
 	}
 	return err
+}
+
+// unresolvedStages names the stages that reported an unconfirmed group, in the
+// vocabulary internal/app already publishes.
+func unresolvedStages(unresolved []app.Unresolved) string {
+	if len(unresolved) == 0 {
+		return "this verification"
+	}
+	names := make([]string, 0, len(unresolved))
+	for _, entry := range unresolved {
+		names = append(names, entry.Kind)
+	}
+	return strings.Join(names, ", ")
 }

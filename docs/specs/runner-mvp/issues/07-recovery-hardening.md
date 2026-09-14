@@ -86,6 +86,7 @@ runtime／A2A／MCP／UI、自動 commit／push／merge、獨立 `forgepilot ver
 - [x] 被阻擋的嘗試不消耗新的 steps／attempts，既有 run 的 deadline 不被改寫。
 - [x] `resume` 清除 `Stop` 不清除 `Pending`。
 - [x] ownership 不完整、PID 重用、leader 消失但群組仍在時不得放行。
+      （這一條當時只在 `Pending` 路徑成立；`Record.Worker` 路徑的同一判準到 [08](08-recovery-closure.md) 才補上）
 - [ ] 啟動前存檔失敗不啟動程序；啟動後存檔失敗嘗試有界停止並保留 pending 訊息。（已實作；需要注入 storage 寫入失敗，本輪未加該注入邊界）
 - [x] runtime preflight／`make -n verify`／canonical check 因 `ctx.Err()` 提前返回時，清理失敗不遺失。
 - [x] 已保存的 PASS／FAIL 不被清理失敗覆寫；被中斷且無結果者仍走 reclaim 保存 INTERRUPTED。

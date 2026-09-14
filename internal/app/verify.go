@@ -144,7 +144,9 @@ func (result *VerifyResult) note(kind, location string, err error) {
 // neither the caller's context — which is cancelled, and would skip necessary
 // cleanup entirely — nor context.Background(), which would put no limit on it
 // at all. It is drawn once per verification and shared, so a path made of
-// several cleanup helpers still has one total somebody can state.
+// several cleanup helpers still has one total somebody can state. It is per
+// cleanup stage, not per command: a stage that never begins spends nothing, and
+// a stage that does spends one allowance however many helpers it runs.
 // See docs/adr/0021-execution-limits-are-bounded-and-named.md.
 type cleanupWindow struct {
 	parent context.Context
@@ -209,8 +211,12 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	if err := ctx.Err(); err != nil {
 		return result, fmt.Errorf("%w before it began: %w", ErrVerificationInterrupted, err)
 	}
-	// One bounded allowance for every piece of tidying below, opened when the
-	// first of them runs rather than now.
+	// Two allowances, not one. Closing out an abandoned run and tidying up after
+	// this one are different cleanup stages separated by the whole of the work in
+	// between, and a single window would have the second stage drawing on a
+	// deadline that started before the first. Each opens when its own stage runs.
+	reclaim := newCleanupWindow(ctx)
+	defer reclaim.release()
 	cleanup := newCleanupWindow(ctx)
 	defer cleanup.release()
 	// An abandoned run is a fact that already happened, so it is recorded before
@@ -218,11 +224,17 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	// recording of what is already over. Reclaiming is never quiet — it is
 	// reported even when the command then refuses to start a new run. See
 	// docs/adr/0009-reclaim-before-refusing.md.
-	reclaimed, err := reclaimOrphan(cleanup.context(), id, root, output, options.now())
+	reclaimed, err := reclaimOrphan(reclaim, &result, id, root, output, options.now())
 	if err != nil {
 		return result, err
 	}
 	result.Reclaimed = reclaimed
+	// Reclaiming runs external Git. A removal that could not confirm what it
+	// stopped is the same refusal here as anywhere else below: nothing new may
+	// start, and the fact travels to the caller rather than into a warning.
+	if result.Cleanup != nil {
+		return result, fmt.Errorf("the abandoned run's checkout could not be cleared safely: %w", result.Cleanup)
+	}
 	// From here nothing else is written until every refusal has been passed.
 	state, err := storage.Load(root)
 	if err != nil {
@@ -280,8 +292,14 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		// a stop that coincided with a group nobody could confirm empty reported
 		// only the stop — and the group vanished from the record.
 		if unsettledPart(err) == nil {
-			// Nothing of ours is still running in there, so the checkout can go.
-			_ = repository.RemoveWorktree(cleanup.context(), root, worktree)
+			// Nothing of ours is still running in there, so the checkout can go —
+			// unless removing it turns out to leave something behind, which is a
+			// fact of its own and not a tidy-up detail to drop on the floor.
+			// Only the unconfirmed part is carried back. An ordinary removal
+			// failure is deliberately dropped here: recording it would give the
+			// Runner a pending with no group id, and ADR-0022 has no way to resolve
+			// one of those short of a person editing the record.
+			result.note(UnresolvedGit, worktree, unsettledPart(repository.RemoveWorktree(cleanup.context(), root, worktree)))
 		}
 		// A cancelled resolution is not the repository failing to declare a usable
 		// runtime, so it must not be reported as a refusal: that would record a
@@ -306,7 +324,9 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	}()
 	if err := repository.EnsureCanonicalCheckInContext(ctx, worktree, runtime); err != nil {
 		if unsettledPart(err) == nil {
-			_ = repository.RemoveWorktree(cleanup.context(), root, worktree)
+			// Only the unconfirmed part, for the reason given above the same call
+			// in the runtime-preflight branch.
+			result.note(UnresolvedGit, worktree, unsettledPart(repository.RemoveWorktree(cleanup.context(), root, worktree)))
 		}
 		return result, result.gitStage(ctx, UnresolvedCanonicalPreflight, worktree, "during its preflight", err, true)
 	}
@@ -321,9 +341,20 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 			fmt.Fprintf(output, "warning: %s was left in place: its processes could not be confirmed stopped\n", worktree)
 			return
 		}
-		if removeErr := repository.RemoveWorktree(cleanup.context(), root, worktree); removeErr != nil {
-			fmt.Fprintf(output, "warning: could not remove %s: %v\n", worktree, removeErr)
+		removeErr := repository.RemoveWorktree(cleanup.context(), root, worktree)
+		if removeErr == nil {
+			return
 		}
+		// An ordinary tidy-up failure stays a warning. One that could not confirm
+		// the processes it stopped does not: this is the last thing that runs, so
+		// a warning here is the whole of what the caller would ever learn, and the
+		// caller is the layer that has to refuse to start the next step.
+		if unsettled := unsettledPart(removeErr); unsettled != nil {
+			result.note(UnresolvedGit, worktree, unsettled)
+			fmt.Fprintf(output, "warning: %s was left as it is: removing it could not confirm the processes it stopped: %v\n", worktree, removeErr)
+			return
+		}
+		fmt.Fprintf(output, "warning: could not remove %s: %v\n", worktree, removeErr)
 	}()
 
 	// The log is opened, and its path printed, before anything about the run is
@@ -419,6 +450,13 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	}
 	result.Evidence, result.HasEvidence, result.Status = evidence, true, status
 	result.RefreshWarning = factsErr
+	// Failing to refresh dependency readiness is a warning: the Evidence stands
+	// and a rerun repairs it. Failing to confirm a process group started while
+	// reading those facts is not — the next step must not begin, whatever the
+	// Evidence says.
+	if unsettled := unsettledPart(factsErr); unsettled != nil {
+		result.note(UnresolvedGit, root, unsettled)
+	}
 	// Non-PASS output no longer floods stdout: the log just printed above is
 	// where it lives now. See docs/adr/0012-verification-log-outside-state.md.
 	if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\n", evidence.ID, evidence.Result, evidence.Revision, id, status); err != nil {
@@ -579,7 +617,7 @@ func runCanonicalCheck(ctx context.Context, directory string, runtime repository
 //
 // It asks nothing about Gates or the Goal. Whether a new run may start is a
 // separate question, decided after this and by different rules.
-func reclaimOrphan(cleanupCtx context.Context, id, root string, output io.Writer, now time.Time) (*work.Evidence, error) {
+func reclaimOrphan(cleanup *cleanupWindow, result *VerifyResult, id, root string, output io.Writer, now time.Time) (*work.Evidence, error) {
 	reclaimed, abandoned, logFile, found, err := reclaimRun(id, root, now, "")
 	if err != nil || !found {
 		return nil, err
@@ -599,7 +637,14 @@ func reclaimOrphan(cleanupCtx context.Context, id, root string, output io.Writer
 		// pending cleanup is outstanding. Closing that would mean making the
 		// standalone command consult run records and refuse, which is a change to
 		// its contract that ADR-0004 and ticket 07 both rule out.
-		_ = repository.RemoveWorktree(cleanupCtx, root, abandoned)
+		// The cleanup window opens here rather than at the top of the command: an
+		// orphan is the only thing above that needs it, and drawing the allowance
+		// when there is no orphan spends the whole of it on the verification that
+		// follows.
+		// Only the unconfirmed part: an ordinary failure to clear an abandoned
+		// checkout is not a reason to block this workspace until a person edits a
+		// record, which a pending with no group id would be.
+		result.note(UnresolvedGit, abandoned, unsettledPart(repository.RemoveWorktree(cleanup.context(), root, abandoned)))
 	}
 	// logFile is the same value beginRun wrote to current_run, not a path
 	// re-derived from today's naming scheme: the streamed output an
@@ -660,8 +705,15 @@ func LogPath(root, id, revision string, startedAt time.Time) string {
 // worktree is, a Git command that could not run is not.
 // See docs/adr/0022-pending-cleanup-outlives-the-process.md.
 func (result *VerifyResult) gitStage(ctx context.Context, kind, location, during string, err error, refusable bool) error {
-	result.note(kind, location, unsettledPart(err))
-	if result.Cleanup != nil {
+	// Classified from this stage's own error, never from the accumulated
+	// result.Cleanup. A tidy-up that ran between the failure and here can have
+	// added an unconfirmed group of its own, and reading that as "this stage was
+	// unconfirmed" turned an honest refusal — an unsatisfiable Runtime Contract,
+	// a dirty worktree — into a bare operational error. Whether the caller may
+	// continue is a separate question it asks result.Cleanup itself.
+	unsettled := unsettledPart(err)
+	result.note(kind, location, unsettled)
+	if unsettled != nil {
 		return err
 	}
 	if ctx.Err() != nil {

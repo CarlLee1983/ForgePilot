@@ -214,10 +214,15 @@ func settleWorkspace(options Options, except string) (*Record, error) {
 			continue
 		}
 		runner := &Runner{options: options, record: &existing}
-		if err := runner.recover(); err != nil {
+		// The verdict is this pass's own, not whatever stop the record was
+		// carrying: a run that ended RECOVERY_BLOCKED and has since become
+		// confirmable is settled here, in this invocation, rather than refused
+		// once more and settled only on a second attempt by hand.
+		blocked, err := runner.recover()
+		if err != nil {
 			return nil, err
 		}
-		if existing.Stop != nil && existing.Stop.Reason == StopRecoveryBlocked {
+		if blocked {
 			return &existing, nil
 		}
 	}
@@ -287,7 +292,7 @@ func Resume(options Options, runID string) (Record, error) {
 		// recorded stop as terminal, so carrying one into a resume would report
 		// the old reason again without doing any work.
 		runner.record.Stop = nil
-		if err := runner.recover(); err != nil {
+		if blocked, err := runner.recover(); blocked || err != nil {
 			return err
 		}
 		return runner.loop()
@@ -355,78 +360,6 @@ func newRunner(options Options) (*Runner, error) {
 	runner.print("Run %s started for goal %s (%s)\nRuntime: %s %s\nDeadline: %s\n",
 		runID, goal.ID, goal.Title, runtime.Name(), version, runner.record.Deadline.Format(time.RFC3339))
 	return runner, nil
-}
-
-// recover settles an interrupted run's worker before anything new is launched.
-// Every branch either establishes that no writer remains or refuses to continue.
-// See docs/adr/0020-worker-ownership-is-fail-closed.md.
-// recover settles this run's own record: first every pending execution it
-// wrote, then the legacy worker entry. The two are kept apart because they have
-// different lifetimes and different compatibility stories — a record written
-// before Pending existed still recovers through Worker exactly as it did.
-func (runner *Runner) recover() error {
-	// Whether this pass refused is reported back, not inferred from record.Stop.
-	// A record can already carry a stop — the session-cleanup path writes a
-	// worker, a pending execution and a RECOVERY_BLOCKED stop together — and
-	// reading that old stop as "this pass refused" made the worker half
-	// unreachable: never judged, never cleared, so the workspace stayed blocked
-	// even once both halves had become confirmable.
-	blocked, err := runner.recoverPending()
-	if err != nil || blocked {
-		return err
-	}
-	worker := runner.record.Worker
-	if worker == nil {
-		return nil
-	}
-	liveness, err := agent.Inspect(worker.Identity)
-	if err != nil {
-		liveness = agent.Unknown
-	}
-	switch liveness {
-	case agent.Ours:
-		runner.print("Recovering run %s: stopping the worker left behind for %s (pid %d)\n", runner.record.RunID, worker.WorkItemID, worker.Identity.PID)
-		if err := agent.TerminateOwned(worker.Identity); err != nil {
-			return runner.stopNow(StopRecoveryBlocked, err.Error())
-		}
-	case agent.Gone, agent.Unrelated:
-		runner.print("Recovering run %s: the worker for %s is gone\n", runner.record.RunID, worker.WorkItemID)
-	default:
-		// The worker record is deliberately left in place: clearing it would make
-		// the next attempt look clean when nothing has actually been established.
-		detail := fmt.Sprintf("cannot confirm whether the worker for %s (run %s, pid %d) is still writing this workspace",
-			worker.WorkItemID, runner.record.RunID, worker.Identity.PID)
-		if err != nil {
-			detail += ": " + err.Error()
-		}
-		detail += fmt.Sprintf("; check that pid yourself, and once you are sure nothing is writing this tree, clear \"worker\" from %s",
-			filepath.Join(".forgepilot", "runs", runner.record.RunID, recordName))
-		return runner.stopNow(StopRecoveryBlocked, detail)
-	}
-	runner.record.Worker = nil
-	return runner.save()
-}
-
-// recoverPending judges each unresolved execution and clears only the ones that
-// were shown to be over. Clearing is atomic with the confirmation: the record is
-// replaced whole, so a reader sees either the entry or its absence, never a
-// half-cleared claim.
-// It reports whether it refused, which is the caller's cue to stop — asking the
-// record afterwards cannot tell a refusal made here from one made in an earlier
-// process.
-func (runner *Runner) recoverPending() (bool, error) {
-	for _, pending := range runner.record.UnresolvedPending() {
-		safe, detail := judgePending(pending)
-		if !safe {
-			return true, runner.stopNow(StopRecoveryBlocked, detail+manualRecoveryHint(runner.record.RunID))
-		}
-		runner.print("Recovering run %s: %s is confirmed stopped\n", runner.record.RunID, pending.Kind)
-		runner.record.resolvePending(pending.ID)
-		if err := runner.save(); err != nil {
-			return false, err
-		}
-	}
-	return false, nil
 }
 
 func (runner *Runner) save() error {
@@ -1144,71 +1077,6 @@ func firstLine(text string) string {
 		return text[:index]
 	}
 	return text
-}
-
-// readFacts runs one between-steps Git read with the same protection every
-// other external process gets: a pending execution recorded before it starts,
-// resolved only when it is confirmed over. These reads are short, but they are
-// `read-tree`, `add -A` and `write-tree` against the user's own worktree, so
-// they run this repository's clean filters and can leave a child behind exactly
-// as a canonical check can. Without this a cleanup nobody could confirm
-// vanished from the record, and the next `run` found a workspace that looked
-// clear. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
-//
-// It reports whether the run was stopped, so the caller stops rather than
-// classifying a cleanup failure as whatever its own error path would have said
-// — a stalled Goal, most often, which is an engineering statement about code
-// that did nothing wrong.
-func (runner *Runner) readFacts(itemID string, read func(ctx context.Context) error) (bool, error) {
-	execution := runner.newFactsExecution()
-	defer execution.release()
-	pendingID := runner.record.addPending(PendingExecution{
-		Kind: KindGit, Phase: PhasePendingStart, WorkItemID: itemID,
-		Location: runner.options.Root, ObservedAt: runner.now()})
-	if err := runner.save(); err != nil {
-		runner.record.resolvePending(pendingID)
-		return true, err
-	}
-	readErr := read(execution.ctx)
-	if unsettled := unsettledGit(readErr); unsettled != nil {
-		runner.record.resolvePending(pendingID)
-		pgid, _ := process.UnsettledGroup(unsettled)
-		runner.record.addPending(PendingExecution{
-			Kind: KindGit, Phase: PhaseCleanupUnconfirmed, WorkItemID: itemID,
-			Location: runner.options.Root, Identity: agent.ProcessIdentity{PGID: pgid},
-			StopReason: describe(execution.Cause()), CleanupDetail: unsettled.Error(),
-			ObservedAt: runner.now()})
-		detail := fmt.Sprintf(
-			"a Git process group started while reading repository facts could not be confirmed stopped: %v (the read ended %s). Find what is still running under this workspace and stop it before running anything else",
-			unsettled, describe(execution.Cause()))
-		if saveErr := runner.save(); saveErr != nil {
-			return true, fmt.Errorf("%w; the unrecorded cleanup was: %s", saveErr, detail)
-		}
-		return true, runner.stopNow(StopRecoveryBlocked, detail)
-	}
-	runner.record.resolvePending(pendingID)
-	if err := runner.save(); err != nil {
-		return true, err
-	}
-	return false, readErr
-}
-
-// unsettledGit reports the unconfirmed-group part of an error, or nil. It is the
-// runner-side twin of internal/app's unsettledPart: both exist because a
-// cancelled command whose child could not be confirmed gone carries two facts,
-// and only one of them means the next step may not start.
-func unsettledGit(err error) error {
-	if err == nil {
-		return nil
-	}
-	var unsettled *process.NotSettled
-	if errors.As(err, &unsettled) {
-		return unsettled
-	}
-	if errors.Is(err, process.ErrNotSettled) {
-		return err
-	}
-	return nil
 }
 
 // pendingKind maps the stage internal/app observed onto the kind a run record

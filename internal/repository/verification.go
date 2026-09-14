@@ -296,7 +296,13 @@ func AddWorktree(ctx context.Context, root, path, revision string) error {
 	// Clear both halves of a leftover run before pruning: git keeps a
 	// registration whose directory still exists, and removing the directory first
 	// without pruning turns it into a "missing but already registered" failure.
-	_, _ = git(ctx, root, nil, "worktree", "remove", "--force", path)
+	// An ordinary failure here is expected and ignored — there is usually nothing
+	// to remove — but a removal whose own children could not be confirmed gone is
+	// not an ordinary failure, and deleting the directory anyway would take it
+	// out from under them.
+	if _, err := git(ctx, root, nil, "worktree", "remove", "--force", path); unconfirmedGroup(err) {
+		return err
+	}
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
@@ -311,11 +317,33 @@ func AddWorktree(ctx context.Context, root, path, revision string) error {
 
 // RemoveWorktree always forces: a verification run leaves build output behind,
 // and git refuses to remove a worktree that has untracked files.
+//
+// The filesystem fallback is for the ordinary failure it was written for — a
+// directory Git has no registration for — and only that. A removal whose own
+// process group could not be confirmed gone is an execution-safety report, and
+// os.RemoveAll would answer it with a success while deleting the checkout a
+// recovery record points at, out from under whatever is still writing it.
+// See docs/adr/0022-pending-cleanup-outlives-the-process.md.
 func RemoveWorktree(ctx context.Context, root, path string) error {
-	if _, err := git(ctx, root, nil, "worktree", "remove", "--force", path); err != nil {
-		return os.RemoveAll(path)
+	_, err := git(ctx, root, nil, "worktree", "remove", "--force", path)
+	if err == nil {
+		return nil
 	}
-	return nil
+	if unconfirmedGroup(err) {
+		return err
+	}
+	return os.RemoveAll(path)
+}
+
+// unconfirmedGroup reports whether an error — which may be carrying several
+// things at once, since a cancelled Git command whose child could not be
+// confirmed gone reports both — says a process group was left unconfirmed.
+func unconfirmedGroup(err error) bool {
+	if err == nil {
+		return false
+	}
+	_, unsettled := process.UnsettledGroup(err)
+	return unsettled
 }
 
 // OpenLog creates the file a Verification Run's output will stream into,
