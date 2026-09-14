@@ -563,7 +563,13 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 
 | 缺少 `--snapshot` 時拒絕，不自動 commit | `TestRunRefusesWithoutSnapshotAndNeverCommits` |
 | 較多 Work Items 的 deterministic soak，不以 sleep 冒充長跑 | `TestSoakSchedulesManyWorkItemsAcrossSessions` |
 | 既有功能回歸：全域 `next`、WORK_ITEM policy、`verify`、`review`、`status` | `integration_test.go` 與 `readiness_integration_test.go` 全數未修改即通過 |
-| 真實 Codex smoke | `TestCodexSmokeDrivesOneWorkItem`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑 |
+| `run resume` 也要先處理**其他** run 遺留的 worker，不只自己那筆 | `TestResumeRefusesWhileAnotherRunsWorkerCannotBeConfirmed` |
+| canonical check 期間寫入 `.forgepilot/state.json` 時停止——untrusted code 執行的第二個地方 | `TestACanonicalCheckThatWritesForgePilotStateStopsTheRun` |
+| run record 不受三個容量上限管轄，session artifact 仍受管轄 | `internal/runner` 的 `TestTheRunRecordIsNotSubjectToTheArtifactBounds` |
+| session 正常結束也終止整個 process group，不留下背景子孫程序 | `internal/agent` 的 `TestACleanExitStillStopsTheWholeProcessGroup` |
+| 引用失敗 log 的節錄會說自己被截斷，且不從半行開始 | `internal/runner` 的 `TestTailSaysWhenItCut`、`TestTailQuotesAShortLogWhole` |
+| SIGINT 與 SIGTERM 分別以 130／143 退出，`run status` 也據實回報 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestTerminationExitsWithItsOwnCode` |
+| 真實 Codex smoke | `TestCodexSmokeDrivesOneWorkItem`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。**截至目前從未對真實模型執行過**，因此這一列尚無真實模型行為的證據 |
 
 ### Runner MVP Exit checklist
 
@@ -572,4 +578,5 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 
 - [x] verification orchestration 只有一份，在 `internal/app`；`internal/cli/verify.go` 是薄殼，既有輸出文字與退出碼不變。
 - [x] Runner 只寫 execution history，lifecycle 更新全部走既有 transition；state schema 未升版。
 - [x] `make verify` 與 `go test -race -count=1 ./...` 實跑通過。
-- [x] 針對狀態機繞過、錯誤成功判定、跨 Goal 執行、重疊 writer、crash window、預算重置、Candidate freshness 與無上限輸出做過 code review。
+- [x] 針對狀態機繞過、錯誤成功判定、跨 Goal 執行、重疊 writer、crash window、預算重置、Candidate freshness 與無上限輸出做過 code review，**且修正本身也經過第二輪 review**——第一輪的六項修正帶進 2 HIGH 與 3 MEDIUM，已各自以先寫失敗測試的方式修掉。
+- [ ] ADR-0019 的「信任邊界」段尚未更新：偵測窗口現在有兩個（agent session 與 canonical check），且比對的不是整份 `state.json` 的 digest 而是該 Work Item 的裁決指紋。要不要把偵測範圍擴回全域、代價是接受合法並行寫入造成的偽陽性，是尚未做成的威脅模型決定。

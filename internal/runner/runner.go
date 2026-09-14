@@ -36,6 +36,10 @@ type Options struct {
 	Now func() time.Time
 	// Stop is closed on SIGINT or SIGTERM.
 	Stop <-chan struct{}
+	// Signalled reports which of the two closed Stop. Both end the run the same
+	// way; the difference is the exit code a shell or supervisor reads, so the
+	// record has to carry it too. Nil means an interrupt.
+	Signalled func() StopReason
 	// Excerpt bounds how much of a failed verification log is quoted into the
 	// next handoff.
 	Excerpt int
@@ -63,6 +67,16 @@ func (runner *Runner) now() time.Time {
 		return runner.options.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+// stopSignal names the signal that closed the Stop channel.
+func (runner *Runner) stopSignal() StopReason {
+	if runner.options.Signalled != nil {
+		if reason := runner.options.Signalled(); reason != "" {
+			return reason
+		}
+	}
+	return StopInterrupted
 }
 
 func (runner *Runner) print(format string, arguments ...any) {
@@ -208,7 +222,10 @@ func blockedRecord(options Options, runID, detail string) *Record {
 	if options.Output != nil {
 		fmt.Fprintf(options.Output, "Stopped: %s — %s\n", StopRecoveryBlocked, detail)
 	}
-	return &Record{RunID: runID, GoalID: options.GoalID,
+	// No GoalID: this record stands for someone else's run, and the goal this
+	// run wanted is not the goal that one was driving. Naming the wrong one sends
+	// whoever has to sort it out to the wrong place; the detail names the run.
+	return &Record{RunID: runID,
 		Stop: &Stop{Reason: StopRecoveryBlocked, Detail: detail, At: at}}
 }
 
@@ -374,6 +391,12 @@ func (runner *Runner) save() error {
 // an error. Callers report it through the record's Stop field.
 func (runner *Runner) stopNow(reason StopReason, detail string, evidence ...string) error {
 	at := runner.now()
+	// A detail can carry a model's own words — a needs_human question, a summary
+	// it wrote. Attempt summaries are bounded for exactly that reason and this is
+	// the same text arriving by another door.
+	if len(detail) > AttemptSummaryBytes {
+		detail = detail[:AttemptSummaryBytes] + " …(truncated)"
+	}
 	runner.record.Stop = &Stop{Reason: reason, Detail: detail, At: at, EvidenceIDs: evidence}
 	runner.print("Stopped: %s — %s\n", reason, detail)
 	// The record is saved before the journal: the journal is diagnostic, and a
@@ -438,7 +461,7 @@ func (runner *Runner) checkLimits() (bool, error) {
 	}
 	select {
 	case <-runner.options.Stop:
-		return true, runner.stopNow(StopInterrupted, "stopped on signal; resume this run to continue")
+		return true, runner.stopNow(runner.stopSignal(), "stopped on signal; resume this run to continue")
 	default:
 	}
 	return false, nil
@@ -758,7 +781,7 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 	}
 	if stateAfter != stateBefore {
 		return runner.stopNow(StopStateTampered, fmt.Sprintf(
-			"the session for %s changed .forgepilot/state.json, which it was told not to touch; nothing it reported can be trusted. Inspect the state before running anything else", itemID))
+			"%s: .forgepilot/state.json changed while the session was running. The session was told not to touch it, so its report cannot be trusted — but a ForgePilot command run in another terminal during the session would look the same from here. Inspect the state, and this run's journal, before running anything else", itemID))
 	}
 	return runner.afterSession(itemID, attempt, result, waitErr)
 }
@@ -766,7 +789,7 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 func (runner *Runner) afterSession(itemID string, attempt int, result agent.Result, waitErr error) error {
 	switch {
 	case errors.Is(waitErr, agent.ErrStopped):
-		return runner.stopNow(StopInterrupted,
+		return runner.stopNow(runner.stopSignal(),
 			fmt.Sprintf("%s attempt %d was stopped on signal; its process group was terminated. Resume this run with `forgepilot run resume %s`", itemID, attempt, runner.record.RunID))
 	case errors.Is(waitErr, agent.ErrTimedOut):
 		return runner.stopNow(StopAgentTimeout, fmt.Sprintf("%s attempt %d: %v", itemID, attempt, waitErr))

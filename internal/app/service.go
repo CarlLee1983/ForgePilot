@@ -191,7 +191,12 @@ const (
 // what a Gate is, and this is about who is speaking.
 func OpenGate(root, workItemID, question string, options []string, rationale string, now Now) (string, error) {
 	question = bound(question, MaxGateQuestionBytes)
+	dropped := 0
 	if len(options) > MaxGateOptions {
+		// Said out loud, not silently: a person about to choose between these is
+		// entitled to know the list they are reading is not the list they were
+		// offered. Truncated text already says so; a truncated list must too.
+		dropped = len(options) - MaxGateOptions
 		options = options[:MaxGateOptions]
 	}
 	bounded := make([]string, 0, len(options))
@@ -199,6 +204,10 @@ func OpenGate(root, workItemID, question string, options []string, rationale str
 		bounded = append(bounded, bound(option, MaxGateOptionBytes))
 	}
 	options = bounded
+	if dropped > 0 {
+		question = bound(fmt.Sprintf("%s\n\n(%d further option(s) were offered and are not shown; see the run journal.)", question, dropped),
+			MaxGateQuestionBytes+120)
+	}
 	var gateID string
 	err := storage.Update(root, func(state *work.State) error {
 		gate, err := state.OpenGate(workItemID, question, options, rationale, now.at())

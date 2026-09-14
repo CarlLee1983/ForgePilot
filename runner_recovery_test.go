@@ -543,3 +543,48 @@ func startedRun(t *testing.T, output string) string {
 	t.Fatalf("no run id in:\n%s", output)
 	return ""
 }
+
+// SIGINT and SIGTERM both stop the run, and the exit code says which: 130 and
+// 143 are what a shell, a supervisor and a CI runner read to tell a Ctrl-C
+// apart from a termination they asked for.
+func TestTerminationExitsWithItsOwnCode(t *testing.T) {
+	fixture := newRunnerFixture(t)
+	mustRun(t, fixture.binary, fixture.root, "init")
+	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
+	blocking := fixture.fakeAgent(t, "sleep 120\n")
+
+	command := exec.Command(fixture.binary, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	command.Dir = fixture.root
+	command.Env = append(os.Environ(), "FORGEPILOT_FAKE_AGENT="+blocking)
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSession(t, fixture, &output)
+
+	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	err := command.Wait()
+	code := 0
+	if exit, ok := err.(*exec.ExitError); ok {
+		code = exit.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if code != 143 {
+		t.Fatalf("exit = %d, want 143\n%s", code, output.String())
+	}
+
+	// The record says which signal ended it, so `run status` does not report a
+	// termination as a Ctrl-C long after the terminal has gone.
+	runID := lastRun(t, fixture.root)
+	statusOutput, statusCode := fixture.runForge(t, blocking, "run", "status", runID)
+	if statusCode != 0 {
+		t.Fatalf("run status = %d\n%s", statusCode, statusOutput)
+	}
+	if !strings.Contains(statusOutput, "Exit code: 143") {
+		t.Fatalf("run status:\n%s", statusOutput)
+	}
+}

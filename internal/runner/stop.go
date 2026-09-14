@@ -34,8 +34,13 @@ const (
 	StopCapacityExceeded StopReason = "CAPACITY_EXCEEDED"
 	StopRuntimeProtocol  StopReason = "RUNTIME_PROTOCOL_ERROR"
 
-	// StopInterrupted is SIGINT or SIGTERM.
+	// StopInterrupted is SIGINT: someone at a terminal pressed Ctrl-C.
 	StopInterrupted StopReason = "INTERRUPTED"
+
+	// StopTerminated is SIGTERM: a supervisor, a CI runner or an operator asked
+	// the process to end. It stops the run exactly as an interrupt does and is
+	// recorded apart from one only so the exit code can say which happened.
+	StopTerminated StopReason = "TERMINATED"
 )
 
 // Exit codes. A run that reaches the Goal final-review boundary exits 0, which
@@ -63,6 +68,8 @@ func (reason StopReason) ExitCode() int {
 		return ExitLimit
 	case StopInterrupted:
 		return ExitInterrupted
+	case StopTerminated:
+		return ExitTerminated
 	default:
 		// StopRuntimeProtocol and anything added without a decision land here: an
 		// unclassified stop is an execution error, never a success.

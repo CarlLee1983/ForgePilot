@@ -75,9 +75,9 @@ func runCommand(args []string, root string, output io.Writer) error {
 	if dryRun {
 		return printPlan(options, output)
 	}
-	stop, release := signalStop()
+	stop, signalled, release := signalStop()
 	defer release()
-	options.Stop = stop
+	options.Stop, options.Signalled = stop, signalled
 	record, err := runner.Start(options)
 	return reportRun(record, err, output)
 }
@@ -86,10 +86,10 @@ func runResume(args []string, root string, output io.Writer) error {
 	if len(args) != 1 || strings.HasPrefix(args[0], "--") {
 		return errors.New("usage: forgepilot run resume <run-id>")
 	}
-	stop, release := signalStop()
+	stop, signalled, release := signalStop()
 	defer release()
 	record, err := runner.Resume(runner.Options{
-		Root: root, Output: output, Now: now, Stop: stop, Limits: defaultLimits(),
+		Root: root, Output: output, Now: now, Stop: stop, Signalled: signalled, Limits: defaultLimits(),
 	}, args[0])
 	return reportRun(record, err, output)
 }
@@ -110,20 +110,28 @@ func reportRun(record runner.Record, err error, output io.Writer) error {
 }
 
 // signalStop closes a channel on SIGINT or SIGTERM so the run can stop its
-// worker's process group and save recovery information before exiting.
-func signalStop() (<-chan struct{}, func()) {
+// worker's process group and save recovery information before exiting. Which
+// of the two arrived is reported alongside: both end the run identically, but
+// a shell reads 130 for one and 143 for the other.
+func signalStop() (<-chan struct{}, func() runner.StopReason, func()) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	// Written once before stop is closed and read only after, so the close is
+	// the handover: no reader can see it before the writer is finished with it.
+	reason := runner.StopInterrupted
 	go func() {
 		select {
-		case <-signals:
+		case received := <-signals:
+			if received == syscall.SIGTERM {
+				reason = runner.StopTerminated
+			}
 			close(stop)
 		case <-done:
 		}
 	}()
-	return stop, func() {
+	return stop, func() runner.StopReason { return reason }, func() {
 		signal.Stop(signals)
 		close(done)
 	}
@@ -169,6 +177,7 @@ type runStatusView struct {
 	CurrentGoal    string         `json:"current_goal_readiness"`
 	CurrentError   string         `json:"current_goal_readiness_error,omitempty"`
 	ScopeChanged   bool           `json:"scope_changed"`
+	ScopeError     string         `json:"scope_error,omitempty"`
 }
 
 func runStatus(args []string, root string, output io.Writer) error {
@@ -207,7 +216,11 @@ func runStatus(args []string, root string, output io.Writer) error {
 	} else {
 		view.CurrentGoal = string(summary.Completion)
 	}
-	if scope, scopeErr := app.CurrentGoalScope(root, record.GoalID); scopeErr == nil {
+	// "Did the scope move?" is the one question this view exists to answer, so a
+	// failure to recompute it is reported rather than rendered as "no".
+	if scope, scopeErr := app.CurrentGoalScope(root, record.GoalID); scopeErr != nil {
+		view.ScopeError = scopeErr.Error()
+	} else {
 		view.ScopeChanged = strings.Join(scope, "\n") != strings.Join(record.Scope, "\n")
 	}
 	if asJSON {
@@ -221,12 +234,21 @@ func runStatus(args []string, root string, output io.Writer) error {
 	_, err = fmt.Fprintf(output,
 		"Run %s\nWorkspace: %s\nGoal: %s\nRuntime: %s %s\nStarted: %s\nDeadline: %s\nSteps: %d\n"+
 			"When it stopped: %s\nReason: %s\nExit code: %d\nEvidence: %s\n"+
-			"Now (recomputed): goal %s is %s\nScope changed since the run started: %t\n",
+			"Now (recomputed): goal %s is %s\nScope changed since the run started: %s\n",
 		view.RunID, view.Workspace, view.GoalID, view.Runtime, view.RuntimeVersion,
 		view.StartedAt, view.Deadline, view.Steps,
 		view.StopReason, orNone(view.StopDetail), view.ExitCode, orNone(strings.Join(view.EvidenceIDs, ", ")),
-		view.GoalID, view.CurrentGoal, view.ScopeChanged)
+		view.GoalID, view.CurrentGoal, scopeAnswer(view))
 	return err
+}
+
+// scopeAnswer renders the scope comparison, including the case where it could
+// not be made.
+func scopeAnswer(view runStatusView) string {
+	if view.ScopeError != "" {
+		return "unknown (" + view.ScopeError + ")"
+	}
+	return fmt.Sprintf("%t", view.ScopeChanged)
 }
 
 func orNone(value string) string {
