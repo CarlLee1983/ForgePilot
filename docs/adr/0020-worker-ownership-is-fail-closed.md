@@ -6,7 +6,9 @@ Runner 會啟動長時間執行的 coding CLI 子程序。Runner 自己被 kill�
 
 判定材料有三份，缺一不可。其一，Runner 以 `Setpgid` 啟動子程序，因此整個所屬程序群組有一個已知的 pgid，停止時送給 `-pgid` 而不是只送給最外層程序——`make verify` 這類命令會再 fork，只停最外層會留下還在跑的孫程序。其二，run record 在程序啟動前後各保存一次：啟動前先扣掉 attempt 預算，啟動後再補齊 pid、pgid、argv[0] 與記錄當下的時間。其三，恢復時以 `ps` 讀回該 pid 的啟動時間與 command，與記錄比對。
 
-四種結果對應四種行為。pid 不存在：舊 worker 已死，可以繼續。pid 存在且識別相符：那確實是我們的 worker，可以停止它自己的程序群組，然後繼續。pid 存在但識別不符：pid 已被重用，我們的 worker 已死，可以繼續，且**不得**停止那個程序。無法判定——`ps` 失敗、輸出無法解析、記錄缺少 pid 或 pgid：**recovery blocked**，拒絕啟動新 writer，也不殺任何東西。
+四種結果對應四種行為。pid 不存在：舊 worker 已死。pid 存在且識別相符：那確實是我們的 worker，可以停止它自己的程序群組，然後繼續。pid 存在但識別不符：pid 已被重用，我們的 worker 已死，且**不得**停止那個程序。無法判定——`ps` 失敗、輸出無法解析、記錄缺少 pid 或 pgid：**recovery blocked**，拒絕啟動新 writer，也不殺任何東西。
+
+前兩種「舊 worker 已死」的結論後來被收窄了一次，記在這裡以免後人讀成原本的樣子（[ADR-0022](0022-pending-cleanup-outlives-the-process.md)）：**leader 已死不等於群組已空。** coding CLI 與 `make verify` 分叉出來的子程序沿用 leader 的 pgid，leader 退出後它們照樣活著、照樣在寫這個 workspace。因此 pid 不存在與 pid 被重用這兩種情況，只有在 `kill(-pgid, 0)` 同時回報群組為空時才可以繼續；群組仍有成員時維持 recovery blocked。這兩種情況下也**不**送 signal：記錄的識別已經和持有那個 pid 的東西對不上，那個 pgid 底下的群組就不確定是不是我們的，殺它會是猜測。代價是承認一種無法自動解除的狀態——pid 重用且群組非空需要人來確認——但相對的是不猜測就不會殺錯程序，這與這份決定其餘部分的取捨一致。
 
 只看 pid 不夠，因為 pid 會重用；只看 Runner 的 workspace lock 也不夠，因為那個 lock 隨 Runner 程序釋放，而子程序活得比 Runner 久。兩者都必須看。
 

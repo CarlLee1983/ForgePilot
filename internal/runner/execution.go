@@ -202,3 +202,13 @@ func (runner *Runner) stopReasonFor(cause stopCause, onTimeout StopReason) (Stop
 		return "", false
 	}
 }
+
+// newFactsExecution bounds the short Git reads the loop does between steps —
+// resolving HEAD, digesting the working tree for a Candidate comparison. They
+// are not steps and get no step timeout of their own, but they are external
+// processes running this repository's hooks and filters, so they are bound by
+// the run's deadline and by the same stop signal as everything else. A read
+// that cannot be interrupted is a blind spot between two things that can be.
+func (runner *Runner) newFactsExecution() *execution {
+	return runner.newExecution(runner.record.Deadline.Sub(runner.now()))
+}

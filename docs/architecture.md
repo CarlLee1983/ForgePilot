@@ -369,21 +369,35 @@ Runner 能做的寫入只有四種既有 transition：start、Goal readiness rec
 
 Workspace lock 涵蓋整段 Runner，鍵是 canonical path，因此 symlink 別名無法啟動第二個 Runner。它不是 per-work 的 verification lock，也不是 state 交易鎖——模型或 canonical check 執行期間 `status` 仍可回答。
 
-那個 lock 只證明「沒有活著的 Runner」，不證明「沒有活著的 worker」：被 SIGKILL 的 Runner 會釋放 lock，而它啟動的 coding CLI 還活著。因此 `run` 與 `run resume` **都**會在取得 lock 之後掃描既有 run record，對每一筆仍宣稱有 worker 的記錄套用同一套四值判定；任何一筆判不出來就 recovery blocked，不新增 run、不啟動 writer。
+那個 lock 只證明「沒有活著的 Runner」，不證明「沒有活著的 worker」：被 SIGKILL 的 Runner 會釋放 lock，而它啟動的 coding CLI 還活著。因此 `run` 與 `run resume` **都**會在取得 lock 之後掃描既有 run record，套用同一套判定；任何一筆判不出來就 recovery blocked，不新增 run、不啟動 writer。
+
+掃描的對象不只 worker。canonical check、runtime preflight 與 Git 子程序都不會留下 worker 欄位，只看 worker 等於讓這三種執行完全沒有恢復保護。run record 因此另有 `pending`：每一筆未確認的執行在程序啟動**之前**先寫下（所屬 run、workspace、Work Item、執行種類與階段、相關 checkout 位置），啟動後補記觀察到的 PID／PGID 與 identity，確認清理完成後才在同一次原子替換中移除。停止原因與清理失敗原因分成兩個欄位保存，清理失敗不會蓋掉「這是一次 Ctrl-C」。
+
+`pending` 與 `stop` 的生命週期刻意不同。`stop` 說的是「上一次為什麼結束」，`resume` 會清掉它；恢復阻擋不能寄存在會被 resume 清掉的欄位上。同一個 workspace 換 Goal、換 run ID 或重啟 CLI 都是同一個 workspace，三者讀的是同一份掃描。解除只有一種方式：確認安全。沒有 `--force`，刪 `run.json` 或清空 ownership 也不是修復方法——那是把唯一的保證花掉。沒有 `pending` 欄位的舊紀錄照舊只走 worker 路徑，但「沒有這個欄位」讀作「這次 run 除了 worker 沒記別的」，不讀作「這個 workspace 已確認乾淨」；讀不出來的紀錄同樣阻擋。詳見 [ADR-0022](adr/0022-pending-cleanup-outlives-the-process.md)。
+
+升級後遇到舊的 `RECOVERY_BLOCKED` 紀錄而其中缺少可確認的 identity：它仍然阻擋，這是刻意的。處理方式是人自己確認那個 workspace 沒有 writer（`ps`、`lsof`），然後把 run record 裡對應的 `worker` 或 `pending` 條目清掉；CLI 不提供做這件事的指令。
 
 Agent session 拿到的是 workspace 寫入權限，而 `.forgepilot/` 在 workspace 裡。交接內容裡的禁令是對未受信任模型的請求，不是機制；session 前後會比對整份 `state.json` digest，不同即以 `AGENT_WROTE_FORGEPILOT_STATE` 停止，且不採信該次 attempt 的任何回報。canonical check 是第二個不受 Runner 控制的執行窗口；它比較完整 target Work Item（含 `current_run`）、owning Goal 的 repository／review policy 與完整 latest Verification Evidence，並在寫入結果的同一個 state transaction 再檢查一次。Goal lifecycle 的變化不在此 projection，讓已開始的 check 在 Goal 被 block/cancel 後仍能依既有規則保存 Evidence。這表示它**不保證**偵測 sibling Work Item、其他 Goal 或 Gate 的改寫，亦防不了 transaction 完成後或仍在進行的寫入；兩個機制都是事後偵測，不是 sandbox。限度與理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
 
-程序 ownership 以 pgid 加「啟動時由作業系統自己報回的 start time 與 command」比對判定，四種結果分別對應繼續、停止自己的程序群組、不得發送 signal、以及 recovery blocked。詳見 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。attempt 預算在程序啟動前先保存；程序啟動後立即補記 identity。
+程序 ownership 以 pgid 加「啟動時由作業系統自己報回的 start time 與 command」比對判定。四種結果分別對應繼續、停止自己的程序群組、不得發送 signal、以及 recovery blocked，但「繼續」與「不得發送 signal」兩種都再問一次群組是否為空：leader 已死不等於群組已空，它分叉出來的子程序沿用同一個 pgid，而在識別對不上的情況下那個群組也不確定是不是我們的。群組仍有成員時維持 recovery blocked，不猜測、不送 signal。詳見 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。attempt 預算在程序啟動前先保存；程序啟動後立即補記 identity。
 
 ### 停止訊號、程序清理與兩種期限
 
-Runner 的每一段會阻塞的執行——Agent session、正式 verification，以及 verification 的前置程序（runtime 版本探測、`make -n verify`）——都在同一條取消路徑上。CLI 收到 SIGINT／SIGTERM 後關閉的那個 channel，經 Runner 的執行控制傳到 `internal/app`，再傳到 canonical check 的程序群組。任何新的外部程序在啟動前都會重新檢查停止條件，Agent 結束到 verification 啟動之間的邊界也是一次明確的檢查點：不這樣做，一個剛好在期限前結束的 session 後面還能再接一次用滿 `--verify-timeout` 的驗證。
+Runner 的每一段會阻塞的執行——Agent session、正式 verification、verification 的前置程序（runtime 版本探測、`make -n verify`），以及 Runner 啟動的每一個 **Git 子程序**——都在同一條取消路徑上。Git 值得單獨點名：`worktree add` 會跑這個 repository 的 post-checkout hook，`add -A` 會跑它的 clean filter，兩者都是 ForgePilot 不擁有的程式碼，而且可以想阻塞多久就阻塞多久。呼叫前的 `ctx.Err()` 只是啟動閘門，對已經在執行的程序沒有作用，因此 `internal/repository` 的 Git 與其他外部程序走同一條啟動、終止與確認路徑。CLI 收到 SIGINT／SIGTERM 後關閉的那個 channel，經 Runner 的執行控制傳到 `internal/app`，再傳到 canonical check 的程序群組。任何新的外部程序在啟動前都會重新檢查停止條件，Agent 結束到 verification 啟動之間的邊界也是一次明確的檢查點：不這樣做，一個剛好在期限前結束的 session 後面還能再接一次用滿 `--verify-timeout` 的驗證。
+
+| 階段 | 受哪一種期限約束 |
+|---|---|
+| 啟動準備（handoff、capacity、state digest、Git 前置） | 本次執行有效期限 `min(run deadline, step deadline)` |
+| 執行（agent session、canonical check、Git 子程序、runtime probe） | 同上 |
+| 必要清理 | `process.CleanupGrace`，一次被叫停的執行一份總預算 |
 
 **單次期限與總期限是兩個不同的量。** 一次執行的有效期限是 `min(原始 run deadline, 本次開始時間 + 本次 timeout)`。原始 deadline 從第一次啟動算起，`resume` 沿用它，不重置已消耗的步數與 attempts——每開始一個步驟就重新取得完整 `--max-duration`，會讓總期限變成「每步一次」的建議值。
 
 **停止原因在觸發當下寫定，不事後從 `context.Err()` 推論**：一個結束的 context 只記得自己結束了，而「cancelled」對 Ctrl-C、到期的 run 與用完自身 timeout 的步驟是同一個字。多個原因幾乎同時到達時，先成立的就是終止原因；完全同時則依固定優先序 signal → 總期限 → 單次 timeout。整個 run 到期記 `MAX_DURATION`，Agent 自身 timeout 記 `AGENT_TIMEOUT`，verification 自身 timeout 記 `VERIFY_TIMEOUT`，兩個訊號各自維持 `INTERRUPTED`／`TERMINATED` 與 130／143。
 
-**執行期限不等於清理寬限。** 期限到期後不再啟動任何新的業務工作，但終止是有界而非瞬時的：先 SIGTERM，等一段有限的寬限讓 canonical check 把輸出寫進 log，必要時 SIGKILL，最後**確認**程序群組真的空了。送出 signal 不等於清理完成，這個區別是 `RECOVERY_BLOCKED` 存在的理由。被中斷而沒有產生結果的 Verification Run 走既有 reclaim 流程保存 INTERRUPTED Evidence，不製造工程 FAIL，也不留下可正常結案卻未結案的 VERIFYING；verdict 在 check 期間被改動時仍然 fail closed，不為了清理強行寫回狀態。
+**執行期限不等於清理寬限。** 期限到期後不再啟動任何新的業務工作，但終止是有界而非瞬時的：先 SIGTERM，等一段有限的寬限讓 canonical check 把輸出寫進 log，必要時 SIGKILL，最後**確認**程序群組真的空了。這四個等待——leader 的兩輪、程序群組的兩輪、輸出收集——**共用一份 `process.CleanupGrace` 預算**，不是每一層各領一份完整寬限：後者會讓一條由數個 helper 串成的清理路徑沒有可說明的總上限。SIGKILL 之後的等待也有上限；等不到 wait 結果就回報「未確認」，因為「送過 SIGKILL」與「程序已停止」是兩句不同的話，而分不清這兩者的呼叫端正是會啟動第二個 writer 的那一個。清理失敗時不刪除 worktree：那個 checkout 正是恢復紀錄指向的位置。
+
+一次被中斷的 verification 因此有**兩個**具名且各自有上界的量，不是一個：停止那次 canonical check 自己的 `CleanupGrace`，以及之後收拾善後（移除 worktree、prune、關閉 runtime environment）的一段 cleanup window，同樣以 `CleanupGrace` 為上界。兩者都是總量：window 內啟動的每一個受管理程序共用 window 帶下去的那一份預算，不各自再開一份完整寬限——否則一條由數個 Git 指令串成的善後路徑就沒有任何人說得出來的總上限。送出 signal 不等於清理完成，這個區別是 `RECOVERY_BLOCKED` 存在的理由。被中斷而沒有產生結果的 Verification Run 走既有 reclaim 流程保存 INTERRUPTED Evidence，不製造工程 FAIL，也不留下可正常結案卻未結案的 VERIFYING；verdict 在 check 期間被改動時仍然 fail closed，不為了清理強行寫回狀態。
 
 **程序清理在每一條路徑上都要做，正常退出也一樣。** `make verify` 分叉出的背景子程序在主程序 exit 0 之後仍然活著、仍然在寫這個 worktree，而且已經在 session digest 的窗口之外。它由 `internal/process` 的共用 helper 處理：子程序一律以 `Setpgid` 啟動、輸出給的是 ForgePilot 自己持有的描述元（交給 `os/exec` 的管線會讓 `Wait` 等到每個繼承它的子孫關閉為止，清理程式碼因此可能永遠走不到）、停止有界、結果要確認。無法確認清理完成時 Runner 停止並回報，不宣告可以安全前進，也不清掉恢復所需的 ownership 資訊；已經成立並保存的 Evidence 照常保留，因為工程結果與執行安全是兩個不同的判斷。保證的範圍限於受管理的程序群組——脫離群組的 daemon 不在內，這不是作業系統層級的隔離。
 

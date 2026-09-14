@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -126,7 +127,7 @@ func DryRun(options Options) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	decision, err := app.GoalDecision(options.Root, options.GoalID)
+	decision, err := app.GoalDecision(context.Background(), options.Root, options.GoalID)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -160,7 +161,7 @@ func Start(options Options) (Record, error) {
 		// while its coding CLI keeps writing this tree. Settling those before
 		// anything new starts is what keeps `run` from doing the one thing
 		// ADR-0020 promises it will not — create overlapping writers.
-		blocked, err := settleAbandonedWorkers(options, "")
+		blocked, err := settleWorkspace(options, "")
 		if err != nil {
 			return err
 		}
@@ -178,14 +179,22 @@ func Start(options Options) (Record, error) {
 	return record, err
 }
 
-// settleAbandonedWorkers applies the recovery judgement to every earlier run
-// that still claims a worker. It returns a record carrying a RECOVERY_BLOCKED
-// stop when any of them cannot be settled, because starting a second writer on
-// a workspace that may still have one is not a risk worth taking for the
-// convenience of not having to name a run id. `except` names the run the caller
-// settles itself: a resume recovers its own record through the Runner that is
-// about to drive it, and settling it twice would judge it without one.
-func settleAbandonedWorkers(options Options, except string) (*Record, error) {
+// settleWorkspace applies the recovery judgement to every earlier run on this
+// workspace. It returns a record carrying a RECOVERY_BLOCKED stop when any of
+// them cannot be settled, because starting a second writer on a workspace that
+// may still have one is not a risk worth taking for the convenience of not
+// having to name a run id. `except` names the run the caller settles itself: a
+// resume recovers its own record through the Runner that is about to drive it,
+// and settling it twice would judge it without one.
+//
+// It is the one criterion Start and Resume share, and it reads the workspace
+// rather than the command line: a different Goal, a new run id or a restarted
+// CLI are all the same workspace, and none of them may walk past an execution
+// nobody could confirm stopped. It also no longer skips a record whose Worker
+// is nil — a canonical check, a runtime probe or a Git child leaves no worker,
+// which is exactly how those used to pass unnoticed.
+// See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+func settleWorkspace(options Options, except string) (*Record, error) {
 	runs, err := storage.ListRuns(options.Root)
 	if err != nil {
 		return nil, err
@@ -197,10 +206,11 @@ func settleAbandonedWorkers(options Options, except string) (*Record, error) {
 		existing, err := LoadRecord(options.Root, runID)
 		if err != nil {
 			// An unreadable record may describe a live worker. Refusing is the only
-			// answer that cannot be wrong.
+			// answer that cannot be wrong. A record that does not parse is not a
+			// record with nothing pending in it.
 			return blockedRecord(options, runID, fmt.Sprintf("run %s has an unreadable record: %v", runID, err)), nil
 		}
-		if existing.Worker == nil {
+		if existing.Worker == nil && len(existing.UnresolvedPending()) == 0 {
 			continue
 		}
 		runner := &Runner{options: options, record: &existing}
@@ -259,7 +269,7 @@ func Resume(options Options, runID string) (Record, error) {
 		// does, so it clears the same bar: a worker another run left behind is
 		// still a writer here, and the workspace lock says nothing about it.
 		// This run's own worker is left to recover() below.
-		blocked, err := settleAbandonedWorkers(resumeOptions(options, existing), runID)
+		blocked, err := settleWorkspace(resumeOptions(options, existing), runID)
 		if err != nil {
 			return err
 		}
@@ -350,7 +360,21 @@ func newRunner(options Options) (*Runner, error) {
 // recover settles an interrupted run's worker before anything new is launched.
 // Every branch either establishes that no writer remains or refuses to continue.
 // See docs/adr/0020-worker-ownership-is-fail-closed.md.
+// recover settles this run's own record: first every pending execution it
+// wrote, then the legacy worker entry. The two are kept apart because they have
+// different lifetimes and different compatibility stories — a record written
+// before Pending existed still recovers through Worker exactly as it did.
 func (runner *Runner) recover() error {
+	// Whether this pass refused is reported back, not inferred from record.Stop.
+	// A record can already carry a stop — the session-cleanup path writes a
+	// worker, a pending execution and a RECOVERY_BLOCKED stop together — and
+	// reading that old stop as "this pass refused" made the worker half
+	// unreachable: never judged, never cleared, so the workspace stayed blocked
+	// even once both halves had become confirmable.
+	blocked, err := runner.recoverPending()
+	if err != nil || blocked {
+		return err
+	}
 	worker := runner.record.Worker
 	if worker == nil {
 		return nil
@@ -381,6 +405,28 @@ func (runner *Runner) recover() error {
 	}
 	runner.record.Worker = nil
 	return runner.save()
+}
+
+// recoverPending judges each unresolved execution and clears only the ones that
+// were shown to be over. Clearing is atomic with the confirmation: the record is
+// replaced whole, so a reader sees either the entry or its absence, never a
+// half-cleared claim.
+// It reports whether it refused, which is the caller's cue to stop — asking the
+// record afterwards cannot tell a refusal made here from one made in an earlier
+// process.
+func (runner *Runner) recoverPending() (bool, error) {
+	for _, pending := range runner.record.UnresolvedPending() {
+		safe, detail := judgePending(pending)
+		if !safe {
+			return true, runner.stopNow(StopRecoveryBlocked, detail+manualRecoveryHint(runner.record.RunID))
+		}
+		runner.print("Recovering run %s: %s is confirmed stopped\n", runner.record.RunID, pending.Kind)
+		runner.record.resolvePending(pending.ID)
+		if err := runner.save(); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func (runner *Runner) save() error {
@@ -426,8 +472,13 @@ func (runner *Runner) loop() error {
 		if stopped, err := runner.checkScope(); stopped || err != nil {
 			return err
 		}
-		decision, err := app.GoalDecision(runner.options.Root, runner.options.GoalID)
-		if err != nil {
+		var decision app.Decision
+		stopped, err := runner.readFacts("", func(ctx context.Context) error {
+			var decisionErr error
+			decision, decisionErr = app.GoalDecision(ctx, runner.options.Root, runner.options.GoalID)
+			return decisionErr
+		})
+		if stopped || err != nil {
 			return err
 		}
 		fingerprint, err := runner.fingerprint(decision)
@@ -589,7 +640,13 @@ func (runner *Runner) start(action work.NextAction) error {
 	if stopped, err := runner.spendStep(); stopped || err != nil {
 		return err
 	}
-	if err := app.StartWork(runner.options.Root, action.Item.ID, runner.now); err != nil {
+	stopped, err := runner.readFacts(action.Item.ID, func(ctx context.Context) error {
+		return app.StartWork(ctx, runner.options.Root, action.Item.ID, runner.now)
+	})
+	if stopped {
+		return err
+	}
+	if err != nil {
 		return runner.stopNow(StopStalled, fmt.Sprintf("start %s: %v", action.Item.ID, err))
 	}
 	runner.print("Step %d: START %s\n", runner.record.Steps, action.Item.ID)
@@ -605,7 +662,15 @@ func (runner *Runner) reconcile(action work.NextAction) error {
 	if stopped, err := runner.spendStep(); stopped || err != nil {
 		return err
 	}
-	changes, err := app.ReconcileGoal(runner.options.Root, runner.options.GoalID, runner.now)
+	var changes []work.ReadinessChange
+	stopped, err := runner.readFacts(action.Item.ID, func(ctx context.Context) error {
+		var reconcileErr error
+		changes, reconcileErr = app.ReconcileGoal(ctx, runner.options.Root, runner.options.GoalID, runner.now)
+		return reconcileErr
+	})
+	if stopped {
+		return err
+	}
 	if err != nil {
 		return runner.stopNow(StopStalled, fmt.Sprintf("reconcile %s: %v", runner.options.GoalID, err))
 	}
@@ -622,8 +687,13 @@ func (runner *Runner) journal(action, itemID, detail string) error {
 // projection was judged on and stops. It never approves, never completes the
 // Goal, and never turns VERIFIED into DONE.
 func (runner *Runner) finish() error {
-	summary, err := app.GoalReadiness(runner.options.Root, runner.options.GoalID)
-	if err != nil {
+	var summary work.GoalSummary
+	stopped, err := runner.readFacts("", func(ctx context.Context) error {
+		var readinessErr error
+		summary, readinessErr = app.GoalReadiness(ctx, runner.options.Root, runner.options.GoalID)
+		return readinessErr
+	})
+	if stopped || err != nil {
 		return err
 	}
 	if summary.Completion != work.GoalAwaitingFinalReview {
@@ -657,6 +727,18 @@ func (runner *Runner) verify(itemID, label string) error {
 	// canonical check was the one place a Ctrl-C did not reach.
 	execution := runner.newExecution(runner.options.Budget.VerifyTimeout)
 	defer execution.release()
+	// Recorded before the verification starts anything external. A crash between
+	// here and the first confirmation leaves an entry nobody can resolve, which
+	// blocks the next run — the honest answer, because from the outside a crash
+	// in the launch window is indistinguishable from a launch that happened.
+	// A save that fails stops the step rather than starting the work anyway.
+	pendingID := runner.record.addPending(PendingExecution{
+		Kind: KindVerification, Phase: PhasePendingStart, WorkItemID: itemID,
+		Location: runner.options.Root, ObservedAt: runner.now()})
+	if err := runner.save(); err != nil {
+		runner.record.resolvePending(pendingID)
+		return err
+	}
 	// No Timeout is passed: app.VerifyOptions.Timeout is the standalone command's
 	// own limit, counted in full from when the check starts. The Runner's limit
 	// is already the earlier of that timeout and the run's deadline, and arming
@@ -675,9 +757,48 @@ func (runner *Runner) verify(itemID, label string) error {
 	// but a group that cannot be confirmed empty means the next step could
 	// overlap something still writing this workspace.
 	if result.Cleanup != nil {
-		return runner.stopNow(StopRecoveryBlocked, fmt.Sprintf(
-			"%s: the canonical check's process group could not be confirmed stopped: %v (the step ended %s). Find what is still running under this workspace and stop it before running anything else",
-			itemID, result.Cleanup, describe(execution.Cause())))
+		// The entry is rewritten rather than dropped, one per group that could not
+		// be confirmed, so the next process — a resume, a new run, the same
+		// workspace with another Goal — finds it whether or not this one lives to
+		// report it. Why the step ended and why its cleanup failed are recorded as
+		// separate fields: a cleanup failure must not erase the Ctrl-C.
+		runner.record.resolvePending(pendingID)
+		observed := runner.now()
+		stopped := describe(execution.Cause())
+		unresolved := result.Unresolved
+		if len(unresolved) == 0 {
+			unresolved = []app.Unresolved{{Kind: app.UnresolvedCanonicalCheck, Detail: result.Cleanup.Error()}}
+		}
+		for _, group := range unresolved {
+			runner.record.addPending(PendingExecution{
+				Kind: pendingKind(group.Kind), Phase: PhaseCleanupUnconfirmed, WorkItemID: itemID,
+				Location: group.Location, Identity: agent.ProcessIdentity{PGID: group.PGID},
+				StopReason: stopped, CleanupDetail: group.Detail, ObservedAt: observed})
+		}
+		// The step's own error is kept beside the cleanup failure. Cleanup takes
+		// priority — the next step must not start — but a verification that also
+		// had its governance state rewritten, or that was refused, is a second
+		// fact the person sorting this out needs; reporting only "something is
+		// still running" would send them to look for a process and never mention
+		// that the state is no longer trustworthy.
+		detail := fmt.Sprintf(
+			"%s: a process group started by this verification could not be confirmed stopped: %v (the step ended %s). Find what is still running under this workspace and stop it before running anything else",
+			itemID, result.Cleanup, stopped)
+		if err != nil {
+			detail += fmt.Sprintf("; the step also ended with: %v", err)
+		}
+		if saveErr := runner.save(); saveErr != nil {
+			// The record could not be written, so nothing above is durable. Say what
+			// was about to be recorded rather than returning only the write failure.
+			return fmt.Errorf("%w; the unrecorded cleanup was: %s", saveErr, detail)
+		}
+		return runner.stopNow(StopRecoveryBlocked, detail)
+	}
+	// Confirmed clear: the entry and the confirmation land in the same atomic
+	// record replacement.
+	runner.record.resolvePending(pendingID)
+	if err := runner.save(); err != nil {
+		return err
 	}
 	switch {
 	case errors.Is(err, app.ErrVerificationInterrupted):
@@ -774,6 +895,19 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 	runner.print("Step %d: %s %s (attempt %d/%d, new session)\n", runner.record.Steps, action.Kind, itemID, attempt, runner.options.Budget.MaxAttemptsPerWork)
 	request := agent.Request{Workspace: runner.record.Workspace, ArtifactDir: sessionDir,
 		Handoff: handoff, MaxOutputBytes: runner.options.Limits.MaxWriteBytes}
+	// The real last gate. Everything between the earlier check and here —
+	// building the handoff, claiming capacity, digesting the state — takes time a
+	// signal or a deadline can arrive in, and a stop that arrived during the
+	// preparation must not be answered by starting the process anyway and only
+	// noticing at Wait. The worker record is withdrawn because this path knows
+	// for certain that nothing was launched.
+	if stopped, stopErr := runner.beforeAction(); stopped || stopErr != nil {
+		runner.record.Worker = nil
+		if saveErr := runner.save(); saveErr != nil {
+			return saveErr
+		}
+		return stopErr
+	}
 	session, err := agent.Start(runner.runtime, request, startedAt)
 	if err != nil {
 		runner.record.Worker = nil
@@ -802,6 +936,10 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 		// next recovery unable to tell whether anything still writes here. When
 		// even that cannot be confirmed, the refusal is the answer — swallowing it
 		// would hand the next run a workspace with an invisible writer in it.
+		// Whatever happens to the process, this handle is let go of: Wait is never
+		// reached on this path, and it is Wait that would otherwise have released
+		// the output pipe and the session log.
+		defer session.Discard()
 		if terminateErr := agent.TerminateOwned(session.Started()); terminateErr != nil {
 			return runner.stopNow(StopRecoveryBlocked, fmt.Sprintf(
 				"%s could not be recorded (%v) and its worker could not be stopped: %v. Confirm pid %d yourself before running anything else",
@@ -828,9 +966,30 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 	// call returned would make the next run look clean while something may still
 	// be writing this workspace.
 	if cleanupErr := stoppedCleanup(waitErr); cleanupErr != nil {
-		return runner.stopNow(StopRecoveryBlocked, fmt.Sprintf(
+		// Durable beside the worker entry, so the fact survives this process with
+		// its two halves apart: why the session was stopped, and why its group
+		// could not be confirmed gone.
+		identity := runner.record.Worker.Identity
+		if identity.PGID == 0 {
+			// The group the cleanup itself named, for a session whose own identity
+			// could not be observed. Zero stays zero, and a pending execution with
+			// no group id is refused later rather than read as nothing to do.
+			if pgid, named := process.UnsettledGroup(cleanupErr); named {
+				identity.PGID = pgid
+			}
+		}
+		runner.record.addPending(PendingExecution{
+			Kind: KindAgentSession, Phase: PhaseCleanupUnconfirmed, WorkItemID: itemID,
+			Location: sessionDir, Identity: identity,
+			StopReason: describe(execution.Cause()), CleanupDetail: cleanupErr.Error(),
+			ObservedAt: runner.now()})
+		detail := fmt.Sprintf(
 			"%s attempt %d: the session's process group could not be confirmed stopped: %v (the step ended %s). Find what is still running under this workspace and stop it before running anything else",
-			itemID, attempt, cleanupErr, describe(execution.Cause())))
+			itemID, attempt, cleanupErr, describe(execution.Cause()))
+		if saveErr := runner.save(); saveErr != nil {
+			return fmt.Errorf("%w; the unrecorded cleanup was: %s", saveErr, detail)
+		}
+		return runner.stopNow(StopRecoveryBlocked, detail)
 	}
 	runner.record.Worker = nil
 	if stopped, err := runner.checkpoint(); stopped || err != nil {
@@ -985,4 +1144,86 @@ func firstLine(text string) string {
 		return text[:index]
 	}
 	return text
+}
+
+// readFacts runs one between-steps Git read with the same protection every
+// other external process gets: a pending execution recorded before it starts,
+// resolved only when it is confirmed over. These reads are short, but they are
+// `read-tree`, `add -A` and `write-tree` against the user's own worktree, so
+// they run this repository's clean filters and can leave a child behind exactly
+// as a canonical check can. Without this a cleanup nobody could confirm
+// vanished from the record, and the next `run` found a workspace that looked
+// clear. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+//
+// It reports whether the run was stopped, so the caller stops rather than
+// classifying a cleanup failure as whatever its own error path would have said
+// — a stalled Goal, most often, which is an engineering statement about code
+// that did nothing wrong.
+func (runner *Runner) readFacts(itemID string, read func(ctx context.Context) error) (bool, error) {
+	execution := runner.newFactsExecution()
+	defer execution.release()
+	pendingID := runner.record.addPending(PendingExecution{
+		Kind: KindGit, Phase: PhasePendingStart, WorkItemID: itemID,
+		Location: runner.options.Root, ObservedAt: runner.now()})
+	if err := runner.save(); err != nil {
+		runner.record.resolvePending(pendingID)
+		return true, err
+	}
+	readErr := read(execution.ctx)
+	if unsettled := unsettledGit(readErr); unsettled != nil {
+		runner.record.resolvePending(pendingID)
+		pgid, _ := process.UnsettledGroup(unsettled)
+		runner.record.addPending(PendingExecution{
+			Kind: KindGit, Phase: PhaseCleanupUnconfirmed, WorkItemID: itemID,
+			Location: runner.options.Root, Identity: agent.ProcessIdentity{PGID: pgid},
+			StopReason: describe(execution.Cause()), CleanupDetail: unsettled.Error(),
+			ObservedAt: runner.now()})
+		detail := fmt.Sprintf(
+			"a Git process group started while reading repository facts could not be confirmed stopped: %v (the read ended %s). Find what is still running under this workspace and stop it before running anything else",
+			unsettled, describe(execution.Cause()))
+		if saveErr := runner.save(); saveErr != nil {
+			return true, fmt.Errorf("%w; the unrecorded cleanup was: %s", saveErr, detail)
+		}
+		return true, runner.stopNow(StopRecoveryBlocked, detail)
+	}
+	runner.record.resolvePending(pendingID)
+	if err := runner.save(); err != nil {
+		return true, err
+	}
+	return false, readErr
+}
+
+// unsettledGit reports the unconfirmed-group part of an error, or nil. It is the
+// runner-side twin of internal/app's unsettledPart: both exist because a
+// cancelled command whose child could not be confirmed gone carries two facts,
+// and only one of them means the next step may not start.
+func unsettledGit(err error) error {
+	if err == nil {
+		return nil
+	}
+	var unsettled *process.NotSettled
+	if errors.As(err, &unsettled) {
+		return unsettled
+	}
+	if errors.Is(err, process.ErrNotSettled) {
+		return err
+	}
+	return nil
+}
+
+// pendingKind maps the stage internal/app observed onto the kind a run record
+// stores. The two vocabularies are kept apart on purpose: internal/app must not
+// learn what a run record looks like, and internal/runner must not re-derive
+// the fact from a message. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+func pendingKind(kind string) string {
+	switch kind {
+	case app.UnresolvedRuntimePreflight:
+		return KindRuntimePreflight
+	case app.UnresolvedCanonicalPreflight:
+		return KindCanonicalPreflight
+	case app.UnresolvedGit:
+		return KindGit
+	default:
+		return KindCanonicalCheck
+	}
 }

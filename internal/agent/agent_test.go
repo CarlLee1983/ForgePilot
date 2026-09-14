@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -182,8 +183,12 @@ func TestInspectDistinguishesGoneFromOursFromUnrelated(t *testing.T) {
 		if liveness, err := Inspect(reused); err != nil || liveness != Unrelated {
 			t.Fatalf("%s: reused pid liveness = %v, %v", name, liveness, err)
 		}
-		if err := TerminateOwned(reused); err != nil {
-			t.Fatalf("%s: TerminateOwned = %v", name, err)
+		// A reused pid means our worker is gone, but its group id is now shared
+		// with whatever holds that pid. Signalling would be a guess and confirming
+		// is impossible, so the only honest answer is that this cannot be settled.
+		// See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+		if err := TerminateOwned(reused); !errors.Is(err, process.ErrNotSettled) {
+			t.Fatalf("%s: TerminateOwned = %v, want an unsettled report", name, err)
 		}
 	}
 	// Refusing to signal an unrelated pid must not have stopped our own worker.
@@ -396,5 +401,44 @@ func TestAStoppedSessionReportsWhyAndWhetherItsGroupIsSettled(t *testing.T) {
 	settled := &StoppedError{Cause: context.Canceled}
 	if errors.Is(settled, process.ErrNotSettled) {
 		t.Fatal("a settled group read as unconfirmed")
+	}
+}
+
+// A leader that has exited says nothing about the rest of its group. The
+// children a coding CLI forked keep its pgid and go on writing the workspace,
+// so "the pid is gone" is not a confirmation — and because the recorded
+// identity no longer matches whatever holds that pid, the group under it is not
+// ours to signal either. The only honest answer left is that this cannot be
+// settled. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+func TestALeaderThatExitedDoesNotMeanItsGroupIsEmpty(t *testing.T) {
+	directory := t.TempDir()
+	child := filepath.Join(directory, "child.pid")
+	leader := filepath.Join(directory, "leader.pid")
+	// The leader forks a child into its own group and then exits, which is what
+	// `make verify` and a coding CLI both do routinely.
+	script := "#!/bin/sh\n( sleep 300 ) &\necho \"$!\" > " + child + "\necho $$ > " + leader + "\nexit 0\n"
+	request := Request{Workspace: t.TempDir(), ArtifactDir: t.TempDir(), Handoff: "x"}
+	session, err := Start(Fake{Command: writeScript(t, script)}, request, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := session.Identity
+	// Reap the leader without touching its group, so this test asks about a
+	// group whose leader is genuinely gone.
+	<-session.done
+	t.Cleanup(func() { _ = syscall.Kill(-identity.PGID, syscall.SIGKILL) })
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, statErr := os.Stat(child); statErr == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if liveness, _ := Inspect(identity); liveness == Ours {
+		t.Skip("the leader was still reported as ours; this platform reaped differently")
+	}
+	if err := TerminateOwned(identity); !errors.Is(err, process.ErrNotSettled) {
+		t.Fatalf("TerminateOwned = %v, want an unsettled report for a populated group", err)
 	}
 }

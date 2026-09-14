@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +32,7 @@ func TestCaptureSnapshotAndInspectSnapshotPreserveWorktree(t *testing.T) {
 
 	before := repositorySurface(t, root)
 	createdAt := time.Date(2026, time.September, 12, 8, 0, 0, 0, time.UTC)
-	captured, err := CaptureSnapshot(root, "WI-001", createdAt)
+	captured, err := CaptureSnapshot(context.Background(), root, "WI-001", createdAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestCaptureSnapshotAndInspectSnapshotPreserveWorktree(t *testing.T) {
 	if got := strings.TrimSpace(gitSnapshot(t, root, "rev-parse", captured.Ref)); got != captured.Revision {
 		t.Fatalf("snapshot ref = %q, want %q", got, captured.Revision)
 	}
-	if repeated, err := CaptureSnapshot(root, "WI-001", createdAt); err != nil || repeated != captured {
+	if repeated, err := CaptureSnapshot(context.Background(), root, "WI-001", createdAt); err != nil || repeated != captured {
 		t.Fatalf("repeat capture = %#v, %v; want %#v", repeated, err, captured)
 	}
 	checkout := filepath.Join(t.TempDir(), "snapshot")
@@ -83,7 +84,7 @@ func TestCaptureSnapshotAndInspectSnapshotPreserveWorktree(t *testing.T) {
 	beforeInspect := repositorySurface(t, root)
 	refsBeforeInspect := gitSnapshot(t, root, "for-each-ref", "--format=%(refname) %(objectname)", "refs/forgepilot/snapshots")
 	objectsBeforeInspect := directorySurface(t, filepath.Join(root, ".git", "objects"))
-	inspected, err := InspectSnapshot(root)
+	inspected, err := InspectSnapshot(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestCaptureSnapshotAndInspectSnapshotPreserveWorktree(t *testing.T) {
 	if inspected.Ref != "" {
 		t.Fatalf("inspect created ref %q", inspected.Ref)
 	}
-	again, err := InspectSnapshot(root)
+	again, err := InspectSnapshot(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestCaptureSnapshotAndInspectSnapshotPreserveWorktree(t *testing.T) {
 	if err := os.Chmod(filepath.Join(root, "unstaged.txt"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	modeChanged, err := InspectSnapshot(root)
+	modeChanged, err := InspectSnapshot(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestCaptureSnapshotDigestBindsBaseRevision(t *testing.T) {
 	gitSnapshot(t, first, "add", "file.txt")
 	gitSnapshot(t, first, "commit", "-m", "first base")
 	writeSnapshotFile(t, first, "file.txt", "same final contents\n")
-	firstSnapshot, err := CaptureSnapshot(first, "WI-001", createdAt)
+	firstSnapshot, err := CaptureSnapshot(context.Background(), first, "WI-001", createdAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestCaptureSnapshotDigestBindsBaseRevision(t *testing.T) {
 	gitSnapshot(t, second, "add", "file.txt")
 	gitSnapshot(t, second, "commit", "-m", "second base")
 	writeSnapshotFile(t, second, "file.txt", "same final contents\n")
-	secondSnapshot, err := CaptureSnapshot(second, "WI-001", createdAt)
+	secondSnapshot, err := CaptureSnapshot(context.Background(), second, "WI-001", createdAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,10 +199,10 @@ func TestSnapshotOverridesInheritedGitIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_INDEX_FILE", foreignIndex)
-	if _, err := CaptureSnapshot(root, "WI-001", time.Date(2026, time.September, 12, 8, 0, 0, 0, time.UTC)); err != nil {
+	if _, err := CaptureSnapshot(context.Background(), root, "WI-001", time.Date(2026, time.September, 12, 8, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("capture with inherited GIT_INDEX_FILE: %v", err)
 	}
-	if _, err := InspectSnapshot(root); err != nil {
+	if _, err := InspectSnapshot(context.Background(), root); err != nil {
 		t.Fatalf("inspect with inherited GIT_INDEX_FILE: %v", err)
 	}
 	after, err := os.ReadFile(realIndex)
@@ -235,7 +236,7 @@ func writeSnapshotFile(t *testing.T, root, name, content string) {
 
 func gitSnapshot(t *testing.T, root string, arguments ...string) string {
 	t.Helper()
-	output, err := git(root, nil, arguments...)
+	output, err := git(context.Background(), root, nil, arguments...)
 	if err != nil {
 		t.Fatal(err)
 	}

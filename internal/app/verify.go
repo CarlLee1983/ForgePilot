@@ -90,11 +90,95 @@ type VerifyResult struct {
 	RefreshWarning error
 	// Interrupted marks a run that ended without producing a result.
 	Interrupted bool
-	// Cleanup records that the canonical check's process group could not be
-	// confirmed stopped. It is not an engineering result: any Evidence this call
+	// Cleanup records that a managed process group could not be confirmed
+	// stopped. It is not an engineering result: any Evidence this call
 	// produced still stands, and the caller must nonetheless stop rather than
 	// start a step that could overlap whatever is still running.
 	Cleanup error
+	// Unresolved describes those groups in the terms a caller needs to persist a
+	// recovery record: which stage started them, which group id was observed, and
+	// where it was working. A sentence in Cleanup cannot be checked by the next
+	// process; this can. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+	Unresolved []Unresolved
+}
+
+// Unresolved is one managed process group a verification could not confirm
+// stopped. It is the typed boundary between the layer that observes the fact
+// and the layer that persists it: internal/app never learns what a run record
+// looks like, and internal/runner never re-derives the fact from a message.
+type Unresolved struct {
+	// Kind names the stage that started the group.
+	Kind string
+	// PGID is the group id observed at launch, or zero when none was recorded —
+	// which is itself a fail-closed answer, not an absence of work to do.
+	PGID int
+	// Location is the checkout or worktree the group was working in.
+	Location string
+	// Detail is the original report, kept for a person rather than for a rule.
+	Detail string
+}
+
+// The stages that can leave a group behind. They are named rather than inferred
+// so a recovery record says which external process was running.
+const (
+	UnresolvedRuntimePreflight   = "RUNTIME_PREFLIGHT"
+	UnresolvedCanonicalPreflight = "CANONICAL_PREFLIGHT"
+	UnresolvedCanonicalCheck     = "CANONICAL_CHECK"
+	UnresolvedGit                = "GIT"
+)
+
+// note records an unconfirmed group on the result, keeping both the typed
+// description and the joined error a caller may simply test.
+func (result *VerifyResult) note(kind, location string, err error) {
+	if err == nil {
+		return
+	}
+	pgid, _ := process.UnsettledGroup(err)
+	result.Unresolved = append(result.Unresolved,
+		Unresolved{Kind: kind, PGID: pgid, Location: location, Detail: err.Error()})
+	result.Cleanup = errors.Join(result.Cleanup, err)
+}
+
+// cleanupWindow is the one bounded allowance a verification has for the tidying
+// that must still happen after its own context has ended. It is deliberately
+// neither the caller's context — which is cancelled, and would skip necessary
+// cleanup entirely — nor context.Background(), which would put no limit on it
+// at all. It is drawn once per verification and shared, so a path made of
+// several cleanup helpers still has one total somebody can state.
+// See docs/adr/0021-execution-limits-are-bounded-and-named.md.
+type cleanupWindow struct {
+	parent context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func newCleanupWindow(parent context.Context) *cleanupWindow {
+	return &cleanupWindow{parent: parent}
+}
+
+// context opens the window on first use. Opening it earlier would start the
+// clock during the work rather than during the cleanup, so by the time cleanup
+// began there would be nothing left of it.
+//
+// The window carries one process.Budget as well as one deadline. Without it,
+// every managed process started inside the window — each `git worktree remove`,
+// each prune — opened a fresh full grace of its own, and the window's own
+// timeout only governed starting them, not the confirmation waits underneath.
+// A cleanup path made of several commands would then have had no total anyone
+// could state, which is precisely what ADR-0022 says must not happen.
+func (window *cleanupWindow) context() context.Context {
+	if window.ctx == nil {
+		ctx, cancel := context.WithTimeout(
+			context.WithoutCancel(window.parent), process.CleanupGrace)
+		window.ctx, window.cancel = process.WithBudget(ctx, process.NewBudget()), cancel
+	}
+	return window.ctx
+}
+
+func (window *cleanupWindow) release() {
+	if window.cancel != nil {
+		window.cancel()
+	}
 }
 
 // Verify runs the canonical check against one Work Item's Candidate, holding
@@ -114,8 +198,7 @@ func Verify(ctx context.Context, root, id string, output io.Writer, options Veri
 	return result, err
 }
 
-func runVerification(ctx context.Context, root, id string, output io.Writer, options VerifyOptions) (VerifyResult, error) {
-	var result VerifyResult
+func runVerification(ctx context.Context, root, id string, output io.Writer, options VerifyOptions) (result VerifyResult, _ error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -126,12 +209,16 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	if err := ctx.Err(); err != nil {
 		return result, fmt.Errorf("%w before it began: %w", ErrVerificationInterrupted, err)
 	}
+	// One bounded allowance for every piece of tidying below, opened when the
+	// first of them runs rather than now.
+	cleanup := newCleanupWindow(ctx)
+	defer cleanup.release()
 	// An abandoned run is a fact that already happened, so it is recorded before
 	// anything is allowed to refuse the command: a block stops new work, not the
 	// recording of what is already over. Reclaiming is never quiet — it is
 	// reported even when the command then refuses to start a new run. See
 	// docs/adr/0009-reclaim-before-refusing.md.
-	reclaimed, err := reclaimOrphan(id, root, output, options.now())
+	reclaimed, err := reclaimOrphan(cleanup.context(), id, root, output, options.now())
 	if err != nil {
 		return result, err
 	}
@@ -147,19 +234,22 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	startedAt := options.now()
 	candidate := work.Candidate{Kind: work.CommitCandidate}
 	if options.Snapshot {
-		captured, err := repository.CaptureSnapshot(root, id, startedAt)
+		// Under ctx like everything else: capture runs `read-tree`, `add -A` and
+		// `write-tree`, each of which runs this repository's own hooks and filters
+		// and can therefore block for as long as they like.
+		captured, err := repository.CaptureSnapshot(ctx, root, id, startedAt)
 		if err != nil {
-			return result, err
+			return result, result.gitStage(ctx, UnresolvedGit, root, "while capturing its Candidate", err, false)
 		}
 		candidate = work.Candidate{Kind: work.SnapshotCandidate, Revision: captured.Revision,
 			BaseRevision: captured.BaseRevision, Digest: captured.Digest}
 	} else {
-		if err := repository.EnsureClean(root, "verifying"); err != nil {
-			return result, refuse(err)
+		if err := repository.EnsureClean(ctx, root, "verifying"); err != nil {
+			return result, result.gitStage(ctx, UnresolvedGit, root, "before its Candidate was resolved", err, true)
 		}
-		revision, err := repository.Head(root)
+		revision, err := repository.Head(ctx, root)
 		if err != nil {
-			return result, err
+			return result, result.gitStage(ctx, UnresolvedGit, root, "before its Candidate was resolved", err, false)
 		}
 		candidate.Revision = revision
 	}
@@ -172,52 +262,66 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	if err := ctx.Err(); err != nil {
 		return result, fmt.Errorf("%w before its checkout was made: %w", ErrVerificationInterrupted, err)
 	}
-	if err := repository.PruneWorktrees(root); err != nil {
-		return result, err
+	if err := repository.PruneWorktrees(ctx, root); err != nil {
+		return result, result.gitStage(ctx, UnresolvedGit, root, "before its checkout was made", err, false)
 	}
-	if err := repository.AddWorktree(root, worktree, candidate.Revision); err != nil {
-		return result, err
+	if err := repository.AddWorktree(ctx, root, worktree, candidate.Revision); err != nil {
+		// The checkout is where a blocking post-checkout hook lives, so this is
+		// the call most likely to be the one still running when a stop arrives.
+		// The worktree is deliberately left in place: removing a checkout whose
+		// processes have not been confirmed gone removes it out from under them,
+		// and it is also what a recovery record points at.
+		return result, result.gitStage(ctx, UnresolvedGit, worktree, "while making its checkout", err, false)
 	}
 	runtime, err := repository.ResolveRuntimeInContext(ctx, worktree)
 	if err != nil {
-		_ = repository.RemoveWorktree(root, worktree)
+		// The unconfirmed group is asked about before the cancellation is. Both
+		// can be true at once, and the ordering used to be the other way round, so
+		// a stop that coincided with a group nobody could confirm empty reported
+		// only the stop — and the group vanished from the record.
+		if unsettledPart(err) == nil {
+			// Nothing of ours is still running in there, so the checkout can go.
+			_ = repository.RemoveWorktree(cleanup.context(), root, worktree)
+		}
 		// A cancelled resolution is not the repository failing to declare a usable
 		// runtime, so it must not be reported as a refusal: that would record a
-		// condition outside the code where there is only a stop signal.
-		if ctx.Err() != nil {
-			return result, fmt.Errorf("%w while resolving its runtime: %w", ErrVerificationInterrupted, err)
-		}
-		// Nor is a process group nobody could confirm empty. The preflight runs
-		// external processes too, and a refusal there would record "this revision
-		// has no usable runtime" for something that is only a stop that did not
-		// complete.
-		if errors.Is(err, process.ErrNotSettled) {
-			result.Cleanup = err
-			return result, err
-		}
-		return result, refuse(err)
+		// condition outside the code where there is only a stop signal. Nor is a
+		// group nobody could confirm empty, which is why that is asked first.
+		return result, result.gitStage(ctx, UnresolvedRuntimePreflight, worktree, "while resolving its runtime", err, true)
 	}
 	defer func() {
+		// Held back for the same reason the worktree below is: the shim directory
+		// is first on the PATH of the check that was running, so removing it while
+		// that process may still be alive pulls the runtime out from under it.
+		// Deferred functions run last-in-first-out, so without this the worktree
+		// guard would decline to delete the checkout and this would then delete
+		// the runtime inside it.
+		if result.Cleanup != nil {
+			fmt.Fprintf(output, "warning: the resolved runtime environment was left in place: its processes could not be confirmed stopped\n")
+			return
+		}
 		if closeErr := runtime.Close(); closeErr != nil {
 			fmt.Fprintf(output, "warning: could not remove resolved runtime environment: %v\n", closeErr)
 		}
 	}()
 	if err := repository.EnsureCanonicalCheckInContext(ctx, worktree, runtime); err != nil {
-		_ = repository.RemoveWorktree(root, worktree)
-		if ctx.Err() != nil {
-			return result, fmt.Errorf("%w during its preflight: %w", ErrVerificationInterrupted, err)
+		if unsettledPart(err) == nil {
+			_ = repository.RemoveWorktree(cleanup.context(), root, worktree)
 		}
-		if errors.Is(err, process.ErrNotSettled) {
-			result.Cleanup = err
-			return result, err
-		}
-		return result, refuse(err)
+		return result, result.gitStage(ctx, UnresolvedCanonicalPreflight, worktree, "during its preflight", err, true)
 	}
 
 	// Cleanup runs last and cannot veto a result: once the canonical check has
 	// produced an outcome, failing to tidy up must not discard it.
 	defer func() {
-		if removeErr := repository.RemoveWorktree(root, worktree); removeErr != nil {
+		// Not removed while something may still be running in it. A worktree is
+		// also the location a recovery record points at, so deleting it before the
+		// group is confirmed gone destroys the information needed to recover.
+		if result.Cleanup != nil {
+			fmt.Fprintf(output, "warning: %s was left in place: its processes could not be confirmed stopped\n", worktree)
+			return
+		}
+		if removeErr := repository.RemoveWorktree(cleanup.context(), root, worktree); removeErr != nil {
 			fmt.Fprintf(output, "warning: could not remove %s: %v\n", worktree, removeErr)
 		}
 	}()
@@ -257,7 +361,7 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		return result, err
 	}
 	exitCode, cleanupErr, runErr := runCanonicalCheck(ctx, worktree, runtime, log, options.Timeout)
-	result.Cleanup = cleanupErr
+	result.note(UnresolvedCanonicalCheck, worktree, cleanupErr)
 	// A state that no longer loads is the loudest version of the same signal:
 	// it parsed on the way in, so whatever happened to it happened here.
 	verdictAfter, fingerprintErr := verdictFingerprint(root, id)
@@ -299,7 +403,7 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 			return err
 		}
 		var recordErr error
-		repositoryState, err := CandidateFacts(state, root)
+		repositoryState, err := CandidateFacts(ctx, state, root)
 		if err != nil {
 			factsErr = err
 			evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, options.now())
@@ -475,7 +579,7 @@ func runCanonicalCheck(ctx context.Context, directory string, runtime repository
 //
 // It asks nothing about Gates or the Goal. Whether a new run may start is a
 // separate question, decided after this and by different rules.
-func reclaimOrphan(id, root string, output io.Writer, now time.Time) (*work.Evidence, error) {
+func reclaimOrphan(cleanupCtx context.Context, id, root string, output io.Writer, now time.Time) (*work.Evidence, error) {
 	reclaimed, abandoned, logFile, found, err := reclaimRun(id, root, now, "")
 	if err != nil || !found {
 		return nil, err
@@ -484,7 +588,18 @@ func reclaimOrphan(id, root string, output io.Writer, now time.Time) (*work.Evid
 	// state holds where that run actually ran, which survives changes to the
 	// naming scheme or the layout.
 	if abandoned != "" {
-		_ = repository.RemoveWorktree(root, abandoned)
+		// Known boundary, and deliberately unchanged. An orphan is reached with
+		// this Work Item's verification lock held, so no live runner can exist —
+		// but a Runner that was SIGKILLed mid-check can have left a process group
+		// in this very checkout, and that group is recorded in a run record, which
+		// internal/app may not read: the Runner is the layer that owns execution
+		// history. The Runner therefore refuses to reach here at all while an
+		// unresolved pending execution exists (see settleWorkspace), so the
+		// exposure is a standalone `forgepilot verify` run by hand while a Runner's
+		// pending cleanup is outstanding. Closing that would mean making the
+		// standalone command consult run records and refuse, which is a change to
+		// its contract that ADR-0004 and ticket 07 both rule out.
+		_ = repository.RemoveWorktree(cleanupCtx, root, abandoned)
 	}
 	// logFile is the same value beginRun wrote to current_run, not a path
 	// re-derived from today's naming scheme: the streamed output an
@@ -534,4 +649,44 @@ func WorktreePath(root, id, revision string) string {
 // revision from overwriting each other. See docs/adr/0012-verification-log-outside-state.md.
 func LogPath(root, id, revision string, startedAt time.Time) string {
 	return filepath.Join(root, ".forgepilot", "logs", fmt.Sprintf("%s-%s-%s.log", id, shortRevision(revision), startedAt.Format("20060102T150405.000000000Z")))
+}
+
+// gitStage classifies a failed Git stage in the one order this command must
+// always use: the process group nobody could confirm empty first, then the
+// cancellation, then the plain failure. Both facts can be true at once, and
+// asking about the cancellation first is how the group used to disappear from
+// the result. `during` names the stage for the message; `refusable` says
+// whether an ordinary failure here is a condition outside the code — a dirty
+// worktree is, a Git command that could not run is not.
+// See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+func (result *VerifyResult) gitStage(ctx context.Context, kind, location, during string, err error, refusable bool) error {
+	result.note(kind, location, unsettledPart(err))
+	if result.Cleanup != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w %s: %w", ErrVerificationInterrupted, during, err)
+	}
+	if refusable {
+		return refuse(err)
+	}
+	return err
+}
+
+// unsettledPart pulls the unconfirmed-group report out of an error that may be
+// carrying several things at once. A cancelled Git command whose child could not
+// be confirmed gone reports both, and only one of them is a reason to refuse to
+// continue.
+func unsettledPart(err error) error {
+	if err == nil {
+		return nil
+	}
+	var unsettled *process.NotSettled
+	if errors.As(err, &unsettled) {
+		return unsettled
+	}
+	if errors.Is(err, process.ErrNotSettled) {
+		return err
+	}
+	return nil
 }

@@ -193,3 +193,21 @@ func TestTheRunRecordIsNotSubjectToTheArtifactBounds(t *testing.T) {
 		t.Fatal("an agent artifact was written past every bound")
 	}
 }
+
+// Pending ids must never be reused. Naming an entry by the current length did
+// reuse them: resolve the first of two and the next entry takes the second's
+// name, so resolving that name later clears an entry nobody ever confirmed.
+func TestAResolvedPendingIdIsNotHandedOutAgain(t *testing.T) {
+	record := &Record{}
+	first := record.addPending(PendingExecution{Kind: KindGit})
+	second := record.addPending(PendingExecution{Kind: KindVerification})
+	record.resolvePending(first)
+	third := record.addPending(PendingExecution{Kind: KindAgentSession})
+	if third == second || third == first {
+		t.Fatalf("pending id %q was reused (first %q, second %q)", third, first, second)
+	}
+	record.resolvePending(third)
+	if unresolved := record.UnresolvedPending(); len(unresolved) != 1 || unresolved[0].ID != second {
+		t.Fatalf("resolving %q cleared the wrong entry: %v", third, unresolved)
+	}
+}

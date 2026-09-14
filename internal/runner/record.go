@@ -65,6 +65,68 @@ type Worker struct {
 	Identity   agent.ProcessIdentity `json:"identity"`
 }
 
+// The phases a pending execution can be in. They are distinguished because the
+// answer to "may the next run start" is different for each: a record written
+// before a launch cannot prove nothing was launched, and one written after a
+// failed cleanup names a group that was observed alive.
+const (
+	// PhasePendingStart is written before an external process is started, so a
+	// crash in the launch window still leaves evidence that something may exist.
+	PhasePendingStart = "PENDING_START"
+	// PhaseRunning is written once an identity could be observed.
+	PhaseRunning = "RUNNING"
+	// PhaseCleanupUnconfirmed is written when a group could not be confirmed gone.
+	PhaseCleanupUnconfirmed = "CLEANUP_UNCONFIRMED"
+)
+
+// The kinds of external execution a Runner starts. Naming them is what makes a
+// recovery record say which process is unaccounted for; before this only agent
+// sessions were recorded at all, so a canonical check, a runtime probe or a Git
+// child that outlived its Runner left nothing for the next process to find.
+const (
+	KindAgentSession       = "AGENT_SESSION"
+	KindVerification       = "VERIFICATION"
+	KindRuntimePreflight   = "RUNTIME_PREFLIGHT"
+	KindCanonicalCheck     = "CANONICAL_CHECK"
+	KindCanonicalPreflight = "CANONICAL_PREFLIGHT"
+	KindGit                = "GIT"
+)
+
+// PendingExecution is one external execution this run started whose cleanup has
+// not been confirmed. It is the part of a run record that outlives the process
+// that wrote it: `Stop` says why the last run ended and a resume clears it,
+// which is exactly the wrong lifetime for "this workspace may still have a
+// writer in it". See docs/adr/0022-pending-cleanup-outlives-the-process.md.
+//
+// Everything a later process needs to judge safety is a field, not prose.
+// Detail carries the original words for a person; nothing reads it to decide.
+type PendingExecution struct {
+	// ID distinguishes two pending executions within one run.
+	ID string `json:"id"`
+	// Kind and Phase say what was started and how far it got.
+	Kind  string `json:"kind"`
+	Phase string `json:"phase"`
+	// WorkItemID is set when the execution belonged to one Work Item.
+	WorkItemID string `json:"work_item_id,omitempty"`
+	// Location is the checkout, worktree or session directory it worked in. It is
+	// also why an unconfirmed group's worktree is not deleted: removing it would
+	// destroy the thing this field points at.
+	Location string `json:"location,omitempty"`
+	// Identity is what was observed of the process group. An identity that is not
+	// Recorded() is a fail-closed answer — "we could not tell" — never an absence.
+	Identity agent.ProcessIdentity `json:"identity"`
+	// Unresolved is the only field that decides anything. It is cleared in the
+	// same atomic record replacement that records the confirmation.
+	Unresolved bool `json:"unresolved"`
+	// StopReason is why the execution was stopped, kept apart from why its
+	// cleanup could not be confirmed: a cleanup failure must not erase the answer
+	// to "was this a Ctrl-C or an expired run".
+	StopReason string `json:"stop_reason,omitempty"`
+	// CleanupDetail is the original cleanup report.
+	CleanupDetail string    `json:"cleanup_detail,omitempty"`
+	ObservedAt    time.Time `json:"observed_at"`
+}
+
 // Attempt is the bounded record of one agent session's claim. The summary is
 // untrusted text written by a model: it is kept so the next session can be told
 // what was already tried, and truncated so one verbose session cannot crowd out
@@ -144,9 +206,19 @@ type Record struct {
 	Steps             int                    `json:"steps"`
 	Attempts          map[string]int         `json:"attempts"`
 	Worker            *Worker                `json:"worker,omitempty"`
-	History           []Attempt              `json:"history,omitempty"`
-	EvidenceIDs       []string               `json:"evidence_ids,omitempty"`
-	Stop              *Stop                  `json:"stop,omitempty"`
+	// Pending holds executions whose cleanup has not been confirmed. It is
+	// additive: a record written before this field existed simply has none, which
+	// is read as "this run recorded nothing beyond its worker", not as "this
+	// workspace is known to be clear".
+	Pending []PendingExecution `json:"pending,omitempty"`
+	// PendingSeq only ever increases. Naming entries by the current length reused
+	// an id as soon as one was resolved, and resolvePending removes by id — so a
+	// later resolve cleared an entry that had never been confirmed, which is the
+	// one thing this record exists to prevent.
+	PendingSeq  int       `json:"pending_seq,omitempty"`
+	History     []Attempt `json:"history,omitempty"`
+	EvidenceIDs []string  `json:"evidence_ids,omitempty"`
+	Stop        *Stop     `json:"stop,omitempty"`
 }
 
 // Entry is one line of the journal.
@@ -213,4 +285,68 @@ func (record *Record) journal(root string, limits storage.ArtifactLimits, entry 
 		return err
 	}
 	return storage.AppendRunArtifact(root, record.RunID, journalName, append(encoded, '\n'), limits)
+}
+
+// addPending records an execution before it is started. The caller must persist
+// the record before launching anything: a process with no durable record of it
+// is the one thing recovery cannot survive.
+// See docs/adr/0020-worker-ownership-is-fail-closed.md.
+func (record *Record) addPending(pending PendingExecution) string {
+	if pending.ID == "" {
+		record.PendingSeq++
+		// An older record may carry entries but no counter, so the counter is
+		// lifted clear of any id already present before it is used.
+		for taken := true; taken; {
+			taken = false
+			candidate := fmt.Sprintf("pe-%d", record.PendingSeq)
+			for _, existing := range record.Pending {
+				if existing.ID == candidate {
+					record.PendingSeq++
+					taken = true
+					break
+				}
+			}
+		}
+		pending.ID = fmt.Sprintf("pe-%d", record.PendingSeq)
+	}
+	pending.Unresolved = true
+	record.Pending = append(record.Pending, pending)
+	return pending.ID
+}
+
+// updatePending applies a change to one recorded execution.
+func (record *Record) updatePending(id string, apply func(*PendingExecution)) {
+	for index := range record.Pending {
+		if record.Pending[index].ID == id {
+			apply(&record.Pending[index])
+			return
+		}
+	}
+}
+
+// resolvePending drops one execution from the record. It is called only after
+// the group behind it was confirmed gone, so that the clearing and the
+// confirmation land in the same atomic replacement.
+func (record *Record) resolvePending(id string) {
+	kept := record.Pending[:0]
+	for _, pending := range record.Pending {
+		if pending.ID != id {
+			kept = append(kept, pending)
+		}
+	}
+	record.Pending = kept
+	if len(record.Pending) == 0 {
+		record.Pending = nil
+	}
+}
+
+// UnresolvedPending lists the executions this record still cannot account for.
+func (record *Record) UnresolvedPending() []PendingExecution {
+	var unresolved []PendingExecution
+	for _, pending := range record.Pending {
+		if pending.Unresolved {
+			unresolved = append(unresolved, pending)
+		}
+	}
+	return unresolved
 }
