@@ -98,9 +98,9 @@ M3 完成某個 Work Item 時，在同一 state transaction 中只更新該 prer
 | PENDING → READY | 全部依賴滿足 Goal 的 progression policy（WORK_ITEM 為 DONE，GOAL 可為無 OPEN Gate 的 VERIFIED），且符合 Goal／Gate 條件；M1 測試規則，M3 提供真實完成來源 |
 | READY → RUNNING | ACTIVE Goal、依賴滿足同一 progression policy（VERIFIED dependency 另須 Candidate fresh）、無 unresolved Gate；M1，Goal-level Review Policy 擴充 |
 | RUNNING → VERIFYING | 允許開始 canonical verification；M2 |
-| VERIFYING → REVIEW | `WORK_ITEM` policy 下 PASS evidence 對應受驗證且目前有效的 Candidate；M2 |
+| VERIFYING → RUNNING | `WORK_ITEM` policy 下 PASS／FAIL，或回收中斷的 Verification Run；PASS 只記錄 machine Evidence；ADR-0023 |
 | VERIFYING → VERIFIED | `GOAL` policy 下 PASS evidence；只滿足依賴 progression，不是 Human acceptance；Goal-level Review Policy |
-| VERIFYING → RUNNING | Verification FAIL，或回收中斷的 Verification Run；M2 |
+| RUNNING → REVIEW | `review request`：WORK_ITEM policy、ACTIVE Goal、無 OPEN Gate、最新 PASS 是 current Candidate 且晚於任何 Human Review；ADR-0023 |
 | REVIEW → VERIFYING | 由明確的 `verify` 命令觸發；stale 本身不改變狀態；M2 |
 | REVIEW → RUNNING | Human Review REJECTED；M3 |
 | REVIEW → DONE | `WORK_ITEM` policy：同一 Candidate 的最新 Verification 為 PASS 且最新 Human Review 為 APPROVED，且無 unresolved Gate；由 `review approve` 在同一交易內達成；M3 |
@@ -212,7 +212,7 @@ Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_r
 
 ### P0-003 Actionable Next
 
-`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING；可驗證條件成立且 candidate stale 的 REVIEW；可合法前進的工作——已 READY 者建議 `start`，PENDING 但依賴已滿足者建議 `reconcile`，兩者共用同一個 created-at／numeric-ID 排序與同一個 `advanceable` 判準；再來才是 GOAL-policy 下 candidate stale 的 VERIFIED 重驗。GOAL policy 每換一個 Candidate 都會讓先前 VERIFIED 變 stale，若讓它們永遠優先，連續任務會在每一步重驗整條歷史；延後不放寬 freshness，Goal final review boundary 仍要求每件工作都有匹配目前 Candidate 的 PASS，欠下的重驗必須在總審前補完。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；其餘 RUNNING 稱為 resume。REVIEW／VERIFIED 的 freshness 一律復用 Candidate identity：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
+`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING；可驗證條件成立且 candidate stale 的 REVIEW；可合法前進的工作——已 READY 者建議 `start`，PENDING 但依賴已滿足者建議 `reconcile`，兩者共用同一個 created-at／numeric-ID 排序與同一個 `advanceable` 判準；再來才是 GOAL-policy 下 candidate stale 的 VERIFIED 重驗。GOAL policy 每換一個 Candidate 都會讓先前 VERIFIED 變 stale，若讓它們永遠優先，連續任務會在每一步重驗整條歷史；延後不放寬 freshness，Goal final review boundary 仍要求每件工作都有匹配目前 Candidate 的 PASS，欠下的重驗必須在總審前補完。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；PASS 留在 RUNNING，直到 agent 完成 AC audit 後明確執行 `review request`。REVIEW／VERIFIED 的 freshness 一律復用 Candidate identity：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
 
 Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW／VERIFIED 是否仍可重驗由 `Verifiable` 決定，READY 是否可開始、PENDING 是否可恢復都由同一個 `advanceable` predicate 決定——這也是 `next` 不會推薦一個 `reconcile` 隨即回報 unchanged 的原因。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、fresh PASS REVIEW 缺 Work Item Human Review，或完整 Goal candidate 等待 final review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
 

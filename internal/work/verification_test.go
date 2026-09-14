@@ -68,8 +68,8 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 	if pass.WorkItemID != "WI-001" || pass.StoryRef != "specs/stories/a" || pass.Repository != "/repo" {
 		t.Fatalf("evidence lost its bindings: %#v", pass)
 	}
-	if state.WorkItems[0].Status != Review {
-		t.Fatalf("PASS left work as %s, want REVIEW", state.WorkItems[0].Status)
+	if state.WorkItems[0].Status != Running {
+		t.Fatalf("PASS left work as %s, want RUNNING", state.WorkItems[0].Status)
 	}
 
 	if err := state.BeginVerification("WI-001", "def456", "/tmp/wt", "", now); err != nil {

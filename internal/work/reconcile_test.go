@@ -473,6 +473,7 @@ func TestActionableNextKeepsStaleWorkItemReviewAheadOfAdvanceableWork(t *testing
 	if _, err := state.RecordVerification(reviewing.ID, revisionA, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
+	submitForReview(t, &state, reviewing.ID, now)
 	if state.WorkItemStatus(reviewing.ID) != Review {
 		t.Fatalf("%s = %s, want REVIEW", reviewing.ID, state.WorkItemStatus(reviewing.ID))
 	}
