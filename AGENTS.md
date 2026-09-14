@@ -50,6 +50,8 @@
 
 **測試的註解不算數，斷言才算數。** M4 有一條測試，註解寫「同一 revision 上標不同 PR 的兩筆 review 仍互相取代」、變數也叫 `rejecting`，但整段只記了一筆 review。它照樣通過，exit checklist 也照樣被勾成完成。寫完一條測試後讀一遍：註解宣稱的事，斷言真的驗到了嗎。
 
+**`ps` 讀不到參數時不報錯。** macOS 的 `ps` 會改印 `(sh)` 這種括號包住的 accounting name，退出碼 0，那一行看起來就是一條正常的 command。括號渲染本身是這台機器上看得到的（`ps -axo pid=,args=` 會出現 `86853 (git)` 這種一閃而過的行）；`internal/agent` 的 worker 識別在 CI 上失敗過一次——一個剛啟動、還活著的 worker 被判成 `UNRELATED`，本機重現不了——成因是推論而非實測。括號形式必須當成「再問一次」而不是一條 command——ADR-0020。
+
 **驗收條件可能與 ADR 抵觸。** M4 的票 03 原本寫「同一件工作在 HEAD 改變後重新 verify 與 approve」——那需要 reopen，而 ADR-0006 說 DONE 是終態。實作前把每一條驗收條件對一次 ADR，不要因為它寫在 ticket 上就假定它成立。
 
 **`status` 的每一行都有人在測。** 改輸出格式會打到 `integration_test.go` 一票斷言。這是刻意的：ADR-0008 要求 `status` 不能對未完成的原因沉默。
