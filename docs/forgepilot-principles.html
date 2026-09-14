@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ForgePilot Protocol: Deterministic Engineering Control Plane</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;1,6..72,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* 空間深淺多維度層次系統 (Forge Flow Protocol Design System) */
+      --l0-canvas: #07090C;
+      --l1-subfloor: #0D1016;
+      --l2-surface: #141820;
+      --l3-elevated: #1C222E;
+      --l4-overlay: #252D3D;
+
+      --border-subtle: rgba(255, 255, 255, 0.05);
+      --border-edge: rgba(255, 255, 255, 0.09);
+      --border-bright: rgba(255, 255, 255, 0.18);
+      --specular-line: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+
+      --shadow-ambient: 0 30px 60px -15px rgba(0, 0, 0, 0.7);
+      --shadow-drop: 0 16px 32px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-edge);
+      --shadow-deep: 0 25px 50px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px var(--border-edge);
+
+      --text-pure: #FFFFFF;
+      --text-main: #E2E8F0;
+      --text-muted: #94A3B8;
+      --text-faint: #64748B;
+
+      --accent-emerald: #10B981;
+      --accent-emerald-glow: rgba(16, 185, 129, 0.18);
+      --accent-cyan: #38BDF8;
+      --accent-cyan-glow: rgba(56, 189, 248, 0.18);
+      --accent-amber: #F59E0B;
+      --accent-amber-glow: rgba(245, 158, 11, 0.18);
+      --accent-rose: #F43F5E;
+      --accent-rose-glow: rgba(244, 63, 94, 0.18);
+      --accent-purple: #A855F7;
+      --accent-purple-glow: rgba(168, 85, 247, 0.18);
+
+      --font-ui: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-serif: "Newsreader", Georgia, serif;
+      --font-mono: "Geist Mono", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--l0-canvas);
+      color: var(--text-main);
+      font-family: var(--font-ui);
+      font-size: 16px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+      
+      background-image: 
+        radial-gradient(ellipse 900px 500px at 50% -80px, rgba(16, 185, 129, 0.12) 0%, transparent 80%),
+        radial-gradient(circle 800px at 85% 60%, rgba(14, 30, 48, 0.35) 0%, transparent 70%);
+      background-attachment: fixed;
+    }
+
+    /* 頂部控制列 */
+    header.deck-bar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(13, 16, 22, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border-edge);
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+      padding: 0.85rem 3rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand-meta {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+
+    .brand-name {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 0.92rem;
+      color: var(--text-pure);
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      text-decoration: none;
+    }
+
+    .status-beacon {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-emerald);
+      box-shadow: 0 0 12px var(--accent-emerald);
+      animation: pulse 2.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(0.9); }
+    }
+
+    .brand-version {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-faint);
+      padding-left: 1.25rem;
+      border-left: 1px solid var(--border-subtle);
+    }
+
+    .deck-controls {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+    }
+
+    .deck-nav {
+      display: flex;
+      gap: 1rem;
+    }
+
+    .deck-nav a {
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    .deck-nav a:hover, .deck-nav a.active {
+      color: var(--text-pure);
+      background: var(--border-subtle);
+    }
+
+    .hud-counter {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-faint);
+      padding: 0.25rem 0.6rem;
+      background: var(--l2-surface);
+      border: 1px solid var(--border-edge);
+      border-radius: 4px;
+    }
+
+    .present-btn {
+      background: linear-gradient(180deg, var(--l3-elevated) 0%, var(--l2-surface) 100%);
+      color: var(--accent-emerald);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.45rem 0.9rem;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      box-shadow: var(--specular-line), 0 4px 12px rgba(0, 0, 0, 0.4);
+      transition: all 0.2s ease;
+    }
+
+    .present-btn:hover {
+      background: var(--l3-elevated);
+      border-color: var(--accent-emerald);
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+      transform: translateY(-1px);
+    }
+
+    .present-btn kbd {
+      background: var(--l1-subfloor);
+      border: 1px solid var(--border-bright);
+      padding: 0.1rem 0.35rem;
+      border-radius: 3px;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    /* 幻燈片容器 */
+    section.slide-container {
+      min-height: calc(100vh - 60px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 4rem 3.5rem;
+      max-width: 1380px;
+      margin: 0 auto;
+      border-bottom: 1px solid var(--border-subtle);
+      position: relative;
+    }
+
+    .slide-index-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      color: var(--accent-emerald);
+      margin-bottom: 1.25rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: var(--accent-emerald-glow);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      padding: 0.3rem 0.8rem;
+      border-radius: 4px;
+      width: fit-content;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+
+    h1.deck-title {
+      font-size: 3.6rem;
+      font-weight: 600;
+      letter-spacing: -0.04em;
+      line-height: 1.12;
+      color: var(--text-pure);
+      margin-bottom: 1.25rem;
+      text-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    h2.slide-title {
+      font-size: 2.5rem;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      color: var(--text-pure);
+      margin-bottom: 0.85rem;
+      text-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    p.deck-summary {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      max-width: 900px;
+      margin-bottom: 2.5rem;
+    }
+
+    /* 箴言 Banner */
+    .axiom-banner {
+      background: linear-gradient(180deg, var(--l3-elevated) 0%, var(--l2-surface) 100%);
+      border: 1px solid var(--border-bright);
+      border-left: 4px solid var(--accent-emerald);
+      box-shadow: var(--specular-line), var(--shadow-deep);
+      padding: 2rem 2.5rem;
+      border-radius: 8px;
+      margin: 2rem 0;
+      position: relative;
+    }
+
+    .axiom-banner.warn {
+      border-left-color: var(--accent-amber);
+    }
+
+    .axiom-banner p {
+      font-family: var(--font-serif);
+      font-size: 1.55rem;
+      font-style: italic;
+      color: var(--text-pure);
+      line-height: 1.45;
+    }
+
+    /* 對照面板 (Bad vs Good) */
+    .engine-panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--shadow-deep);
+      margin: 2rem 0;
+      border: 1px solid var(--border-edge);
+    }
+
+    .engine-side {
+      padding: 2.75rem;
+      position: relative;
+    }
+
+    .engine-side:first-child {
+      background: var(--l1-subfloor);
+      border-right: 1px solid var(--border-edge);
+      box-shadow: inset 4px 4px 20px rgba(0, 0, 0, 0.4);
+    }
+
+    .engine-side:last-child {
+      background: linear-gradient(180deg, var(--l2-surface) 0%, var(--l1-subfloor) 100%);
+      box-shadow: var(--specular-line);
+    }
+
+    .side-header {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1.25rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 4px;
+    }
+
+    .side-header.bad {
+      color: var(--accent-rose);
+      background: rgba(244, 63, 94, 0.12);
+      border: 1px solid rgba(244, 63, 94, 0.25);
+    }
+
+    .side-header.good {
+      color: var(--accent-emerald);
+      background: var(--accent-emerald-glow);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .engine-side h3 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text-pure);
+      margin-bottom: 1rem;
+    }
+
+    .engine-side p {
+      font-size: 1.02rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+      margin-bottom: 1rem;
+    }
+
+    .engine-side ul {
+      list-style: none;
+      margin-top: 1rem;
+    }
+
+    .engine-side li {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      padding: 0.45rem 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+    }
+
+    .engine-side.bad-side li::before {
+      content: "✕";
+      color: var(--accent-rose);
+      font-family: var(--font-mono);
+      font-weight: bold;
+    }
+
+    .engine-side.good-side li::before {
+      content: "✓";
+      color: var(--accent-emerald);
+      font-family: var(--font-mono);
+      font-weight: bold;
+    }
+
+    /* 三欄 / 四欄網格卡片 */
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.25rem;
+      margin: 2rem 0;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin: 2rem 0;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin: 2rem 0;
+    }
+
+    @media (max-width: 1024px) {
+      .grid-4 { grid-template-columns: repeat(2, 1fr); }
+      .grid-3 { grid-template-columns: 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .engine-panel { grid-template-columns: 1fr; }
+      .engine-side:first-child { border-right: none; border-bottom: 1px solid var(--border-edge); }
+    }
+
+    .feature-card {
+      background: linear-gradient(180deg, var(--l2-surface) 0%, var(--l1-subfloor) 100%);
+      border: 1px solid var(--border-edge);
+      border-radius: 8px;
+      padding: 2rem;
+      box-shadow: var(--specular-line), var(--shadow-drop);
+      position: relative;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .feature-card:hover {
+      border-color: var(--border-bright);
+      transform: translateY(-3px);
+      box-shadow: var(--specular-line), 0 20px 40px -10px rgba(0, 0, 0, 0.7);
+    }
+
+    .card-badge {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      background: var(--accent-cyan-glow);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      padding: 0.25rem 0.65rem;
+      border-radius: 4px;
+      display: inline-block;
+      margin-bottom: 1.25rem;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+
+    .card-badge.emerald {
+      color: var(--accent-emerald);
+      background: var(--accent-emerald-glow);
+      border-color: rgba(16, 185, 129, 0.25);
+    }
+
+    .card-badge.amber {
+      color: var(--accent-amber);
+      background: var(--accent-amber-glow);
+      border-color: rgba(245, 158, 11, 0.25);
+    }
+
+    .card-badge.purple {
+      color: var(--accent-purple);
+      background: var(--accent-purple-glow);
+      border-color: rgba(168, 85, 247, 0.25);
+    }
+
+    .feature-card h3 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      color: var(--text-pure);
+      margin-bottom: 0.75rem;
+    }
+
+    .feature-card p {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* 流程時序橫條 (Flow Timeline) */
+    .flow-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1rem;
+      margin: 2.25rem 0;
+    }
+
+    @media (max-width: 900px) {
+      .flow-row { grid-template-columns: 1fr; }
+    }
+
+    .flow-step {
+      background: var(--l2-surface);
+      border: 1px solid var(--border-edge);
+      border-radius: 8px;
+      padding: 1.5rem;
+      box-shadow: var(--specular-line), var(--shadow-drop);
+      position: relative;
+    }
+
+    .flow-step-num {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      margin-bottom: 0.6rem;
+      letter-spacing: 0.08em;
+    }
+
+    .flow-step h4 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-pure);
+      margin-bottom: 0.5rem;
+    }
+
+    .flow-step p {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      line-height: 1.55;
+    }
+
+    .flow-badge {
+      display: inline-block;
+      margin-top: 0.85rem;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-faint);
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 0.6rem;
+      width: 100%;
+    }
+
+    /* 終端程式碼視圖 */
+    .code-terminal {
+      background: var(--l1-subfloor);
+      border: 1px solid var(--border-edge);
+      border-radius: 8px;
+      overflow: hidden;
+      margin: 1.75rem 0;
+      box-shadow: var(--shadow-deep);
+    }
+
+    .term-header {
+      background: var(--l2-surface);
+      padding: 0.65rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-subtle);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-faint);
+    }
+
+    .term-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .term-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    pre.code-body {
+      padding: 1.5rem 1.75rem;
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+      line-height: 1.7;
+      color: var(--text-main);
+      overflow-x: auto;
+    }
+
+    pre.code-body code {
+      background: none;
+      padding: 0;
+      font-family: inherit;
+    }
+
+    .c-comment { color: #64748B; font-style: italic; }
+    .c-keyword { color: #F43F5E; font-weight: 600; }
+    .c-func { color: #38BDF8; }
+    .c-str { color: #10B981; }
+    .c-num { color: #F59E0B; }
+    .c-type { color: #A855F7; }
+
+    /* 邊界對照表 */
+    .table-container {
+      overflow-x: auto;
+      margin: 2rem 0;
+      background: var(--l1-subfloor);
+      border: 1px solid var(--border-edge);
+      border-radius: 8px;
+      box-shadow: var(--shadow-deep);
+    }
+
+    table.matrix-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+      min-width: 600px;
+    }
+
+    table.matrix-table th {
+      background: var(--l2-surface);
+      padding: 1rem 1.5rem;
+      text-align: left;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border-edge);
+    }
+
+    table.matrix-table td {
+      padding: 1.15rem 1.5rem;
+      border-bottom: 1px solid var(--border-subtle);
+      vertical-align: top;
+      line-height: 1.6;
+    }
+
+    table.matrix-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* 全螢幕簡報樣式切換 */
+    body.is-presenting {
+      overflow-y: scroll;
+      scroll-snap-type: y mandatory;
+    }
+
+    body.is-presenting section.slide-container {
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+      min-height: 100vh;
+      padding: 5rem 6rem;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 頂部控制列 -->
+  <header class="deck-bar">
+    <div class="brand-meta">
+      <a href="#slide-0" class="brand-name">
+        <div class="status-beacon"></div>
+        FORGEPILOT PROTOCOL
+      </a>
+      <div class="brand-version">DETERMINISTIC STATE ENGINE · M1–M5 CERTIFIED</div>
+    </div>
+
+    <div class="deck-controls">
+      <nav class="deck-nav">
+        <a href="#slide-0">總覽</a>
+        <a href="#slide-1">對照</a>
+        <a href="#slide-2">分層</a>
+        <a href="#slide-3">儲存</a>
+        <a href="#slide-4">狀態機</a>
+        <a href="#slide-5">五重防線</a>
+        <a href="#slide-6">候選隔離</a>
+        <a href="#slide-7">邊界</a>
+      </nav>
+
+      <div class="hud-counter" id="hudCounter">01 / 08</div>
+
+      <button class="present-btn" id="fsToggleBtn" onclick="togglePresentationMode()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        全螢幕簡報 <kbd>F</kbd>
+      </button>
+    </div>
+  </header>
+
+  <!-- SLIDE 0: 封面與核心定義 -->
+  <section class="slide-container" id="slide-0">
+    <div class="slide-index-tag">FORGEPILOT TECHNICAL SPECIFICATION · KEYNOTE DECK</div>
+    <h1 class="deck-title">ForgePilot：工程控制平面<br>與確定性狀態引擎</h1>
+    <p class="deck-summary">
+      它不寫業務程式碼、不用外部資料庫、不跑 Daemon，也不依賴網路。它是一套只用 Go 標準庫構建的本機法官，專門管理工程工作的可執行性、進度佇列與決策證據，讓「做完了」這句話真正具備物理與法律約束力。
+    </p>
+
+    <div class="axiom-banner">
+      <p>「當 Agent 面對歧義時最容易做的事，是自己選一個繼續往下寫；而『跑過測試了』如果沒有綁定確切不可變的 Commit SHA，它就只是一句無法查證的話。」</p>
+    </div>
+
+    <div class="grid-4" style="margin-top: 2rem;">
+      <div class="feature-card">
+        <span class="card-badge emerald">POSIX FLOCK</span>
+        <h3>核心互斥保證</h3>
+        <p>利用 OS 檔案系統鎖原語，跨 Process 排他互斥，進程崩潰時核心自動釋放，徹底杜絕死鎖與並發競爭。</p>
+      </div>
+      <div class="feature-card">
+        <span class="card-badge">SINGLE SNAPSHOT</span>
+        <h3>原子狀態快照</h3>
+        <p>單一 JSON 涵蓋 Goal、WorkItem、Evidence 與 Gate，透過 <code>os.Rename</code> POSIX 原語原子替換，零殘留破壞狀態。</p>
+      </div>
+      <div class="feature-card">
+        <span class="card-badge amber">ORTHOGONAL GATE</span>
+        <h3>正交阻擋關卡</h3>
+        <p>「阻擋不是一種狀態」（ADR-0007）。決策關卡獨立於生命週期，必須提供 2 個以上選項，由人類明確抉擇。</p>
+      </div>
+      <div class="feature-card">
+        <span class="card-badge purple">NO "DONE" COMMAND</span>
+        <h3>無完成指令</h3>
+        <p>沒有 <code>forgepilot done</code> 指令。DONE 只能是五道物理條件在同一次交易內同時成立時的客觀必然結果。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 1: 核心對照：Agent 妄想 vs 物理法官 -->
+  <section class="slide-container" id="slide-1">
+    <div class="slide-index-tag">PARADIGM SHIFT · ARCHITECTURAL CONTRAST</div>
+    <h2 class="slide-title">工程失控的本質：狀態活在對話裡</h2>
+    <p class="deck-summary">
+      在 AI 輔助軟體工程中，最致命的不是模型寫錯程式碼，而是「任務邊界混亂」與「口頭宣稱完成」。
+    </p>
+
+    <div class="engine-panel">
+      <div class="engine-side bad-side">
+        <div class="side-header bad">傳統 Agent / 聊天模式的脆弱陷阱</div>
+        <h3>對話上下文驅動（Ephemeral Context）</h3>
+        <p>依賴 LLM 在 Context Window 裡記住哪些做完、哪些卡住。一旦 Context Compaction 或開啟新 Session，狀態瞬間失真遺失。</p>
+        <ul>
+          <li>自我評估測試結果（「我已經跑過測試且通過了」）</li>
+          <li>遇到架構分歧時自行猜測選擇，缺乏人為審計痕跡</li>
+          <li>工作尚未驗證即可口頭宣稱「已完成」，後續任務違規偷跑</li>
+          <li>測試直接在骯髒的工作區執行，結果受未存檔檔案污染</li>
+          <li>跨任務依賴關係混亂，常出現依賴項未就緒即開工</li>
+        </ul>
+      </div>
+
+      <div class="engine-side good-side">
+        <div class="side-header good">ForgePilot 確定性控制平面（Ground Truth）</div>
+        <h3>本機檔案系統鎖 + 狀態機驅動</h3>
+        <p>純值狀態機與受 POSIX 鎖保護的物理磁碟快照。任何動作都必須有不可篡改的證據（Evidence）為憑。</p>
+        <ul>
+          <li>測試結果必須來自隔離 Worktree 的 <code>make verify</code> 實體 Exit Code 0</li>
+          <li>架構決策必須掛載 Gate，列出具體選項並由 Human Decision 留痕簽核</li>
+          <li>沒有任何指令能手動將工作設為 DONE，條件缺一不可</li>
+          <li>透過 Git Snapshot 隔離環境測試，不改動 HEAD 也絕不受雜檔干擾</li>
+          <li>DAG 嚴格依賴拓撲：前置工作未 DONE，下游永遠死守 PENDING</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 2: 四層架構與單向流動 -->
+  <section class="slide-container" id="slide-2">
+    <div class="slide-index-tag">LAYER BOUNDARIES · COHESIVE PACKAGES</div>
+    <h2 class="slide-title">四層模組分層與責任單向性</h2>
+    <p class="deck-summary">
+      Go 標準庫實作。所有外部 I/O、Subprocess 與檔案系統操作被隔離在外圍，純狀態機位於核心，保證 100% 確定性可測。
+    </p>
+
+    <div class="grid-2">
+      <div class="feature-card">
+        <span class="card-badge">LAYER 1 · PRESENTATION</span>
+        <h3>CLI 表現層 (internal/cli)</h3>
+        <p><strong>責任：</strong>終端參數解析、Flag 驗證、人類可讀排版與 Exit Code 映射。</p>
+        <p style="margin-top: 0.5rem; font-size: 0.88rem; color: var(--text-faint);">
+          ✘ 絕不自行判定狀態流轉是否合法。<br>
+          ✔ 僅作為控制膠水，排程調度 Storage、Repository 與 Work。
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <span class="card-badge emerald">LAYER 2 · PERSISTENCE</span>
+        <h3>Storage 交易層 (internal/storage)</h3>
+        <p><strong>責任：</strong>OS 檔案鎖排他控制、單一 JSON 快照反序列化、原子寫入替換。</p>
+        <p style="margin-top: 0.5rem; font-size: 0.88rem; color: var(--text-faint);">
+          ✔ 唯一的儲存入口：<code>storage.Update(root, func(*work.State))</code>。<br>
+          ✔ 跨實體原子交易，杜絕讀寫競爭與局部殘留狀態。
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <span class="card-badge amber">LAYER 3 · ADAPTER</span>
+        <h3>Repository 轉接層 (internal/repository)</h3>
+        <p><strong>責任：</strong>專案中<strong>唯一允許呼叫 Git 的模組</strong>。</p>
+        <p style="margin-top: 0.5rem; font-size: 0.88rem; color: var(--text-faint);">
+          ✔ 負責私有 Index 快照擷取 (Candidate Snapshot)。<br>
+          ✔ 建立臨時隔離的 detached worktree、解析 Candidate Runtime 要求。
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <span class="card-badge purple">LAYER 4 · CORE</span>
+        <h3>純領域核心 (internal/work)</h3>
+        <p><strong>責任：</strong>純狀態機、依賴 DAG、候選選取 (Next) 與轉移防護。</p>
+        <p style="margin-top: 0.5rem; font-size: 0.88rem; color: var(--text-faint);">
+          <strong>零 Interface、零檔案讀寫、零 Git、零 Process 呼叫。</strong><br>
+          所有外部事實（時間、Exit Code）一律以純值參數傳入。
+        </p>
+      </div>
+    </div>
+
+    <div class="axiom-banner" style="margin-top: 1rem;">
+      <p>「如果一個狀態機需要 Mock 檔案系統或模擬 Git 才能測試，那它的責任邊界就已經混濁了。」</p>
+    </div>
+  </section>
+
+  <!-- SLIDE 3: 儲存引擎底層原理 -->
+  <section class="slide-container" id="slide-3">
+    <div class="slide-index-tag">STORAGE ENGINE · ACID ATOMICITY</div>
+    <h2 class="slide-title">狀態是怎麼管理的？底層 8 步原子交易</h2>
+    <p class="deck-summary">
+      無資料庫架構。所有狀態集中於 <code>.forgepilot/state.json</code>，透過 POSIX 系統呼叫達成嚴格的一致性。
+    </p>
+
+    <div class="code-terminal">
+      <div class="term-header">
+        <div class="term-dots">
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+        </div>
+        <span>internal/storage/storage.go · Atomic Read-Modify-Write Pipeline</span>
+      </div>
+      <pre class="code-body"><code><span class="c-comment">// storage.Update 執行的 8 步無損寫入管線</span>
+<span class="c-keyword">func</span> <span class="c-func">Update</span>(root <span class="c-type">string</span>, operation <span class="c-keyword">func</span>(*work.<span class="c-type">State</span>) <span class="c-type">error</span>) <span class="c-type">error</span> {
+    <span class="c-comment">// [1] 取得 OS 核心檔案排他鎖 (Crash-Safe，進程終止由核心自動解除)</span>
+    <span class="c-keyword">return</span> withLock(directory, <span class="c-keyword">func</span>() <span class="c-type">error</span> {
+        <span class="c-comment">// [2] 載入並反序列化當前完整快照</span>
+        state, _ := load(directory)
+
+        <span class="c-comment">// [3] 執行純記憶體領域邏輯 (狀態推進、產生 Evidence、連鎖解鎖)</span>
+        <span class="c-keyword">if</span> err := operation(&state); err != nil { <span class="c-keyword">return</span> err }
+
+        <span class="c-comment">// [4] 全域一致性防護檢查 (拒絕 cycle、重複依賴、無效關聯)</span>
+        <span class="c-keyword">if</span> err := state.<span class="c-func">Validate</span>(); err != nil { <span class="c-keyword">return</span> err }
+
+        <span class="c-comment">// [5] 寫入隔離的暫存檔案: .state-*.tmp</span>
+        temporary, _ := os.CreateTemp(directory, <span class="c-str">".state-*.tmp"</span>)
+
+        <span class="c-comment">// [6] 硬體刷盤 (fsync)，強制實體磁區落盤</span>
+        temporary.<span class="c-func">Sync</span>()
+
+        <span class="c-comment">// [7] POSIX 原子重命名: os.Rename(tmp, "state.json")</span>
+        os.<span class="c-func">Rename</span>(temporary.Name(), destination)
+
+        <span class="c-comment">// [8] 目錄元數據刷盤 & 釋放 syscall.Flock(LOCK_UN)</span>
+        <span class="c-keyword">return</span> directoryHandle.<span class="c-func">Sync</span>()
+    })
+}</code></pre>
+    </div>
+
+    <div class="grid-2">
+      <div class="feature-card">
+        <span class="card-badge emerald">零部分狀態 (NO PARTIAL STATE)</span>
+        <h3>徹底消滅狀態撕裂</h3>
+        <p>由於 <code>os.Rename</code> 在 POSIX 規範中是原子操作，任何外圍行程讀取時，要麼讀到前一個完整的 JSON，要麼讀到更新後的完整 JSON，絕對不可能讀到寫了一半被截斷的壞檔。</p>
+      </div>
+      <div class="feature-card">
+        <span class="card-badge amber">跨實體交易邊界</span>
+        <h3>Goal + WorkItem + Evidence + Gate 同步</h3>
+        <p>四者共用同一次受鎖替換。「完成一件工作」與「解鎖下游相依任務」必然落在同一次交易內，讀取者永遠不會看到「A 已 DONE 但依賴 A 的 B 仍處於 PENDING」的中間狀態。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 4: 工作狀態生命週期與正交關卡 -->
+  <section class="slide-container" id="slide-4">
+    <div class="slide-index-tag">STATE MACHINE · ORTHOGONAL DECISION GATES</div>
+    <h2 class="slide-title">工作狀態流轉與正交 Gate 阻擋模型</h2>
+    <p class="deck-summary">
+      Work Item 的狀態精確描述其在工程生命週期中的坐標；而「阻擋」則由獨立的 Gate 表達，兩者維度正交。
+    </p>
+
+    <div class="flow-row">
+      <div class="flow-step">
+        <div class="flow-step-num">STAGE 01</div>
+        <h4>PENDING</h4>
+        <p>工作已建立，但前置依賴尚未全部達成 DONE。佇列靜態等待。</p>
+        <span class="flow-badge">條件：等待依賴推進</span>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-step-num">STAGE 02</div>
+        <h4>READY</h4>
+        <p>所有前置依賴全部達成 DONE，且無未解 Gate。可被 <code>next</code> 查詢認領。</p>
+        <span class="flow-badge">動作：forgepilot start</span>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-step-num">STAGE 03</div>
+        <h4>RUNNING</h4>
+        <p>工程師或 AI Agent 正在撰寫程式碼與單元測試。進行實質變更。</p>
+        <span class="flow-badge">動作：forgepilot verify</span>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-step-num">STAGE 04</div>
+        <h4>VERIFYING</h4>
+        <p>已鎖定 Candidate，正在隔離 Worktree 執行專案自身的 <code>make verify</code>。</p>
+        <span class="flow-badge">產出：PASS Evidence</span>
+      </div>
+
+      <div class="flow-step">
+        <div class="flow-step-num">STAGE 05</div>
+        <h4>REVIEW ➔ DONE</h4>
+        <p>測試通過，等待人工審查。審查核准且條件全足時瞬間進入 DONE 終態。</p>
+        <span class="flow-badge">終態：連鎖解鎖下游</span>
+      </div>
+    </div>
+
+    <div class="engine-panel" style="margin-top: 1rem;">
+      <div class="engine-side bad-side">
+        <div class="side-header bad">常見反模式：把阻擋當成狀態</div>
+        <h3>引入 BLOCKED 或 WAITING_HUMAN 狀態</h3>
+        <p>一旦狀態欄被 <code>BLOCKED</code> 佔用，系統就必須被迫發明額外欄位去記住「被擋之前它究竟是 RUNNING 還是 VERIFYING」，在恢復時容易引發嚴重的狀態覆寫漏洞。</p>
+      </div>
+
+      <div class="engine-side good-side">
+        <div class="side-header good">ForgePilot 原則 (ADR-0007)</div>
+        <h3>Gate 與狀態完全正交</h3>
+        <p>工作仍處於其正常狀態（如 RUNNING），阻擋僅由「該工作名下是否有未解除的 Gate」表達。Gate 提出時必須列出至少 2 個具體選項，由人類做出 Human Decision 留痕解除。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 5: 完成是條件的推論，不是一個指令 -->
+  <section class="slide-container" id="slide-5">
+    <div class="slide-index-tag">COMPLETION RIGOR · ZERO SHORTCUTS</div>
+    <h2 class="slide-title">完成是條件的結果，不是一個指令</h2>
+    <p class="deck-summary">
+      產品中沒有 <code>done</code>，沒有 <code>complete &lt;id&gt;</code>，也沒有測試專用的跳步開關。唯有五道條件全部滿足，DONE 才會由系統自動推論達成。
+    </p>
+
+    <div class="code-terminal">
+      <div class="term-header">
+        <div class="term-dots">
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+        </div>
+        <span>internal/work/completion.go · CompletionBlockers Evaluation</span>
+      </div>
+      <pre class="code-body"><code><span class="c-keyword">func</span> (s *State) <span class="c-func">CompletionBlockers</span>(id <span class="c-type">string</span>) []<span class="c-type">string</span> {
+    <span class="c-comment">// [條件 1] 最新人類審查必須存在且為 APPROVED</span>
+    review, reviewed := s.LatestReview(id)
+    <span class="c-keyword">if</span> !reviewed || review.Result != Approved { blockers = <span class="c-func">append</span>(blockers, ...) }
+
+    <span class="c-comment">// [條件 2] 最新驗證必須存在且為 PASS</span>
+    verification, verified := s.LatestVerification(id)
+    <span class="c-keyword">if</span> !verified || verification.Result != Pass { blockers = <span class="c-func">append</span>(blockers, ...) }
+
+    <span class="c-comment">// [條件 3] 雙向版本 SHA 必須 100% 精確相等 (同一 Commit 上既測過也被審過)</span>
+    <span class="c-keyword">if</span> reviewed && verified && verification.Revision != review.Revision {
+        blockers = <span class="c-func">append</span>(blockers, <span class="c-str">"the latest PASS is at revision %s but approval is at %s"</span>)
+    }
+
+    <span class="c-comment">// [條件 4] 工作名下不能有任何未解 Gate</span>
+    <span class="c-keyword">if</span> count := s.OpenGateCount(id); count > 0 { blockers = <span class="c-func">append</span>(blockers, ...) }
+
+    <span class="c-comment">// [條件 5] 所屬目標必須為 ACTIVE</span>
+    <span class="c-keyword">if</span> goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive { ... }
+
+    <span class="c-keyword">return</span> blockers <span class="c-comment">// 唯有為空切片時，系統才放行進入 DONE</span>
+}</code></pre>
+    </div>
+
+    <div class="grid-3">
+      <div class="feature-card">
+        <span class="card-badge emerald">CASCADE READY</span>
+        <h3>同交易連鎖解鎖</h3>
+        <p>當某件工作完成時，在同一次交易內自動遍歷 DAG 執行 <code>s.RefreshReady()</code>，所有下游依賴滿足的工作立即翻轉為 READY，佇列自動推進。</p>
+      </div>
+      <div class="feature-card">
+        <span class="card-badge amber">EXACT-HEAD PR (M4)</span>
+        <h3>PR 精確 HEAD 整合</h3>
+        <p>Human Review 支援掛載 PR Reference（<code>owner/repo#123</code>），一旦 PR 產生新的 Commit，舊的 Review 立即過期失效，必須重審。</p>
+      </div>
+      <div class="feature-card">
+        <span class="card-badge purple">NO SILENCE</span>
+        <h3>狀態不能沉默 (ADR-0008)</h3>
+        <p>因為沒有手動 complete 指令，<code>status</code> 指令絕不能對未完成的原因保持沉默，必須具體印出到底差哪一道條件（例如差審查或 SHA 不合）。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 6: 候選隔離與確定性運行時 -->
+  <section class="slide-container" id="slide-6">
+    <div class="slide-index-tag">CANDIDATE ISOLATION · DETERMINISTIC RUNTIME</div>
+    <h2 class="slide-title">Candidate 快照隔離與確定性驗證</h2>
+    <p class="deck-summary">
+      ForgePilot 絕不在當前工作區直接執行驗證。工作區的雜檔、未提交變更與 shell PATH 污染，是測試不可信的罪魁禍首。
+    </p>
+
+    <div class="grid-3">
+      <div class="feature-card">
+        <span class="card-badge">P0-001 CANDIDATE SNAPSHOT</span>
+        <h3>私有 Index 快照擷取</h3>
+        <p>使用 <code>verify --snapshot</code> 時，利用 Git Private Index 將當前暫存/未暫存變更直接壓入 <code>refs/forgepilot/snapshots/*</code>。</p>
+        <p style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-faint);">
+          ✔ 零 WIP Commit 污染 Git Log。<br>
+          ✔ 不動使用者分支、HEAD 與真實工作區。
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <span class="card-badge emerald">ISOLATED WORKTREE</span>
+        <h3>獨立 Detached 工作樹</h3>
+        <p>在 <code>.forgepilot/worktrees/run-*</code> 建立獨立的 detached worktree。驗證完全在乾淨副本中執行，測試結束後自動清理回收。</p>
+        <p style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-faint);">
+          ✔ 驗證輸出串流即時寫入 <code>.forgepilot/logs/</code>。<br>
+          ✔ 即使終端被 Ctrl+C 中斷，也有孤兒回收機制。
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <span class="card-badge amber">P1-004 RUNTIME RESOLUTION</span>
+        <h3>確定性工具鏈解析</h3>
+        <p>主動從 Candidate 內的 <code>.node-version</code>、<code>go.mod</code> 探索 Runtime 契約，並於本機選取相符的二進制工具鏈。</p>
+        <p style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-faint);">
+          ✔ 絕不安裝或竄改使用者全域環境。<br>
+          ✔ 杜絕因不同終端 PATH 預設版本不同導致的測試偏差。
+        </p>
+      </div>
+    </div>
+
+    <div class="axiom-banner">
+      <p>「不可變的程式碼身分（Candidate SHA）＋確定性的運行時版本（Resolved Runtime），才能產生不可篡改的工程證據（Evidence）。」</p>
+    </div>
+  </section>
+
+  <!-- SLIDE 7: 邊界與堅決不做的事 -->
+  <section class="slide-container" id="slide-7">
+    <div class="slide-index-tag">AUTHORITY BOUNDARIES · DISCIPLINED SCOPE</div>
+    <h2 class="slide-title">責任邊界：它做到哪，堅決不做什麼？</h2>
+    <p class="deck-summary">
+      ForgePilot 的力量來自於其嚴苛的克制。以下是經由 14 份 ADR 所確立的鋼鐵邊界。
+    </p>
+
+    <div class="table-container">
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th style="width: 25%;">維度</th>
+            <th style="width: 38%; color: var(--accent-emerald);">ForgePilot 做到哪 (In-Scope)</th>
+            <th style="width: 37%; color: var(--accent-rose);">堅決不做什麼 (Out-of-Scope)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>任務與狀態</strong></td>
+            <td>維護依賴拓撲 DAG，判定任務何時可開工 (READY) 與完成 (DONE)。</td>
+            <td><strong>DONE 絕不允許 Reopen (ADR-0006)</strong>。要重做必須新開 Work Item 留存脈絡。</td>
+          </tr>
+          <tr>
+            <td><strong>需求規格</strong></td>
+            <td>只儲存 <code>story_ref</code> 路徑指針。</td>
+            <td>不複製規格內容，規格完全交由 ForgeFlowV2 或文件管理 (ADR-0013)。</td>
+          </tr>
+          <tr>
+            <td><strong>決策關卡</strong></td>
+            <td>Gate 記錄分歧選項（至少 2 個）與決策者自述審計身分。</td>
+            <td><strong>不做半套認證 (ADR-0005)</strong>。本機 CLI 的身分驗證是假安全，不如誠實記錄。</td>
+          </tr>
+          <tr>
+            <td><strong>網路與外部整合</strong></td>
+            <td>PR Reference (<code>owner/repo#123</code>) 作為審查身分識別。</td>
+            <td><strong>零網路請求 (ADR-0010)</strong>。不呼叫 GitHub API、不查證 PR 是否存在，純離線運作。</td>
+          </tr>
+          <tr>
+            <td><strong>程式碼與交付</strong></td>
+            <td>固定 Candidate SHA，在隔離環境跑 <code>make verify</code> 存證。</td>
+            <td><strong>不代為 Git Merge 或 Push</strong>。DONE 僅代表驗收合格，不等於 Release 授權。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="axiom-banner warn" style="margin-top: 1.5rem;">
+      <p>「ForgePilot 唯一的職責就是當一名剛正不阿的本機法官。它不在乎程式碼是人類寫的還是 AI 寫的，只要證據不足，誰也別想跨過完成這道門。」</p>
+    </div>
+  </section>
+
+  <!-- 簡報互動邏輯引擎 (Presentation Engine JS) -->
+  <script>
+    const slides = document.querySelectorAll('.slide-container');
+    let currentSlide = 0;
+    const hudCounter = document.getElementById('hudCounter');
+    const fsBtn = document.getElementById('fsToggleBtn');
+
+    function updateHud() {
+      const pad = (n) => String(n + 1).padStart(2, '0');
+      hudCounter.textContent = `${pad(currentSlide)} / ${pad(slides.length)}`;
+      
+      // 更新導覽列高亮
+      const navLinks = document.querySelectorAll('.deck-nav a');
+      navLinks.forEach((link, idx) => {
+        if (idx === currentSlide) {
+          link.classList.add('active');
+        } else {
+          link.classList.remove('active');
+        }
+      });
+    }
+
+    function goToSlide(index) {
+      if (index < 0 || index >= slides.length) return;
+      currentSlide = index;
+      slides[currentSlide].scrollIntoView({ behavior: 'smooth' });
+      updateHud();
+    }
+
+    function nextSlide() {
+      if (currentSlide < slides.length - 1) {
+        goToSlide(currentSlide + 1);
+      }
+    }
+
+    function prevSlide() {
+      if (currentSlide > 0) {
+        goToSlide(currentSlide - 1);
+      }
+    }
+
+    // 鍵盤快速鍵監聽 (Keynote Style)
+    window.addEventListener('keydown', (e) => {
+      // 空白鍵、右鍵、下鍵、N 鍵 -> 下一張
+      if (e.code === 'Space' || e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        nextSlide();
+      }
+      // 左鍵、上鍵、P 鍵 -> 上一張
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        prevSlide();
+      }
+      // F 鍵 -> 切換全螢幕
+      else if (e.key.toLowerCase() === 'f' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        togglePresentationMode();
+      }
+      // Escape 鍵 -> 退出全螢幕
+      else if (e.key === 'Escape' && document.fullscreenElement) {
+        document.exitFullscreen();
+      }
+    });
+
+    // 瀏覽器原生物理全螢幕 + 幻燈片吸附
+    function togglePresentationMode() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().then(() => {
+          document.body.classList.add('is-presenting');
+          goToSlide(currentSlide);
+        }).catch(err => {
+          console.warn("Fullscreen request denied, fallback to window presentation");
+          document.body.classList.toggle('is-presenting');
+        });
+      } else {
+        document.exitFullscreen().then(() => {
+          document.body.classList.remove('is-presenting');
+        });
+      }
+    }
+
+    // 監聽全螢幕狀態變更
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement) {
+        document.body.classList.remove('is-presenting');
+      } else {
+        document.body.classList.add('is-presenting');
+      }
+    });
+
+    // 滾動自動偵測當前頁碼
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const index = Array.from(slides).indexOf(entry.target);
+          if (index !== -1) {
+            currentSlide = index;
+            updateHud();
+          }
+        }
+      });
+    }, { threshold: 0.5 });
+
+    slides.forEach(slide => observer.observe(slide));
+    updateHud();
+  </script>
+
+</body>
+</html>

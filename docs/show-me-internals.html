@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ForgePilot 底層原理與工作狀態管理架構手冊</title>
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --panel: #ffffff;
+    --ink: #16150f;
+    --muted: #6b6a63;
+    --faint: #93918a;
+    --line: #e3e0d8;
+    --accent: #0f7b5f;
+    --accent-soft: #e6f2ed;
+    --warn: #a8611a;
+    --warn-soft: #fbf0e2;
+    --stop: #a33045;
+    --stop-soft: #fbe9ec;
+    --blue: #1c64b5;
+    --blue-soft: #eaf1fb;
+    --code-bg: #f4f2ec;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #131310;
+      --panel: #1b1b17;
+      --ink: #ecebe4;
+      --muted: #a3a199;
+      --faint: #7a7871;
+      --line: #302f29;
+      --accent: #4bbd97;
+      --accent-soft: #16332a;
+      --warn: #d9a05e;
+      --warn-soft: #2f2617;
+      --stop: #e08095;
+      --stop-soft: #351f25;
+      --blue: #5b9eed;
+      --blue-soft: #17263c;
+      --code-bg: #201f1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.75;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 56px 24px 120px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 32px; margin-bottom: 48px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px; font-weight: 700;
+  }
+  h1 { font-size: 36px; line-height: 1.25; margin: 0 0 14px; letter-spacing: -.02em; }
+  .lede { font-size: 18px; color: var(--muted); margin: 0; max-width: 68ch; }
+
+  h2 {
+    font-size: 14px; font-family: var(--mono); letter-spacing: .12em;
+    text-transform: uppercase; color: var(--faint);
+    margin: 64px 0 20px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px;
+  }
+  h2 span.idx {
+    color: var(--accent); font-weight: 700;
+  }
+  h3 { font-size: 19px; margin: 32px 0 10px; letter-spacing: -.01em; }
+  p { margin: 0 0 16px; }
+  .muted { color: var(--muted); }
+  code {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--code-bg); padding: 2px 6px; border-radius: 4px;
+  }
+  pre {
+    font-family: var(--mono); font-size: 13px; line-height: 1.65;
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 18px 20px; overflow-x: auto; margin: 0 0 24px;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  /* 視覺卡片與區塊 */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 24px; }
+  @media (max-width: 680px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 20px;
+  }
+  .card h4 { margin: 0 0 8px; font-size: 16px; font-weight: 700; }
+  .card p { font-size: 14.5px; color: var(--muted); margin: 0; }
+
+  .callout {
+    background: var(--accent-soft); border: 1px solid var(--line);
+    border-left: 4px solid var(--accent); border-radius: 6px;
+    padding: 16px 20px; margin: 0 0 24px;
+  }
+  .callout p { margin: 0; font-size: 15px; }
+  .callout .label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 4px; font-weight: 700;
+  }
+  .callout.warn { background: var(--warn-soft); border-left-color: var(--warn); }
+  .callout.warn .label { color: var(--warn); }
+  .callout.stop { background: var(--stop-soft); border-left-color: var(--stop); }
+  .callout.stop .label { color: var(--stop); }
+
+  /* 架構方塊圖 (純 CSS) */
+  .arch-diagram {
+    display: flex; flex-direction: column; gap: 12px; margin: 0 0 28px;
+  }
+  .arch-layer {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .arch-layer.top { border-top: 3px solid var(--blue); }
+  .arch-layer.middle {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    background: transparent; border: none; padding: 0;
+  }
+  @media (max-width: 600px) { .arch-layer.middle { grid-template-columns: 1fr; } }
+  .arch-sub {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .arch-layer.bottom { border-bottom: 3px solid var(--accent); background: var(--accent-soft); }
+  .arch-title {
+    font-family: var(--mono); font-size: 13px; font-weight: 700; margin-bottom: 4px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .arch-desc { font-size: 13.5px; color: var(--muted); margin: 0; }
+  .tag-badge {
+    font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    background: var(--code-bg); border: 1px solid var(--line);
+  }
+
+  /* 表格 */
+  .table-wrap { overflow-x: auto; margin: 0 0 24px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 500px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+
+  /* 流程步驟 */
+  .steps { display: grid; gap: 14px; margin: 0 0 24px; }
+  .step-item {
+    display: grid; grid-template-columns: 36px 1fr; gap: 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 18px;
+  }
+  .step-num {
+    font-family: var(--mono); font-weight: 700; font-size: 14px; color: var(--accent);
+    background: var(--accent-soft); width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step-content h5 { margin: 0 0 4px; font-size: 15px; }
+  .step-content p { margin: 0; font-size: 14px; color: var(--muted); }
+
+  footer {
+    margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line);
+    font-size: 13px; color: var(--faint); font-family: var(--mono);
+    display: flex; justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">ForgePilot · Architecture &amp; State Internals</p>
+  <h1>底層原理與狀態管理架構手冊</h1>
+  <p class="lede">ForgePilot 是一套純標準庫構建的本機工程狀態機與決策證據引擎。它不寫業務程式碼、不用資料庫、不跑背景服務，而是透過嚴格的 POSIX 檔案鎖與純函數狀態機，讓「做完了」這句話真正具備不可篡改的法律約束力。</p>
+</header>
+
+<h2><span class="idx">01</span> 分層邊界與單向依賴</h2>
+<p>系統由四個高內聚 Package 組成。核心原則是：<strong>「所有外圍 I/O 與 Subprocess 隔離在外，純領域狀態機不依賴任何外部介面」</strong>。</p>
+
+<div class="arch-diagram">
+  <div class="arch-layer top">
+    <div class="arch-title">
+      <span>1. CLI 表現層 (internal/cli)</span>
+      <span class="tag-badge">Glue &amp; Presentation</span>
+    </div>
+    <p class="arch-desc">負責 flag 解析、人類閱讀終端排版、錯誤碼對應。自身絕不判定狀態轉移合法性，只負責將參數與外部事實傳入儲存與領域層。</p>
+  </div>
+
+  <div class="arch-layer middle">
+    <div class="arch-sub">
+      <div class="arch-title">
+        <span>2. Storage 交易層 (internal/storage)</span>
+        <span class="tag-badge">FLock + Snapshot</span>
+      </div>
+      <p class="arch-desc">專案唯一的持久化引擎。負責跨行程 OS 檔案鎖、單一 JSON 快照反序列化、驗證與原子落地替換。</p>
+    </div>
+    <div class="arch-sub">
+      <div class="arch-title">
+        <span>3. Repository 轉接層 (internal/repository)</span>
+        <span class="tag-badge">Git &amp; Worktrees</span>
+      </div>
+      <p class="arch-desc">全專案<strong>唯一允許呼叫 Git 的地方</strong>。負責 Candidate Snapshot 擷取、隔離臨時工作樹建立、Runtime 工具鏈版本解析。</p>
+    </div>
+  </div>
+
+  <div class="arch-layer bottom">
+    <div class="arch-title">
+      <span>4. 純領域核心 (internal/work)</span>
+      <span class="tag-badge">Pure State Machine</span>
+    </div>
+    <p class="arch-desc">純領域邏輯。<strong>零 Interface、零檔案讀寫、零 Git、零 Process 呼叫</strong>。所有外部事實（當前時間 <code>now</code>、測試 Exit Code）均以純值傳入，保證 100% 確定性可測。</p>
+  </div>
+</div>
+
+<h2><span class="idx">02</span> 狀態是用什麼管理的？底層儲存原理</h2>
+
+<div class="callout">
+  <span class="label">無資料庫架構</span>
+  <p>ForgePilot 不使用 SQLite，也不使用任何嵌入式 Key-Value Store。所有 Goal、Work Item、Evidence 與 Gate，皆序列化保存在專案根目錄的單一物理檔案：<code>.forgepilot/state.json</code>。</p>
+</div>
+
+<h3>交易寫入流程（storage.Update）</h3>
+<p>當執行任何狀態修改指令（<code>start</code>, <code>verify</code>, <code>gate open</code>, <code>review approve</code>）時，底層嚴格走以下 8 步原子交易：</p>
+
+<div class="steps">
+  <div class="step-item">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <h5>取得 OS 核心檔案排他鎖</h5>
+      <p>透過系統呼叫 <code>syscall.Flock(fd, syscall.LOCK_EX)</code> 鎖住 <code>.forgepilot/locks/state.lock</code>。若行程異常崩潰，作業系統會自動回收該鎖，絕不殘留死鎖。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <h5>反序列化載入記憶體</h5>
+      <p>讀取 <code>state.json</code>，透過 <code>json.NewDecoder</code> 嚴格解析進 <code>work.State</code> 記憶體結構體，並檢查 <code>SchemaVersion</code>。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">3</div>
+    <div class="step-content">
+      <h5>執行純邏輯閉包</h5>
+      <p>執行傳入的 <code>operation(&amp;state)</code> 函式。進行狀態檢查、轉移、Evidence 記錄，以及依賴連鎖解鎖。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">4</div>
+    <div class="step-content">
+      <h5>全域一致性防護（Validate）</h5>
+      <p>呼叫 <code>state.Validate()</code>，在記憶體中掃描整個 DAG，保證沒有 Cycle、沒有未知 ID、沒有孤兒關聯。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">5</div>
+    <div class="step-content">
+      <h5>寫入隔離臨時檔</h5>
+      <p><code>os.CreateTemp(".state-*.tmp")</code>，將帶縮排格式的 JSON 寫入臨時檔案。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">6</div>
+    <div class="step-content">
+      <h5>硬體刷盤 (fsync)</h5>
+      <p>呼叫 <code>temporary.Sync()</code> 強制實體硬盤將快取刷入磁碟，確保斷電時不遺失資料。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">7</div>
+    <div class="step-content">
+      <h5>POSIX 原子重命名覆蓋</h5>
+      <p>呼叫 <code>os.Rename(temporaryName, "state.json")</code>。利用 POSIX 原子性保證：讀取者要麼讀到前一個完整的狀態，要麼讀到新狀態，<strong>絕對不會讀到寫入一半被截斷的壞檔</strong>。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">8</div>
+    <div class="step-content">
+      <h5>目錄刷盤與釋放鎖</h5>
+      <p>目錄 handle <code>dir.Sync()</code> 確保目錄索引元數據落盤，最後 <code>syscall.Flock(LOCK_UN)</code> 釋放排他鎖。</p>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">03</span> 工作狀態機與五道不可繞過的完成防線</h2>
+
+<p>Work Item 的生命週期由 6 個離散狀態組成：</p>
+<pre><code>PENDING ──(依賴滿足)──▶ READY ──(start)──▶ RUNNING ──(verify)──▶ VERIFYING
+                                                                     │
+                                                       (PASS 產出 Evidence)
+                                                                     ▼
+DONE ◀──(review approve, 條件全足)── REVIEW ◀────────────────────────┘</code></pre>
+
+<h3>為什麼沒有 <code>forgepilot done</code> 指令？</h3>
+<p>在 ForgePilot 中，<strong>DONE 永遠不能由任何人手動直接設置（ADR-0008）</strong>。它只能是在 <code>review approve</code> 執行時，由狀態機底層 <code>CompletionBlockers(id)</code> 檢查通過後的推論結果：</p>
+
+<div class="card" style="margin-bottom: 20px;">
+  <h4>CompletionBlockers 檢查清單</h4>
+  <ul style="margin: 0; padding-left: 20px; font-size: 14.5px; color: var(--ink);">
+    <li><strong>1. 最新審查必須通過：</strong><code>LatestReview(id).Result == APPROVED</code></li>
+    <li><strong>2. 最新驗證必須通過：</strong><code>LatestVerification(id).Result == PASS</code></li>
+    <li><strong>3. 雙向版本 SHA 精確錨定：</strong><code>Verification.Revision == Review.Revision</code>（測試 PASS 的 commit 與人審查的 commit 必須一模一樣）</li>
+    <li><strong>4. 零未解除 Gate：</strong><code>OpenGateCount(id) == 0</code>（所有決策關卡都必須為 RESOLVED）</li>
+    <li><strong>5. 目標有效性：</strong>所屬 Goal 必須處於 <code>ACTIVE</code> 狀態</li>
+  </ul>
+</div>
+
+<h3>同交易連鎖解鎖（Cascade Ready）</h3>
+<p>當一件工作晉升為 <code>DONE</code>，底層在<strong>同一個記憶體結構與同一筆 storage 寫入交易</strong>中呼叫 <code>s.RefreshReady(now)</code>：</p>
+<pre><code>func (s *State) complete(id string, now time.Time) {
+    item := s.item(id)
+    item.Status, item.UpdatedAt = Done, now
+    s.RefreshReady(now) // 重新走訪 DAG，所有依賴皆 DONE 的 PENDING 節點立即翻轉成 READY
+}</code></pre>
+<p class="muted">這徹底解決了「A 工作已完成，但 B 工作在另一個行程讀取時仍顯示為等待」的中間競爭狀態。</p>
+
+<h2><span class="idx">04</span> 驗證隔離與 Candidate Snapshot 原理</h2>
+
+<p>ForgePilot 的 <code>verify</code> <strong>從不在使用者的工作樹中直接跑測試</strong>。因為工作區中可能有未存檔修改、未編譯的雜檔，直接執行測試毫無證據公信力。</p>
+
+<div class="steps">
+  <div class="step-item">
+    <div class="step-num">A</div>
+    <div class="step-content">
+      <h5>固定 Candidate 候選版本</h5>
+      <p>可以是既有的 Git Commit SHA；若是使用 <code>verify --snapshot</code>，系統會利用 Private Git Index 擷取當前未 commit 的變更，寫入 <code>refs/forgepilot/snapshots/*</code>，<strong>不產生污染 git log 的 WIP commit，也不改動當前分支的 HEAD</strong>。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">B</div>
+    <div class="step-content">
+      <h5>建立獨立的 Detached Worktree</h5>
+      <p>在 <code>.forgepilot/worktrees/run-*</code> 建立隔離的臨時工作樹，完全獨立於使用者編輯器與 shell 環境。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">C</div>
+    <div class="step-content">
+      <h5>確定性運行時探索 (Deterministic Runtime Resolution)</h5>
+      <p>從 Candidate 內的 <code>.node-version</code>, <code>go.mod</code> 等檔案解析宣告的版本要求，於本機已安裝的工具鏈中找到精確匹配者，防止 caller shell 的 PATH 造成測試污染。</p>
+    </div>
+  </div>
+  <div class="step-item">
+    <div class="step-num">D</div>
+    <div class="step-content">
+      <h5>執行 canonical make verify 並即時串流</h5>
+      <p>執行專案標準驗證指令，stdout/stderr 即時落地至 <code>.forgepilot/logs/&lt;run-id&gt;.log</code>（ADR-0012），測試完畢後立即回收臨時工作樹，並將 PASS/FAIL 結果固化成不可變的 Evidence。</p>
+    </div>
+  </div>
+</div>
+
+<h2><span class="idx">05</span> 邊界劃分：做到哪裡 vs 堅決不做什麼</h2>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 25%;">維度</th>
+        <th style="width: 38%; color: var(--accent);">ForgePilot 做到哪 (In-Scope)</th>
+        <th style="width: 37%; color: var(--stop);">堅決不做什麼 (Out-of-Scope)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>程式碼產出</strong></td>
+        <td>固定候選版本（Commit / Snapshot SHA）</td>
+        <td>不寫業務程式碼、不替代工程師或 AI Agent 思考</td>
+      </tr>
+      <tr>
+        <td><strong>需求與規格</strong></td>
+        <td>只儲存 <code>story_ref</code> 路徑指針與依賴關係</td>
+        <td>不定義規格細節，規格完全委派給外部 ForgeFlowV2</td>
+      </tr>
+      <tr>
+        <td><strong>驗證執行</strong></td>
+        <td>在隔離 Worktree 執行專案自身的 <code>make verify</code> 並留痕</td>
+        <td>不自行猜測驗證指令，測試失敗不自動修復程式碼</td>
+      </tr>
+      <tr>
+        <td><strong>決策與關卡</strong></td>
+        <td>Gate 記錄分歧選項（至少 2 個）與決策者自述身分</td>
+        <td>不做假權限登入（ADR-0005），不自動核准決策</td>
+      </tr>
+      <tr>
+        <td><strong>外部整合</strong></td>
+        <td>PR Reference（<code>owner/repo#123</code>）作為審查標註</td>
+        <td><strong>零網路請求（ADR-0010）</strong>，不呼叫 GitHub API 查證 PR</td>
+      </tr>
+      <tr>
+        <td><strong>狀態終態</strong></td>
+        <td>條件全部滿足時自動推至 DONE，並解鎖下游</td>
+        <td><strong>DONE 絕不允許 Reopen（ADR-0006）</strong>，不代執行 Git Merge / Push</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>
+  <span>ForgePilot Documentation · M1–M5 + P0/P1 Fully Implemented</span>
+  <span>Local File: docs/show-me-internals.html</span>
+</footer>
+
+</div>
+</body>
+</html>
