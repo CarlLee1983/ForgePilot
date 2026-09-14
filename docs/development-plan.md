@@ -606,6 +606,34 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 | 群組確認消失後恢復解除，且 `pending` 在同一次確認中清除 | `TestRecoveryResumesOnceTheGroupIsConfirmedGone` |
 | 舊的正常紀錄、舊 worker 紀錄仍可恢復；毀損紀錄仍阻擋 | `TestOlderRunRecordsStillRecoverTheWayTheyDid`（三個 subtest） |
 
+#### 08 — 恢復判準只有一份、清理不被吞掉、停止原因不被改名
+
+[08-recovery-closure](specs/runner-mvp/issues/08-recovery-closure.md)。沒有新的架構決定：ADR-0019／0020／0021／0022
+的實作在這一輪才在所有呼叫路徑上成立。
+
+| 行為 | 驗收測試 |
+|---|---|
+| leader 已退出但同 PGID 子程序仍活著、紀錄只有 `worker` 沒有 `pending`：resume、同 Goal 新 run、同 workspace 另一個 Goal 三者皆阻擋 | `TestAWorkerWhoseGroupOutlivedItBlocksEveryWayBackIntoTheWorkspace` |
+| 被阻擋的嘗試不消耗 steps／attempts、不改寫 deadline，`worker` 保留；群組確認消失後同一次啟動即解除 | 同上 |
+| PID 被重用時阻擋，且不對該程序群組送出 signal | `TestRecoveryNeitherSignalsNorTrustsAReusedPid` |
+| 歷史 `RECOVERY_BLOCKED` 的 `stop` 不再讓已可確認的 workspace 繼續被拒 | `TestAnOldRecoveryBlockedStopDoesNotBlockASettledWorkspace` |
+| `RemoveWorktree` 不以 `os.RemoveAll` 遮蔽 `ErrNotSettled`，也不追加遞迴刪除 | `internal/repository` 的 `TestRemoveWorktreeAddsNoRecursiveDeleteToAnUnconfirmedGroup` |
+| Git 已完成刪除才回報未確認時仍不回報成功 | `internal/repository` 的 `TestARemovalThatSucceededStillReportsItsUnconfirmedGroup` |
+| `AddWorktree` 的前置清理同樣不吞掉 `ErrNotSettled` | `internal/repository` 的 `TestAddWorktreeRefusesToClearACheckoutItCannotConfirmIsIdle` |
+| 一般清理失敗仍照舊清除殘留目錄，沒有因修正而永久阻擋 | `internal/repository` 的 `TestRemoveWorktreeStillClearsADirectoryGitDoesNotKnowAbout` |
+| PASS 之後的 deferred 清理未確認：Evidence 不變，`Cleanup` 與 `Unresolved` 回到呼叫端而不只是 warning | `internal/app` 的 `TestAnUnconfirmedTidyUpTravelsWithAPassRatherThanBecomingAWarning` |
+| Runner 收到後保存為 unresolved `pending`、停在 `RECOVERY_BLOCKED`，新的 CLI 程序三種入口皆被阻擋，確認後解除 | `TestAnUnconfirmedTidyUpKeepsTheEvidenceAndStopsTheRun` |
+| 沒有 orphan、業務工作時間超過 `CleanupGrace` 時，善後仍取得有效預算且 checkout 確實被移除 | `internal/app` 的 `TestWorkLongerThanOneCleanupWindowStillLeavesOneForTheTidyingUp` |
+| 有 orphan：開工前回收的 window 不耗掉收工善後的 window | `internal/app` 的 `TestReclaimingAnOrphanDoesNotSpendTheLaterTidyingUpsWindow` |
+| 同一清理階段的多個 helper 共用一份遞減預算，不每層重領 | `internal/app` 的 `TestOneCleanupStageSpendsOneAllowanceAcrossItsHelpers` |
+| 步驟間 Candidate facts 查詢被 SIGINT／SIGTERM／run deadline 打斷時記為 `INTERRUPTED`／`TERMINATED`／`MAX_DURATION`，退出碼 130／143／3，不產生 `STALLED` | `TestAStopDuringABetweenStepsFactsReadKeepsItsOwnReason`（三個 subtest） |
+| 一般 Git 失敗仍是操作失敗，不被歸類成停止 | `TestAnOrdinaryGitFailureDuringAFactsReadIsStillAnOperationalFailure` |
+| 取消測試的兩個 subtest 真的分別進入 canonical 與 runtime preflight，並實際斷言 kind、PGID 與 checkout 位置 | `internal/app` 的 `TestACancellationDoesNotSwallowAnUnconfirmedCleanup` |
+| 驗證後 readiness refresh 回報未確認群組時一併帶回，且接著的清理留著 checkout | `internal/app` 的 `TestAnUnconfirmedGroupInTheReadinessRefreshBlocksAndKeepsTheCheckout` |
+
+`make verify` 因 `internal/app` 的兩個 cleanup-window 測試各跑一次超過 `process.CleanupGrace` 的
+業務工作而增加約 50 秒；理由與備選記在 [08-recovery-closure](specs/runner-mvp/issues/08-recovery-closure.md)。
+
 ### Runner MVP Exit checklist
 
 - [x] ADR-0018／0019／0020 與 spec、tickets 寫在實作之前；ADR-0010 加註例外並保留原本的失效條件。
@@ -616,4 +644,5 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 - [x] 針對狀態機繞過、錯誤成功判定、跨 Goal 執行、重疊 writer、crash window、預算重置、Candidate freshness 與無上限輸出做過 code review，**且修正本身也經過第二輪 review**——第一輪的六項修正帶進 2 HIGH 與 3 MEDIUM，已各自以先寫失敗測試的方式修掉。
 - [x] 停止訊號、程序清理與兩種期限的執行控制補強（[06-execution-control](specs/runner-mvp/issues/06-execution-control.md)）：SIGINT／SIGTERM 傳達到 canonical check、正常退出也清理程序群組、`--max-duration` 約束整段執行；決定記在 [ADR-0021](adr/0021-execution-limits-are-bounded-and-named.md)。
 - [x] 取消到得了執行中的 Git 子程序、終止與等待都有上限、清理未確認時跨 run／resume／重啟持續阻擋（[07-recovery-hardening](specs/runner-mvp/issues/07-recovery-hardening.md)）：決定記在 [ADR-0022](adr/0022-pending-cleanup-outlives-the-process.md)。
+- [x] 恢復判準只有一份實作、清理錯誤不被吞掉、清理預算從清理開始才計時、步驟間 Git 查詢被取消時保存正確的停止原因（[08-recovery-closure](specs/runner-mvp/issues/08-recovery-closure.md)）：沒有新的架構決定，ADR-0019／0020／0021／0022 的實作在這一輪才在所有呼叫路徑上成立。
 - [x] ADR-0019／architecture 已明列兩個 state-write 偵測窗口與信任模型：agent session 比對整份 state，canonical check 只保護正在驗證的 Work Item，並明說這不是全域 state 完整性或 sandbox 保證。

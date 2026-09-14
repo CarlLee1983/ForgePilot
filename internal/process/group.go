@@ -119,6 +119,33 @@ func BudgetFrom(ctx context.Context) *Budget {
 	return budget
 }
 
+// commandKey carries the argv of the process being settled, so the internal
+// failure seam can say which managed command it is standing in for. It travels
+// on the context for the same reason the budget does: the chain runs through
+// helpers that have no business knowing about it.
+type commandKey struct{}
+
+func withCommand(ctx context.Context, argv []string) context.Context {
+	return context.WithValue(ctx, commandKey{}, argv)
+}
+
+func commandFrom(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	argv, _ := ctx.Value(commandKey{}).([]string)
+	return argv
+}
+
+// Remaining is how much of the allowance is left. A nil Budget is an unbudgeted
+// caller, which still has a full nominal grace ahead of it.
+func (budget *Budget) Remaining() time.Duration {
+	if budget == nil {
+		return CleanupGrace
+	}
+	return time.Until(budget.deadline)
+}
+
 // share is what remains of the budget, never more than the stage asked for. A
 // budget that is spent returns zero, which every stage below reads as "there is
 // no time left to confirm this", not as "wait forever".
@@ -174,6 +201,7 @@ func Start(ctx context.Context, command *exec.Cmd, log io.Writer) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	ctx = withCommand(ctx, command.Args)
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
 		drain(nil)
@@ -251,7 +279,7 @@ func Settle(ctx context.Context, pgid int, finished <-chan error, drain func(*Bu
 	// The leader has been reaped by the time this runs. That order matters: an
 	// unreaped zombie is still a member of its own group, so confirming before
 	// reaping would always report a group that is still alive.
-	cleanup = errors.Join(unsettled, Stop(pgid, budget))
+	cleanup = errors.Join(unsettled, stopCommand(pgid, budget, commandFrom(ctx)))
 	if drain != nil {
 		drain(budget)
 	}
@@ -319,8 +347,12 @@ func awaitWait(finished <-chan error, within time.Duration) (error, bool) {
 // nil only when the group is observably gone; an unconfirmed group is reported
 // rather than assumed away. Its two rounds share the caller's budget, so a
 // cleanup path made of several stops still has one explainable total.
-func Stop(pgid int, budget *Budget) error {
-	if err := injectedFailure(pgid); err != nil {
+func Stop(pgid int, budget *Budget) error { return stopCommand(pgid, budget, nil) }
+
+// stopCommand is Stop, told which managed command it is settling. Only the
+// internal failure seam reads that; the stop itself is identical.
+func stopCommand(pgid int, budget *Budget, argv []string) error {
+	if err := injectedFailure(pgid, argv, budget.Remaining()); err != nil {
 		return err
 	}
 	if pgid <= 0 {
