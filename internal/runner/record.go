@@ -177,14 +177,17 @@ func (record *Record) save(root string, limits storage.ArtifactLimits, at time.T
 	if err != nil {
 		return err
 	}
-	// The per-write bound is a ceiling on what an agent session may emit, not on
-	// ForgePilot's own bookkeeping. The record's size is already bounded by its
-	// structure — retained attempts times their truncated summaries, plus one
-	// entry per Work Item — and refusing to write it because a console-output
-	// flag was set low would leave a launched worker with no recoverable record,
-	// which is the one thing recovery cannot survive. The run and workspace
-	// totals still apply.
-	limits.MaxWriteBytes = 0
+	// None of the three bounds apply here. They are ceilings on what an agent
+	// session may emit; this file is ForgePilot's own account of what it
+	// launched, and its size is already bounded by its structure — retained
+	// attempts times their truncated summaries, plus one entry per Work Item.
+	// Refusing to write it leaves a launched worker with no recoverable record,
+	// which is the one thing recovery cannot survive, and the refusal arrives
+	// precisely when the workspace is fullest — so the caller's only way out
+	// would be to drop something from the record to make it fit, which is how a
+	// live worker stops being recorded at all. The bounds still govern every
+	// artifact a session writes, which is what they were written for.
+	limits = storage.ArtifactLimits{}
 	return storage.WriteRunArtifact(root, record.RunID, recordName, append(encoded, '\n'), limits)
 }
 

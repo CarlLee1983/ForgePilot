@@ -267,3 +267,42 @@ func atoi(t *testing.T, value string) int {
 	}
 	return result
 }
+
+// A coding CLI forks compilers, language servers and watchers. When the session
+// itself exits, those are still ours and still writing the workspace — and the
+// Runner's digest around the session has already been taken, so anything they
+// do afterwards lands outside every check there is.
+func TestACleanExitStillStopsTheWholeProcessGroup(t *testing.T) {
+	script := `#!/bin/sh
+workspace=""
+result=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --workspace) workspace="$2"; shift 2;;
+    --result) result="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+( sleep 30; echo late > "$workspace/grandchild.txt" ) &
+echo "$!" > "$workspace/grandchild.pid"
+printf '{"outcome":"implementation_finished","summary":"done"}' > "$result"
+`
+	workspace := t.TempDir()
+	request := Request{Workspace: workspace, ArtifactDir: t.TempDir(), Handoff: "x"}
+	session, err := Start(Fake{Command: writeScript(t, script)}, request, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Wait(30*time.Second, nil); err != nil {
+		t.Fatalf("Wait err = %v", err)
+	}
+	pid := strings.TrimSpace(readFile(t, filepath.Join(workspace, "grandchild.pid")))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(t, pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("grandchild %s outlived the session that spawned it", pid)
+}

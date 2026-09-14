@@ -138,13 +138,17 @@ func tail(path string, limit int) string {
 	}
 	size := info.Size()
 	truncated := false
+	// One byte more than the limit is read on purpose: it is what tells Excerpt
+	// the log did not fit, which is what makes it say so and drop the half line
+	// the seek landed in the middle of.
+	want := int64(limit)
 	if size > int64(limit) {
-		if _, err := file.Seek(size-int64(limit), io.SeekStart); err != nil {
+		if _, err := file.Seek(size-int64(limit)-1, io.SeekStart); err != nil {
 			return ""
 		}
-		truncated = true
+		want, truncated = int64(limit)+1, true
 	}
-	contents, err := io.ReadAll(io.LimitReader(file, int64(limit)))
+	contents, err := io.ReadAll(io.LimitReader(file, want))
 	if err != nil {
 		return ""
 	}

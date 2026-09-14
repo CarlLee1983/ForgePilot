@@ -514,7 +514,7 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 
 `--max-steps` 計算 start、reconcile、Agent attempt 與 verification。`--max-attempts-per-work` 計算同一 run 對同一 Work Item 啟動 Agent 的次數，含失敗與中斷，且在啟動前先保存。`--max-duration` 從第一次啟動計算。**任何限制都不接受 `0` 或負值**——預算與三個容量上限都在啟動前驗證，三個容量上限還必須由內而外遞增（單次寫入 ≤ 單 run ≤ 全部 runs）。`resume` 沿用 run record 裡的預算與容量上限，不套用命令列預設值。
 
-`--max-agent-output-bytes` 是 agent session 自己產出的上限（console log 與結構化結果），不套用在 ForgePilot 自己的 run record 上：run record 的大小已由其結構決定（保留的 attempt 數乘以截斷後的摘要長度，加上每件工作一筆），而因為一個 console 輸出旗標設太小就寫不出 run record，會讓已啟動的 worker 失去可恢復的紀錄。單 run 與全部 runs 的總量上限仍然涵蓋它。
+三個容量上限都是 agent session 產出的上限（console log 與結構化結果），**三個都不套用在 ForgePilot 自己的 run record 上**：run record 的大小已由其結構決定（保留的 attempt 數乘以截斷後的摘要長度，加上每件工作一筆），而寫不出 run record 會讓已啟動的 worker 失去可恢復的紀錄。只豁免單次寫入上限並不夠——總量上限同樣擋得住那次存檔，而它偏偏發生在 workspace 最滿的時候，屆時唯一的出路會變成「從 record 裡拿掉東西讓它寫得下」，那正是讓活著的 worker 從紀錄裡消失的路徑。session 寫的每一個 artifact 仍然受三個上限管轄。
 
 `run` 與 `run resume` 的退出碼：
 

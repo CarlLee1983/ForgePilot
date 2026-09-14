@@ -146,7 +146,7 @@ func Start(options Options) (Record, error) {
 		// while its coding CLI keeps writing this tree. Settling those before
 		// anything new starts is what keeps `run` from doing the one thing
 		// ADR-0020 promises it will not — create overlapping writers.
-		blocked, err := settleAbandonedWorkers(options)
+		blocked, err := settleAbandonedWorkers(options, "")
 		if err != nil {
 			return err
 		}
@@ -168,13 +168,18 @@ func Start(options Options) (Record, error) {
 // that still claims a worker. It returns a record carrying a RECOVERY_BLOCKED
 // stop when any of them cannot be settled, because starting a second writer on
 // a workspace that may still have one is not a risk worth taking for the
-// convenience of not having to name a run id.
-func settleAbandonedWorkers(options Options) (*Record, error) {
+// convenience of not having to name a run id. `except` names the run the caller
+// settles itself: a resume recovers its own record through the Runner that is
+// about to drive it, and settling it twice would judge it without one.
+func settleAbandonedWorkers(options Options, except string) (*Record, error) {
 	runs, err := storage.ListRuns(options.Root)
 	if err != nil {
 		return nil, err
 	}
 	for _, runID := range runs {
+		if runID == except {
+			continue
+		}
 		existing, err := LoadRecord(options.Root, runID)
 		if err != nil {
 			// An unreadable record may describe a live worker. Refusing is the only
@@ -232,6 +237,18 @@ func Resume(options Options, runID string) (Record, error) {
 		}
 		if err := existing.Limits.Validate(); err != nil {
 			return fmt.Errorf("run %s has invalid artifact limits: %w", runID, err)
+		}
+		// A resume launches sessions on this workspace exactly as a fresh run
+		// does, so it clears the same bar: a worker another run left behind is
+		// still a writer here, and the workspace lock says nothing about it.
+		// This run's own worker is left to recover() below.
+		blocked, err := settleAbandonedWorkers(resumeOptions(options, existing), runID)
+		if err != nil {
+			return err
+		}
+		if blocked != nil {
+			record = *blocked
+			return nil
 		}
 		runner := &Runner{options: resumeOptions(options, existing), record: &existing}
 		runner.runtime, err = agent.Resolve(existing.RuntimeName, existing.RuntimeCommand)
@@ -610,6 +627,10 @@ func (runner *Runner) verify(itemID, label string) error {
 		// one. It names a condition outside the code: a Gate, a stopped Goal, an
 		// unsatisfiable Runtime Contract, a revision with no canonical check.
 		return runner.stopNow(StopVerificationRefused, fmt.Sprintf("%s: %v", itemID, err))
+	case errors.Is(err, app.ErrStateWrittenDuringCheck):
+		// The session ended cleanly and its digest matched; the code it left
+		// behind did the writing. Same verdict either way.
+		return runner.stopNow(StopStateTampered, err.Error())
 	case errors.Is(err, storage.ErrCapacityExceeded):
 		return runner.stopNow(StopCapacityExceeded, err.Error())
 	case err != nil:
@@ -691,6 +712,7 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 	// The identity is written the moment it exists: a crash after this point is
 	// recoverable, and one before it leaves a worker record with no identity,
 	// which recovery treats as unconfirmable rather than as absent.
+	incomplete := false
 	runner.record.Worker.Identity = session.Started()
 	if !runner.record.Worker.Identity.Recorded() {
 		// The operating system could not be asked what it had just started —
@@ -699,16 +721,27 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 		// say so now rather than at recovery time.
 		runner.print("  warning: could not record an identity for the worker (pid %d); a crash before it finishes will need manual confirmation\n",
 			runner.record.Worker.Identity.PID)
-		if err := runner.journal("AGENT", itemID, "worker identity could not be observed"); err != nil {
-			return err
-		}
+		incomplete = true
 	}
 	if stopped, err := runner.checkpoint(); stopped || err != nil {
 		// The worker is running but cannot be recorded. Stopping it is the only
 		// honest move: leaving it alive with no durable identity would make the
-		// next recovery unable to tell whether anything still writes here.
-		_ = agent.TerminateOwned(session.Started())
+		// next recovery unable to tell whether anything still writes here. When
+		// even that cannot be confirmed, the refusal is the answer — swallowing it
+		// would hand the next run a workspace with an invisible writer in it.
+		if terminateErr := agent.TerminateOwned(session.Started()); terminateErr != nil {
+			return runner.stopNow(StopRecoveryBlocked, fmt.Sprintf(
+				"%s could not be recorded (%v) and its worker could not be stopped: %v. Confirm pid %d yourself before running anything else",
+				itemID, err, terminateErr, session.Started().PID))
+		}
 		return err
+	}
+	// Journalled only once the identity is durable: an append that fails here
+	// must not be the thing that leaves a live worker unrecorded.
+	if incomplete {
+		if err := runner.journal("AGENT", itemID, "worker identity could not be observed"); err != nil {
+			return err
+		}
 	}
 
 	result, waitErr := session.Wait(runner.options.Budget.AgentTimeout, runner.options.Stop)
@@ -812,16 +845,12 @@ func (runner *Runner) spendStep() (bool, error) {
 	return runner.checkpoint()
 }
 
-// checkpoint persists the record and reports whether the run must stop. A
-// capacity refusal is a bounded stop rather than a crash, but it is never
-// something to continue past: launching a worker with no durable record of it
-// is the one thing recovery cannot survive.
+// checkpoint persists the record and reports whether the run must stop. It has
+// no special case for a full workspace: the record is exempt from the artifact
+// bounds precisely so that the answer to "no room" is never to drop the worker
+// from the record in order to make the write fit.
 func (runner *Runner) checkpoint() (bool, error) {
 	err := runner.save()
-	if errors.Is(err, storage.ErrCapacityExceeded) {
-		runner.record.Worker = nil
-		return true, runner.stopNow(StopCapacityExceeded, err.Error())
-	}
 	return err != nil, err
 }
 

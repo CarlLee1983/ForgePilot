@@ -446,3 +446,100 @@ printf '{"outcome":"implementation_finished","summary":"all done, verified"}' > 
 		t.Fatal("a forged VERIFIED was reported as readiness for final review")
 	}
 }
+
+// A fresh `run` settles the workers an earlier Runner left behind. `run resume`
+// launches sessions on the same workspace and must clear the same bar: the
+// worker that cannot be confirmed belongs to another run, but it writes this
+// tree.
+func TestResumeRefusesWhileAnotherRunsWorkerCannotBeConfirmed(t *testing.T) {
+	fixture := newRunnerFixture(t, "a.md")
+	mustRun(t, fixture.binary, fixture.root, "init")
+	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
+	// A Gate stops both runs with their budgets untouched, so the resume below
+	// has the room to start a session — which is the thing it must not do.
+	mustRun(t, fixture.binary, fixture.root, "gate", "open", "--work", "WI-001",
+		"--question", "which store?", "--option", "postgres", "--option", "sqlite")
+	agent := fixture.fakeAgent(t, implementsCleanly)
+
+	first, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	if code != 2 {
+		t.Fatalf("the first run did not stop on the Gate: %d\n%s", code, first)
+	}
+	second, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	if code != 2 {
+		t.Fatalf("the second run did not stop on the Gate: %d\n%s", code, second)
+	}
+	// Two runs started in the same second are ordered by a random suffix, so the
+	// ids are read from the runs themselves rather than from the directory order.
+	abandoned, resumable := startedRun(t, first), startedRun(t, second)
+	if abandoned == resumable {
+		t.Fatal("the fixture produced one run where it needs two")
+	}
+	mustRun(t, fixture.binary, fixture.root, "gate", "resolve", "GATE-001", "--option", "postgres", "--by", fixtureIdentity)
+
+	// What a SIGKILLed Runner leaves behind in the run it was driving: a worker
+	// recorded without the identity that would let anyone recognise it.
+	record := loadRunRecord(t, fixture.root, abandoned)
+	delete(record, "stop")
+	record["worker"] = map[string]any{
+		"work_item_id": "WI-001", "attempt": 1,
+		"session_dir": filepath.Join(fixture.root, ".forgepilot", "runs", abandoned, "wi-001-attempt-1"),
+		"started_at":  time.Now().UTC().Format(time.RFC3339Nano),
+		"identity":    map[string]any{"pid": os.Getpid(), "pgid": 0, "executable": "/bin/sh"},
+	}
+	writeRunRecord(t, fixture.root, abandoned, record)
+
+	output, code := fixture.runForge(t, agent, "run", "resume", resumable)
+	if code != 2 || !strings.Contains(output, "RECOVERY_BLOCKED") {
+		t.Fatalf("exit = %d\n%s", code, output)
+	}
+	if sessions := fixture.sessions(t); sessions != nil {
+		t.Fatalf("a second writer was started beside an unconfirmable worker: %v", sessions)
+	}
+	if !strings.Contains(output, abandoned) {
+		t.Fatalf("the refusal does not name the run that is stuck:\n%s", output)
+	}
+}
+
+// The digest around a session catches a session that edits governance state
+// directly. It is not the only place untrusted code runs: the canonical check
+// is the repository's own script, and this run's session just rewrote it.
+func TestACanonicalCheckThatWritesForgePilotStateStopsTheRun(t *testing.T) {
+	fixture := newRunnerFixture(t, "a.md")
+	mustRun(t, fixture.binary, fixture.root, "init")
+	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
+	// The session itself never touches .forgepilot/. It leaves the forgery to
+	// the verification it knows will run afterwards.
+	tamper := fixture.fakeAgent(t, `printf 'done\n' > "$workspace/$lower.txt"
+cat > "$workspace/verify.sh" <<SH
+set -e
+sed 's/"status": "VERIFYING"/"status": "VERIFIED"/' "$workspace/.forgepilot/state.json" > "$workspace/.forgepilot/state.tampered"
+mv "$workspace/.forgepilot/state.tampered" "$workspace/.forgepilot/state.json"
+echo "canonical check passed"
+SH
+printf '{"outcome":"implementation_finished","summary":"implemented %s"}' "$item" > "$result"
+`)
+
+	output, code := fixture.runForge(t, tamper, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	if code != 2 {
+		t.Fatalf("exit = %d\n%s", code, output)
+	}
+	if !strings.Contains(output, "AGENT_WROTE_FORGEPILOT_STATE") {
+		t.Fatalf("a write to state from inside the canonical check was not detected:\n%s", output)
+	}
+	if strings.Contains(output, "AWAITING_GOAL_REVIEW") {
+		t.Fatal("a forged VERIFIED was reported as readiness for final review")
+	}
+}
+
+// startedRun reads the run id a `run` command announced.
+func startedRun(t *testing.T, output string) string {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if fields := strings.Fields(line); len(fields) > 1 && fields[0] == "Run" {
+			return fields[1]
+		}
+	}
+	t.Fatalf("no run id in:\n%s", output)
+	return ""
+}

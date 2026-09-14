@@ -162,3 +162,34 @@ func TestResumeInheritsTheLimitsTheRunStartedWith(t *testing.T) {
 		t.Fatalf("limits = %#v, want the run's own", resumed.Limits)
 	}
 }
+
+// The three artifact bounds exist to stop an agent session from filling the
+// disk. The run record is not agent output — it is ForgePilot's own account of
+// what it launched, and a workspace that has run out of room for it has already
+// lost the only thing recovery cannot do without.
+func TestTheRunRecordIsNotSubjectToTheArtifactBounds(t *testing.T) {
+	root := t.TempDir()
+	runID, err := NewRunID(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &Record{RunID: runID, GoalID: "queue", Workspace: root, Attempts: map[string]int{},
+		Worker: &Worker{WorkItemID: "WI-001", Attempt: 1, SessionDir: root, StartedAt: time.Now().UTC()}}
+	// Every bound set as low as it can go without being refused outright.
+	limits := storage.ArtifactLimits{MaxWriteBytes: 1, MaxRunBytes: 1, MaxTotalBytes: 1}
+
+	if err := record.save(root, limits, time.Now()); err != nil {
+		t.Fatalf("a launched worker could not be recorded: %v", err)
+	}
+	stored, err := LoadRecord(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Worker == nil || stored.Worker.WorkItemID != "WI-001" {
+		t.Fatalf("the record came back without the worker it was saving: %+v", stored.Worker)
+	}
+	// The bounds still govern what a session writes.
+	if err := storage.WriteRunArtifact(root, runID, "session.log", []byte("agent output"), limits); err == nil {
+		t.Fatal("an agent artifact was written past every bound")
+	}
+}

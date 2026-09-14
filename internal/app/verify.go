@@ -40,6 +40,13 @@ func IsRefusal(err error) bool {
 // run produced no result, so it closes out as INTERRUPTED — never as a FAIL.
 var ErrVerificationTimedOut = errors.New("canonical check exceeded its timeout")
 
+// ErrStateWrittenDuringCheck reports that .forgepilot/state.json changed while
+// the canonical check was running. The check is the repository's own script, so
+// an agent session that rewrote it runs code here after its own session — and
+// after the digest taken around that session — has ended. A verification whose
+// governance state moved underneath it proves nothing about anything.
+var ErrStateWrittenDuringCheck = errors.New("the canonical check changed .forgepilot/state.json")
+
 // VerifyOptions carries what one verification needs beyond the Work Item.
 // Timeout of zero means no deadline, which is the CLI's existing behaviour:
 // ADR-0004 decided a Verification Run has no built-in time limit.
@@ -194,7 +201,27 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	if err := beginRun(id, root, candidate, worktree, logFile, runtime.Versions(), startedAt); err != nil {
 		return result, err
 	}
+	// Taken after beginRun, this command's own last write before the check
+	// starts, so only what happens while the check runs is in the window.
+	verdictBefore, err := verdictFingerprint(root, id)
+	if err != nil {
+		return result, err
+	}
 	exitCode, runErr := runCanonicalCheck(ctx, worktree, runtime, log, options.Timeout)
+	// A state that no longer loads is the loudest version of the same signal:
+	// it parsed on the way in, so whatever happened to it happened here.
+	verdictAfter, fingerprintErr := verdictFingerprint(root, id)
+	if fingerprintErr != nil || verdictAfter != verdictBefore {
+		// Checked before the exit code is even looked at: something moved this
+		// Work Item's verdict while the check that decides it was still running,
+		// so the check's own account of what it did is worthless. Nothing is
+		// written in response — not even the reclaim that closes out a timeout —
+		// because a state this command no longer recognises is not a state to
+		// transition. The verification stays live, which is what makes the next
+		// command say so rather than quietly carry on.
+		return result, fmt.Errorf("%w while verifying %s; nothing it reported can be trusted. Inspect the state before running anything else",
+			ErrStateWrittenDuringCheck, id)
+	}
 	if errors.Is(runErr, ErrVerificationTimedOut) {
 		// The check produced no result, so the run is closed out the same way any
 		// other interruption is: INTERRUPTED Evidence, never an inferred FAIL.
@@ -254,6 +281,25 @@ func VerificationRetryCommand(id string, candidate work.Candidate) string {
 		command += " --snapshot"
 	}
 	return command
+}
+
+// verdictFingerprint captures the facts this verification is about to decide:
+// the Work Item's own status and its latest Evidence. Nothing else belongs in
+// it. A digest of the whole state file would be simpler and wrong — a person
+// running `goal block` or `gate resolve` in another terminal writes state
+// legitimately while a check runs, and ADR-0010's transaction lock is
+// deliberately not held across it, so a byte comparison would refuse a run that
+// nobody tampered with and lose Evidence that was honestly earned.
+func verdictFingerprint(root, id string) (string, error) {
+	state, err := storage.Load(root)
+	if err != nil {
+		return "", err
+	}
+	latest, ok := state.LatestVerification(id)
+	if !ok {
+		return fmt.Sprintf("%s|none", state.WorkItemStatus(id)), nil
+	}
+	return fmt.Sprintf("%s|%s|%s|%s", state.WorkItemStatus(id), latest.ID, latest.Result, latest.Revision), nil
 }
 
 func statusOf(root, id string) work.Status {

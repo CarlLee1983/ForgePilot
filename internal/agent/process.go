@@ -268,6 +268,11 @@ func (session *Session) Wait(timeout time.Duration, stop <-chan struct{}) (Resul
 	}
 	select {
 	case err := <-session.done:
+		// The session process is over; the group it was given is not necessarily
+		// empty. Whatever it forked is still ours, still writing this workspace,
+		// and — for the Runner — now past the digest taken around the session, so
+		// it is stopped here rather than left for the next recovery to puzzle over.
+		terminateGroup(session.Identity.PGID)
 		return session.collect(err)
 	case <-timer:
 		terminateGroup(session.Identity.PGID)
