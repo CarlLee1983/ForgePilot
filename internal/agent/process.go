@@ -70,6 +70,15 @@ func Inspect(identity ProcessIdentity) (Liveness, error) {
 	if err != nil {
 		return Unknown, err
 	}
+	// A record written while ps was rendering the accounting name carries a
+	// command that can never match a real one, so comparing it would call a live
+	// process unrelated on the strength of a string that never said who it was.
+	// The question is asked of the operating system first: that the pid is gone
+	// is a fact about the machine, true whatever the record holds, and it is the
+	// answer that lets a run left behind by an older version clean itself up.
+	if unreadableArguments(identity.ObservedCommand) {
+		return Unknown, fmt.Errorf("process record for pid %d holds no readable command (%q)", identity.PID, identity.ObservedCommand)
+	}
 	if start == identity.ObservedStart && command == identity.ObservedCommand {
 		return Ours, nil
 	}
@@ -78,12 +87,44 @@ func Inspect(identity ProcessIdentity) (Liveness, error) {
 
 var errNoSuchProcess = errors.New("no such process")
 
+// errArgumentsUnavailable is what ps reporting an accounting name instead of a
+// command line means here. It is not a failure of ps and not a fact about the
+// process: it is the answer "ask again".
+var errArgumentsUnavailable = errors.New("process arguments could not be read")
+
+// psAttempts and psRetryPause bound how long an unreadable argument list is
+// re-read before it is reported as such. The window belongs to the kernel — it
+// opens around exec and around exit — and it is short. Waiting through it is
+// what keeps a launch from recording an identity it can never match again.
+const (
+	psAttempts   = 5
+	psRetryPause = 40 * time.Millisecond
+)
+
 // inspectProcess reads one process's start time and executable. `ps` is used
 // rather than a bare kill(pid, 0) because a live pid alone proves nothing about
 // whose process it is.
 func inspectProcess(pid int) (string, string, error) {
-	command := exec.Command("ps", "-o", "lstart=,args=", "-p", fmt.Sprint(pid))
-	output, err := command.Output()
+	return inspectWith(readProcess, pid)
+}
+
+// inspectWith is inspectProcess with the read named, so the retry can be driven
+// without a real process in one of the two states that produce it. The reader
+// is a parameter rather than a package variable: nothing in the production path
+// can reach it, and no test can leave it swapped.
+func inspectWith(read func(int) (string, string, error), pid int) (string, string, error) {
+	start, command, err := read(pid)
+	for attempt := 1; attempt < psAttempts && errors.Is(err, errArgumentsUnavailable); attempt++ {
+		time.Sleep(psRetryPause)
+		start, command, err = read(pid)
+	}
+	return start, command, err
+}
+
+// readProcess is one ps call and its parse.
+func readProcess(pid int) (string, string, error) {
+	psCmd := exec.Command("ps", "-o", "lstart=,args=", "-p", fmt.Sprint(pid))
+	output, err := psCmd.Output()
 	text := strings.TrimSpace(string(output))
 	if err != nil {
 		var exit *exec.ExitError
@@ -96,12 +137,40 @@ func inspectProcess(pid int) (string, string, error) {
 	if text == "" {
 		return "", "", errNoSuchProcess
 	}
-	// lstart is a fixed-width 5-field time; everything after it is the command.
-	fields := strings.Fields(text)
-	if len(fields) < 6 {
-		return "", "", fmt.Errorf("inspect process %d: unreadable ps output %q", pid, text)
+	start, observed, err := parseProcessLine(text)
+	if err != nil {
+		return "", "", fmt.Errorf("inspect process %d: %w", pid, err)
 	}
-	return strings.Join(fields[:5], " "), strings.Join(fields[5:], " "), nil
+	return start, observed, nil
+}
+
+// parseProcessLine splits one `lstart=,args=` line. lstart is a fixed-width
+// five-field time; everything after it is the command.
+func parseProcessLine(text string) (string, string, error) {
+	fields := strings.Fields(text)
+	if len(fields) < 5 {
+		return "", "", fmt.Errorf("unreadable ps output %q", text)
+	}
+	// The time is there and the command column is empty: the same window, told a
+	// different way. It is worth asking again rather than reporting a process
+	// whose arguments are the empty string.
+	if len(fields) == 5 {
+		return "", "", fmt.Errorf("%w: ps reported no command for the process", errArgumentsUnavailable)
+	}
+	start, command := strings.Join(fields[:5], " "), strings.Join(fields[5:], " ")
+	if unreadableArguments(command) {
+		return "", "", fmt.Errorf("%w: ps reported %q", errArgumentsUnavailable, command)
+	}
+	return start, command, nil
+}
+
+// unreadableArguments reports whether ps printed the accounting name rather
+// than the command line. macOS renders that as `(sh)` and exits zero, so
+// nothing downstream can tell it apart from a command by its shape alone —
+// which is precisely how a live worker comes to be recorded as one program and
+// found running another. See docs/adr/0020-worker-ownership-is-fail-closed.md.
+func unreadableArguments(command string) bool {
+	return strings.HasPrefix(command, "(") && strings.HasSuffix(command, ")")
 }
 
 // ObserveIdentity records a just-started process so it can be recognised after

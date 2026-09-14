@@ -168,6 +168,14 @@ func TestInspectDistinguishesGoneFromOursFromUnrelated(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := session.Identity
+	if !identity.Recorded() {
+		// ps never made the worker's arguments readable, so there is no identity
+		// to ask questions about. That is the fail-closed answer working, not a
+		// failure of what this test is about — but it is worth saying out loud
+		// rather than asserting through.
+		t.Cleanup(func() { _ = syscall.Kill(-session.command.Process.Pid, syscall.SIGKILL) })
+		t.Skipf("ps did not report a readable command for the worker: %#v", identity)
+	}
 	if liveness, err := Inspect(identity); err != nil || liveness != Ours {
 		t.Fatalf("live process liveness = %v, %v", liveness, err)
 	}
