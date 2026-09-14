@@ -1,6 +1,7 @@
 package forgepilot_test
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -245,7 +246,7 @@ func TestRunnerArtifactsDoNotChangeTheCandidateDigest(t *testing.T) {
 		t.Fatalf("exit = %d\n%s", code, output)
 	}
 
-	before, err := repository.InspectSnapshot(fixture.root)
+	before, err := repository.InspectSnapshot(context.Background(), fixture.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestRunnerArtifactsDoNotChangeTheCandidateDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	after, err := repository.InspectSnapshot(fixture.root)
+	after, err := repository.InspectSnapshot(context.Background(), fixture.root)
 	if err != nil {
 		t.Fatal(err)
 	}

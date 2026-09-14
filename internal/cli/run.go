@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,7 +212,7 @@ func runStatus(args []string, root string, output io.Writer) error {
 			view.EvidenceIDs = record.Stop.EvidenceIDs
 		}
 	}
-	if summary, readinessErr := app.GoalReadiness(root, record.GoalID); readinessErr != nil {
+	if summary, readinessErr := app.GoalReadiness(context.Background(), root, record.GoalID); readinessErr != nil {
 		view.CurrentGoal, view.CurrentError = "unknown", readinessErr.Error()
 	} else {
 		view.CurrentGoal = string(summary.Completion)

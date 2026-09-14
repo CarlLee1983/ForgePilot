@@ -74,6 +74,8 @@ _Avoid_：長對話、跨 Work Item 的脈絡、Verification Run
 _Avoid_：PASS、Evidence、完成宣告、授權
 
 **Run Record**：某一次 Runner 執行的持久化 execution history，存在 `.forgepilot/runs/<run-id>/`。恢復時以 ForgePilot 最新 domain state 為準，Run Record 只提供預算與程序 ownership 的核對材料。
+
+**Pending Execution**：Run Record 裡一筆「Runner 啟動了某個外部程序，但還沒能確認它停下來」的紀錄——agent session、canonical check、runtime preflight 或 Git 子程序都算。它在程序啟動之前寫下，確認清理完成之後才移除，因此跨程序存活：重啟 CLI、換 run ID 或在同一個 workspace 換一個 Goal 都讀得到它。它與 **Stop Reason** 是兩件事——後者說「上一次為什麼結束」，`resume` 會清掉；恢復阻擋不會。
 _Avoid_：第二份 lifecycle、進度來源、Verification Log
 
 **Workspace Ownership**：同一個 workspace 同時只能有一個 Runner 的協調機制，以 canonical path 上的鎖表達；symlink 別名視為同一個 workspace。它只協調 Runner，不宣稱能阻止其他程序修改檔案。

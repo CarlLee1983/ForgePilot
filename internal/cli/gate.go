@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -66,7 +67,7 @@ func resolveGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := app.CandidateFacts(state, root)
+		repositoryState, factsErr := app.CandidateFacts(context.Background(), state, root)
 		if factsErr != nil {
 			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
 		}
@@ -95,7 +96,7 @@ func cancelGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := app.CandidateFacts(state, root)
+		repositoryState, factsErr := app.CandidateFacts(context.Background(), state, root)
 		if factsErr != nil {
 			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
 		}
@@ -114,7 +115,7 @@ func decisionMaker(root, override string) (string, error) {
 	if override != "" {
 		return override, nil
 	}
-	return repository.ConfiguredIdentity(root)
+	return repository.ConfiguredIdentity(context.Background(), root)
 }
 
 // decisionMakerLine says out loud what the recorded identity is worth. Printing

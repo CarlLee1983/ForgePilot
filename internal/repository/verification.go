@@ -35,8 +35,8 @@ type Snapshot struct {
 
 // CaptureSnapshot records the current working contents in a commit parented by
 // HEAD. It uses a private index, leaving the user's staged state untouched.
-func CaptureSnapshot(root, workID string, createdAt time.Time) (Snapshot, error) {
-	base, tree, digest, environment, cleanup, err := prepareSnapshot(root, false)
+func CaptureSnapshot(ctx context.Context, root, workID string, createdAt time.Time) (Snapshot, error) {
+	base, tree, digest, environment, cleanup, err := prepareSnapshot(ctx, root, false)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -48,20 +48,20 @@ func CaptureSnapshot(root, workID string, createdAt time.Time) (Snapshot, error)
 		"GIT_AUTHOR_DATE="+createdAt.UTC().Format(time.RFC3339Nano),
 		"GIT_COMMITTER_DATE="+createdAt.UTC().Format(time.RFC3339Nano),
 	)
-	current, err := Head(root)
+	current, err := Head(ctx, root)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	if current != base {
 		return Snapshot{}, fmt.Errorf("HEAD moved while capturing snapshot: started at %s, now at %s", base, current)
 	}
-	output, err := git(root, commitEnvironment, "commit-tree", tree, "-p", base)
+	output, err := git(ctx, root, commitEnvironment, "commit-tree", tree, "-p", base)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("create snapshot commit: %w", err)
 	}
 	revision := strings.TrimSpace(output)
 	ref := snapshotRef(workID, createdAt, revision)
-	if err := retainSnapshot(root, ref, revision); err != nil {
+	if err := retainSnapshot(ctx, root, ref, revision); err != nil {
 		return Snapshot{}, fmt.Errorf("retain snapshot: %w", err)
 	}
 	return Snapshot{BaseRevision: base, Revision: revision, Digest: digest, Ref: ref}, nil
@@ -70,8 +70,8 @@ func CaptureSnapshot(root, workID string, createdAt time.Time) (Snapshot, error)
 // InspectSnapshot computes the same content digest CaptureSnapshot would use,
 // but keeps every object it creates in a temporary object database and creates
 // no ref. It therefore leaves both Git's visible state and object store alone.
-func InspectSnapshot(root string) (Snapshot, error) {
-	base, _, digest, _, cleanup, err := prepareSnapshot(root, true)
+func InspectSnapshot(ctx context.Context, root string) (Snapshot, error) {
+	base, _, digest, _, cleanup, err := prepareSnapshot(ctx, root, true)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -79,8 +79,8 @@ func InspectSnapshot(root string) (Snapshot, error) {
 	return Snapshot{BaseRevision: base, Digest: digest}, nil
 }
 
-func prepareSnapshot(root string, isolateObjects bool) (string, string, string, []string, func(), error) {
-	base, err := Head(root)
+func prepareSnapshot(ctx context.Context, root string, isolateObjects bool) (string, string, string, []string, func(), error) {
+	base, err := Head(ctx, root)
 	if err != nil {
 		return "", "", "", nil, nil, err
 	}
@@ -91,7 +91,7 @@ func prepareSnapshot(root string, isolateObjects bool) (string, string, string, 
 	cleanup := func() { _ = os.RemoveAll(directory) }
 	environment := []string{"GIT_INDEX_FILE=" + filepath.Join(directory, "index")}
 	if isolateObjects {
-		gitDir, err := git(root, nil, "rev-parse", "--absolute-git-dir")
+		gitDir, err := git(ctx, root, nil, "rev-parse", "--absolute-git-dir")
 		if err != nil {
 			cleanup()
 			return "", "", "", nil, nil, err
@@ -106,21 +106,21 @@ func prepareSnapshot(root string, isolateObjects bool) (string, string, string, 
 			"GIT_ALTERNATE_OBJECT_DIRECTORIES="+filepath.Join(strings.TrimSpace(gitDir), "objects"),
 		)
 	}
-	if _, err := git(root, environment, "read-tree", base); err != nil {
+	if _, err := git(ctx, root, environment, "read-tree", base); err != nil {
 		cleanup()
 		return "", "", "", nil, nil, fmt.Errorf("seed snapshot index: %w", err)
 	}
-	if _, err := git(root, environment, "add", "-A", "--", "."); err != nil {
+	if _, err := git(ctx, root, environment, "add", "-A", "--", "."); err != nil {
 		cleanup()
 		return "", "", "", nil, nil, fmt.Errorf("stage snapshot contents: %w", err)
 	}
-	output, err := git(root, environment, "write-tree")
+	output, err := git(ctx, root, environment, "write-tree")
 	if err != nil {
 		cleanup()
 		return "", "", "", nil, nil, fmt.Errorf("write snapshot tree: %w", err)
 	}
 	tree := strings.TrimSpace(output)
-	digest, err := snapshotDigest(root, environment, base, tree)
+	digest, err := snapshotDigest(ctx, root, environment, base, tree)
 	if err != nil {
 		cleanup()
 		return "", "", "", nil, nil, err
@@ -132,11 +132,11 @@ func snapshotRef(workID string, createdAt time.Time, revision string) string {
 	return "refs/forgepilot/snapshots/" + workID + "/" + createdAt.UTC().Format("20060102T150405.000000000Z") + "-" + revision
 }
 
-func retainSnapshot(root, ref, revision string) error {
-	if _, err := git(root, nil, "update-ref", ref, revision, ""); err == nil {
+func retainSnapshot(ctx context.Context, root, ref, revision string) error {
+	if _, err := git(ctx, root, nil, "update-ref", ref, revision, ""); err == nil {
 		return nil
 	} else {
-		output, resolveErr := git(root, nil, "rev-parse", "--verify", ref)
+		output, resolveErr := git(ctx, root, nil, "rev-parse", "--verify", ref)
 		if resolveErr == nil && strings.TrimSpace(output) == revision {
 			return nil
 		}
@@ -148,8 +148,8 @@ type snapshotEntry struct {
 	mode, kind, object, path string
 }
 
-func snapshotDigest(root string, environment []string, base, tree string) (string, error) {
-	output, err := git(root, environment, "ls-tree", "-r", "-z", tree)
+func snapshotDigest(ctx context.Context, root string, environment []string, base, tree string) (string, error) {
+	output, err := git(ctx, root, environment, "ls-tree", "-r", "-z", tree)
 	if err != nil {
 		return "", fmt.Errorf("list snapshot tree: %w", err)
 	}
@@ -195,8 +195,8 @@ func writeSnapshotDigestField(hash io.Writer, field string) {
 // so the rejection reads as the command the user actually ran. It plays no
 // part in the judgement itself: the check above is the only thing either
 // caller may lean on.
-func EnsureClean(root, action string) error {
-	output, err := git(root, nil, "status", "--porcelain", "--untracked-files=normal")
+func EnsureClean(ctx context.Context, root, action string) error {
+	output, err := git(ctx, root, nil, "status", "--porcelain", "--untracked-files=normal")
 	if err != nil {
 		return err
 	}
@@ -211,8 +211,8 @@ func EnsureClean(root, action string) error {
 // committed. Unlike EnsureClean, which asks about the whole worktree, this asks
 // about exactly one path, so a dirty file elsewhere in the worktree cannot make
 // this report a false positive for a path that is itself clean.
-func Uncommitted(root, path string) (bool, error) {
-	output, err := git(root, nil, "status", "--porcelain", "--untracked-files=normal", "--", path)
+func Uncommitted(ctx context.Context, root, path string) (bool, error) {
+	output, err := git(ctx, root, nil, "status", "--porcelain", "--untracked-files=normal", "--", path)
 	if err != nil {
 		return false, err
 	}
@@ -220,8 +220,8 @@ func Uncommitted(root, path string) (bool, error) {
 }
 
 // Head resolves the full commit SHA that a Verification Run will be bound to.
-func Head(root string) (string, error) {
-	output, err := git(root, nil, "rev-parse", "HEAD")
+func Head(ctx context.Context, root string) (string, error) {
+	output, err := git(ctx, root, nil, "rev-parse", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("resolve HEAD: %w", err)
 	}
@@ -282,28 +282,28 @@ func EnsureCanonicalCheckInContext(ctx context.Context, checkout string, runtime
 
 // PruneWorktrees clears registrations left behind by runs that were killed. Git
 // keeps the metadata until asked to prune, so this runs before every new run.
-func PruneWorktrees(root string) error {
-	_, err := git(root, nil, "worktree", "prune")
+func PruneWorktrees(ctx context.Context, root string) error {
+	_, err := git(ctx, root, nil, "worktree", "prune")
 	return err
 }
 
 // AddWorktree checks the exact revision out in isolation. Always detached and by
 // full SHA: naming a branch fails because the main worktree already holds it.
-func AddWorktree(root, path, revision string) error {
+func AddWorktree(ctx context.Context, root, path, revision string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 	// Clear both halves of a leftover run before pruning: git keeps a
 	// registration whose directory still exists, and removing the directory first
 	// without pruning turns it into a "missing but already registered" failure.
-	_, _ = git(root, nil, "worktree", "remove", "--force", path)
+	_, _ = git(ctx, root, nil, "worktree", "remove", "--force", path)
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
-	if _, err := git(root, nil, "worktree", "prune"); err != nil {
+	if _, err := git(ctx, root, nil, "worktree", "prune"); err != nil {
 		return err
 	}
-	if _, err := git(root, nil, "worktree", "add", "--detach", path, revision); err != nil {
+	if _, err := git(ctx, root, nil, "worktree", "add", "--detach", path, revision); err != nil {
 		return fmt.Errorf("create isolated worktree: %w", err)
 	}
 	return nil
@@ -311,8 +311,8 @@ func AddWorktree(root, path, revision string) error {
 
 // RemoveWorktree always forces: a verification run leaves build output behind,
 // and git refuses to remove a worktree that has untracked files.
-func RemoveWorktree(root, path string) error {
-	if _, err := git(root, nil, "worktree", "remove", "--force", path); err != nil {
+func RemoveWorktree(ctx context.Context, root, path string) error {
+	if _, err := git(ctx, root, nil, "worktree", "remove", "--force", path); err != nil {
 		return os.RemoveAll(path)
 	}
 	return nil
@@ -352,14 +352,47 @@ func mergedEnvironment(overrides []string) []string {
 	return append(environment, overrides...)
 }
 
-func git(root string, environment []string, arguments ...string) (string, error) {
+// git runs one Git command under the caller's context, through the same managed
+// process path as every other external process ForgePilot starts. Before this it
+// used exec.Command and CombinedOutput with no context at all, so a cancellation
+// reached the Runner's `make verify` and its runtime probes but stopped dead at
+// the repository boundary: a post-checkout hook or a clean/smudge filter that
+// blocks held a Ctrl-C for as long as it liked, and the `ctx.Err()` checks
+// placed before each call are start gates, which say nothing to a process that
+// is already running.
+//
+// Git's own semantics are unchanged and are the reason this is not simply
+// exec.CommandContext: stdout and stderr stay merged into the single string
+// callers parse, the environment override still wins over the inherited one so
+// GIT_INDEX_FILE keeps the user's real index out of it, and a non-zero exit is
+// still an error carrying the output and the exit code rather than a result.
+func git(ctx context.Context, root string, environment []string, arguments ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
 	command.Env = mergedEnvironment(environment)
-	output, err := command.CombinedOutput()
+	var collected strings.Builder
+	run, err := process.Start(ctx, command, &collected)
+	output := collected.String()
 	if err != nil {
-		return string(output), fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+		return output, fmt.Errorf("git %s: %w", strings.Join(arguments, " "), errors.Join(err, run.Cleanup))
 	}
-	return string(output), nil
+	if !run.Completed {
+		// Stopped rather than finished. The cleanup verdict travels with it: a Git
+		// child that could not be confirmed gone is still holding this repository,
+		// and losing that here is exactly how a worktree gets removed underneath a
+		// process that is still writing it.
+		return output, fmt.Errorf("git %s: %w", strings.Join(arguments, " "),
+			errors.Join(context.Cause(ctx), run.Cleanup))
+	}
+	if run.Cleanup != nil {
+		return output, fmt.Errorf("git %s: %w", strings.Join(arguments, " "), run.Cleanup)
+	}
+	if run.ExitCode != 0 {
+		return output, fmt.Errorf("git %s: exit status %d: %s", strings.Join(arguments, " "), run.ExitCode, strings.TrimSpace(output))
+	}
+	return output, nil
 }
 
 // RunCanonicalCheckInContext executes the managed project's canonical check

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -39,12 +40,12 @@ type Decision struct {
 // on, then asks internal/work for one legal action within the Goal. Nothing is
 // cached between calls: every step re-reads, because Gates, Candidates and Goal
 // status all move underneath a long-running caller.
-func GoalDecision(root, goalID string) (Decision, error) {
+func GoalDecision(ctx context.Context, root, goalID string) (Decision, error) {
 	state, err := storage.Load(root)
 	if err != nil {
 		return Decision{}, err
 	}
-	facts, err := GoalCandidateFacts(&state, goalID, root)
+	facts, err := GoalCandidateFacts(ctx, &state, goalID, root)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -96,9 +97,9 @@ func RunnableGoal(root, goalID string) (work.Goal, error) {
 // StartWork applies the existing start transition, resolving the facts that
 // transition depends on inside the locked callback so it cannot act on a fact
 // that went stale while the lock was being taken.
-func StartWork(root, id string, now Now) error {
+func StartWork(ctx context.Context, root, id string, now Now) error {
 	return storage.Update(root, func(state *work.State) error {
-		facts, err := StartFacts(state, id, root)
+		facts, err := StartFacts(ctx, state, id, root)
 		if err != nil {
 			return err
 		}
@@ -108,7 +109,7 @@ func StartWork(root, id string, now Now) error {
 
 // ReconcileGoal recomputes one Goal's persisted readiness against current
 // facts. It appends no Evidence, answers no Gate and changes no review policy.
-func ReconcileGoal(root, goalID string, now Now) ([]work.ReadinessChange, error) {
+func ReconcileGoal(ctx context.Context, root, goalID string, now Now) ([]work.ReadinessChange, error) {
 	var changes []work.ReadinessChange
 	err := storage.Update(root, func(state *work.State) error {
 		// The Goal is checked before any Git call so an unknown or stopped Goal is
@@ -116,7 +117,7 @@ func ReconcileGoal(root, goalID string, now Now) ([]work.ReadinessChange, error)
 		if err := state.ReconcilableGoal(goalID); err != nil {
 			return err
 		}
-		facts, factsErr := GoalReadinessFacts(state, goalID, root)
+		facts, factsErr := GoalReadinessFacts(ctx, state, goalID, root)
 		if factsErr != nil {
 			return fmt.Errorf("resolve current Candidate before reconciling readiness: %w", factsErr)
 		}
@@ -131,12 +132,12 @@ func ReconcileGoal(root, goalID string, now Now) ([]work.ReadinessChange, error)
 // It is recomputed from current facts every time, which is why a run record's
 // stored conclusion and this answer are reported separately: the workspace may
 // have moved since the run stopped.
-func GoalReadiness(root, goalID string) (work.GoalSummary, error) {
+func GoalReadiness(ctx context.Context, root, goalID string) (work.GoalSummary, error) {
 	state, err := storage.Load(root)
 	if err != nil {
 		return work.GoalSummary{}, err
 	}
-	facts, err := GoalCandidateFacts(&state, goalID, root)
+	facts, err := GoalCandidateFacts(ctx, &state, goalID, root)
 	if err != nil {
 		return work.GoalSummary{}, err
 	}

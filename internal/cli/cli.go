@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -204,7 +205,7 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 		case work.GoalBlocked:
 			return state.BlockGoal(id, reason, now())
 		case work.GoalActive:
-			repositoryState, err := app.CandidateFacts(state, root)
+			repositoryState, err := app.CandidateFacts(context.Background(), state, root)
 			if err != nil {
 				return fmt.Errorf("resolve current Candidate before unblocking: %w", err)
 			}
@@ -238,7 +239,7 @@ func addWork(args []string, root string, output io.Writer) error {
 	}
 	var added work.Item
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := app.CandidateFacts(state, root)
+		repositoryState, factsErr := app.CandidateFacts(context.Background(), state, root)
 		if factsErr != nil {
 			return fmt.Errorf("resolve current Candidate before adding work: %w", factsErr)
 		}
@@ -254,7 +255,7 @@ func addWork(args []string, root string, output io.Writer) error {
 	// Best-effort: work add already succeeded, so a failure to query git here
 	// must not turn a successful command into a failing one. The hint is a
 	// courtesy, not a result the caller depends on.
-	if uncommitted, hintErr := repository.Uncommitted(root, story); hintErr == nil && uncommitted {
+	if uncommitted, hintErr := repository.Uncommitted(context.Background(), root, story); hintErr == nil && uncommitted {
 		_, err = fmt.Fprintf(output, "%s is not committed yet;\nuse `forgepilot verify %s --snapshot` to verify the working tree,\nor commit it before commit-mode verification.\n", story, added.ID)
 	}
 	return err
@@ -293,7 +294,7 @@ func next(args []string, root string, output io.Writer) error {
 // recommendations still work in a repository without a commit, just as next
 // did before candidate-aware selection existed.
 func nextRepositoryState(state *work.State, root string) (work.RepositoryState, error) {
-	return app.CandidateFacts(state, root)
+	return app.CandidateFacts(context.Background(), state, root)
 }
 
 // reconcile writes the readiness the current facts imply for one Goal. It is the
@@ -309,7 +310,7 @@ func reconcile(args []string, root string, output io.Writer) error {
 	if id == "" {
 		return errors.New("usage: forgepilot reconcile --goal <goal-id>")
 	}
-	changes, err := app.ReconcileGoal(root, id, now)
+	changes, err := app.ReconcileGoal(context.Background(), root, id, now)
 	if err != nil {
 		return err
 	}
@@ -355,7 +356,7 @@ func start(args []string, root string, output io.Writer) error {
 	if len(args) != 1 {
 		return errors.New("usage: forgepilot start <work-id>")
 	}
-	if err := app.StartWork(root, args[0], now); err != nil {
+	if err := app.StartWork(context.Background(), root, args[0], now); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(output, "%s RUNNING\n", args[0])
@@ -372,12 +373,12 @@ func status(args []string, root string, output io.Writer) error {
 	}
 	// Staleness needs the current revision, but a repository without one is not
 	// an error for a query: report what is known and omit the comparison.
-	revision, _ := repository.Head(root)
+	revision, _ := repository.Head(context.Background(), root)
 	digest := ""
 	for _, item := range state.WorkItems {
 		latest, ok := state.LatestVerification(item.ID)
 		if item.Status != work.Done && ok && latest.CandidateKind == work.SnapshotCandidate {
-			if workspace, inspectErr := repository.InspectSnapshot(root); inspectErr == nil {
+			if workspace, inspectErr := repository.InspectSnapshot(context.Background(), root); inspectErr == nil {
 				revision, digest = workspace.BaseRevision, workspace.Digest
 			}
 			break
@@ -482,13 +483,13 @@ func statusSummary(args []string, root string, output io.Writer) error {
 	repositoryState := work.RepositoryState{}
 	if summary.HasVerification && summary.Item.Status != work.Done {
 		if summary.Verification.CandidateKind == work.SnapshotCandidate {
-			workspace, inspectErr := repository.InspectSnapshot(root)
+			workspace, inspectErr := repository.InspectSnapshot(context.Background(), root)
 			if inspectErr != nil {
 				return inspectErr
 			}
 			repositoryState = work.RepositoryState{Revision: workspace.BaseRevision, SnapshotDigest: workspace.Digest}
 		} else {
-			revision, headErr := repository.Head(root)
+			revision, headErr := repository.Head(context.Background(), root)
 			if headErr != nil {
 				return headErr
 			}

@@ -128,11 +128,23 @@ func TerminateOwned(identity ProcessIdentity) error {
 	}
 	switch liveness {
 	case Gone, Unrelated:
-		return nil
+		// A leader that has exited says nothing about the rest of its group: the
+		// children it forked keep the pgid it had and go on writing this
+		// workspace. An empty group is the only confirmation available, and when
+		// the group is not empty this pid is exactly the case where signalling
+		// would be a guess — the recorded identity no longer matches what holds
+		// it, so the group under that id may not be ours to kill.
+		// See docs/adr/0020-worker-ownership-is-fail-closed.md.
+		if process.Gone(identity.PGID) {
+			return nil
+		}
+		return &process.NotSettled{PGID: identity.PGID, Reason: fmt.Sprintf(
+			"process group %d still has members although pid %d is no longer the worker; it cannot be signalled without guessing whose it is",
+			identity.PGID, identity.PID)}
 	case Unknown:
 		return fmt.Errorf("cannot confirm whether pid %d is still the worker", identity.PID)
 	}
-	return process.Stop(identity.PGID)
+	return process.Stop(identity.PGID, process.NewBudget())
 }
 
 // bounded stops writing once limit bytes have been accepted, leaving one note
@@ -179,7 +191,7 @@ type Session struct {
 
 	command *exec.Cmd
 	output  *os.File
-	drain   func()
+	drain   func(*process.Budget)
 	done    chan error
 }
 
@@ -187,6 +199,19 @@ type Session struct {
 // anything else, so a crash straight afterwards still leaves a recoverable
 // record of what was launched.
 func (session *Session) Started() ProcessIdentity { return session.Identity }
+
+// Discard releases a session a caller decided not to wait for. Wait owns the
+// ordinary path; this exists for the one caller that stops a session it has
+// just launched — because it could not record the identity — and then returns
+// without ever calling Wait. Without it the output pipe's copy goroutine and
+// the log file are never released.
+//
+// It does not stop anything: the caller has already decided what to do about
+// the process. It only lets go of what this handle holds.
+func (session *Session) Discard() {
+	session.drain(process.NewBudget())
+	session.output.Close()
+}
 
 // Start launches one new session. The child is placed in its own process group
 // so the whole tree can be stopped later, the handoff is delivered on stdin and
@@ -232,7 +257,7 @@ func Start(runtime Runtime, request Request, now time.Time) (*Session, error) {
 	}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
-		drain()
+		drain(nil)
 		output.Close()
 		return nil, fmt.Errorf("start %s: %w", plan.Executable, err)
 	}
@@ -262,27 +287,12 @@ func (session *Session) Wait(ctx context.Context) (Result, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var waitErr error
-	completed := false
-	select {
-	case waitErr = <-session.done:
-		completed = true
-	case <-ctx.Done():
-		// A session that reached its own end in the same instant is not thrown
-		// away by the cancellation beside it; nothing is waited for here, so a
-		// cancellation that arrived first still wins.
-		select {
-		case waitErr = <-session.done:
-			completed = true
-		default:
-			_ = process.StopLeader(session.Identity.PGID, session.done)
-		}
-	}
-	// Settled after the session process has been reaped: an unreaped zombie is
-	// still a member of its own group. Output already produced is collected
-	// afterwards, within its own bound.
-	cleanup := process.Stop(session.Identity.PGID)
-	session.drain()
+	// The same sequence process.Start uses, from the same place: one budget for
+	// the whole stop, the leader reaped before the group is confirmed, and the
+	// leader's own verdict kept rather than discarded — which is what the `_ =`
+	// that used to be here threw away, turning "no wait result ever arrived"
+	// into silence.
+	waitErr, completed, cleanup := process.Settle(ctx, session.Identity.PGID, session.done, session.drain)
 	session.output.Close()
 	if !completed {
 		return Result{}, &StoppedError{Cause: context.Cause(ctx), Cleanup: cleanup}

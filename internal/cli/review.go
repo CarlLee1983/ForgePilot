@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -78,17 +79,17 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	}
 	currentRevision, currentDigest := "", ""
 	if hasVerification && latest.CandidateKind == work.SnapshotCandidate {
-		workspace, inspectErr := repository.InspectSnapshot(root)
+		workspace, inspectErr := repository.InspectSnapshot(context.Background(), root)
 		if inspectErr != nil {
 			return inspectErr
 		}
 		currentRevision, currentDigest = workspace.BaseRevision, workspace.Digest
 	} else {
 		// Legacy COMMIT review remains strict clean-HEAD review.
-		if cleanErr := repository.EnsureClean(root, "reviewing"); cleanErr != nil {
+		if cleanErr := repository.EnsureClean(context.Background(), root, "reviewing"); cleanErr != nil {
 			return cleanErr
 		}
-		currentRevision, err = repository.Head(root)
+		currentRevision, err = repository.Head(context.Background(), root)
 		if err != nil {
 			return err
 		}

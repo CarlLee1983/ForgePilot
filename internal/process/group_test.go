@@ -250,8 +250,8 @@ func TestAnAlreadyCancelledContextStartsNothing(t *testing.T) {
 // Stop refuses to call an unrecorded group settled. Reporting "nothing to do"
 // for a group nobody can name is how a live writer stops being visible.
 func TestStopRefusesAnUnrecordedGroup(t *testing.T) {
-	if err := Stop(0); !errors.Is(err, ErrNotSettled) {
-		t.Fatalf("Stop(0) = %v, want ErrNotSettled", err)
+	if err := Stop(0, NewBudget()); !errors.Is(err, ErrNotSettled) {
+		t.Fatalf("Stop(0, NewBudget()) = %v, want ErrNotSettled", err)
 	}
 }
 
@@ -285,5 +285,84 @@ func TestAnUnusableWaitResultIsNotACompletion(t *testing.T) {
 	}
 	if missing.Completed {
 		t.Fatalf("result = %+v; a command that never ran read as completed", missing)
+	}
+}
+
+// A wait result that never arrives used to mean StopLeader never returned:
+// after SIGKILL it blocked on the channel forever, so CleanupGrace described a
+// path that could not honour it. "We sent SIGKILL" is not "the process is
+// gone", and the difference has to come back as a value.
+func TestAWaitResultThatNeverArrivesIsReportedRatherThanWaitedFor(t *testing.T) {
+	directory := t.TempDir()
+	started := filepath.Join(directory, "started")
+	command := run(t, script(t, `: > `+started+`
+sleep 300
+`))
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pgid := command.Process.Pid
+	// The real wait is still owned by exactly one consumer. It is kept out of
+	// StopLeader's way so the test can say "the result never arrived" without
+	// inventing a process the operating system cannot kill.
+	real := make(chan error, 1)
+	go func() { real <- command.Wait() }()
+	t.Cleanup(func() {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		select {
+		case <-real:
+		case <-time.After(30 * time.Second):
+		}
+	})
+	awaitFile(t, started)
+
+	withheld := make(chan error, 1)
+	returned := make(chan error, 1)
+	go func() { returned <- StopLeader(pgid, withheld, NewBudget()) }()
+
+	bound := TerminationGrace + KillGrace + 10*time.Second
+	select {
+	case err := <-returned:
+		if !errors.Is(err, ErrNotSettled) {
+			t.Fatalf("StopLeader returned %v, want an ErrNotSettled report", err)
+		}
+	case <-time.After(bound):
+		t.Fatalf("StopLeader did not return within %s of being asked to stop", bound)
+	}
+}
+
+// The same statement one layer up: an execution whose wait never came back must
+// not report a completion, and must not lose the fact that its cleanup could not
+// be confirmed. A zero exit code arrived at this way would become a PASS.
+func TestAnUnconfirmedStopIsNotACompletion(t *testing.T) {
+	directory := t.TempDir()
+	started := filepath.Join(directory, "started")
+	command := run(t, script(t, `: > `+started+`
+sleep 300
+`))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	var result Run
+	var err error
+	go func() {
+		defer close(done)
+		result, err = Start(ctx, command, new(bytes.Buffer))
+	}()
+	awaitFile(t, started)
+	cancel()
+
+	bound := CleanupGrace + 10*time.Second
+	select {
+	case <-done:
+	case <-time.After(bound):
+		t.Fatalf("Start did not return within %s of its context ending", bound)
+	}
+	if result.Completed {
+		t.Fatalf("a cancelled execution reported a completion with exit code %d", result.ExitCode)
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start returned %v", err)
 	}
 }

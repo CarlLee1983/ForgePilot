@@ -487,7 +487,7 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 
 ## Long-running Runner MVP
 
-`forgepilot run` 是這一輪新增的執行命令。設計主張與範圍見 [docs/specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)；界線見 [ADR-0018](adr/0018-runner-may-launch-a-local-coding-cli.md)、[ADR-0019](adr/0019-runner-executes-forgepilot-decides.md) 、[ADR-0020](adr/0020-worker-ownership-is-fail-closed.md) 與 [ADR-0021](adr/0021-execution-limits-are-bounded-and-named.md)。
+`forgepilot run` 是這一輪新增的執行命令。設計主張與範圍見 [docs/specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)；界線見 [ADR-0018](adr/0018-runner-may-launch-a-local-coding-cli.md)、[ADR-0019](adr/0019-runner-executes-forgepilot-decides.md) 、[ADR-0020](adr/0020-worker-ownership-is-fail-closed.md) 、[ADR-0021](adr/0021-execution-limits-are-bounded-and-named.md) 與 [ADR-0022](adr/0022-pending-cleanup-outlives-the-process.md)。
 
 | 指令 | 輸入與成功結果 |
 |---|---|
@@ -589,6 +589,22 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 | 單次期限取 `min(run deadline, now + timeout)`；多原因同時到達依固定優先序分類 | `internal/runner` 的 `TestAStepIsBoundedByWhicheverLimitComesFirst`、`TestAStepThatOutlivesItsOwnTimeoutSaysSo`、`TestASignalOutranksEveryExpiry`、`TestTheRunDeadlineOutranksACoincidentStepTimeout`、`TestTheFirstReasonToArriveIsTheOneRecorded`、`TestEachCauseMapsOntoItsOwnStopReason` |
 | 已到期的 run 經 `resume` 不啟動新 session，也不重置 deadline、steps 或 attempts | `TestResumingAnExpiredRunStartsNoNewSession` |
 | 獨立 `forgepilot verify` 不繼承 Runner 總期限，PASS／FAIL 輸出與退出行為不變 | `TestStandaloneVerifyKeepsItsOwnContract` |
+| SIGINT 送達時 Runner 正阻塞在 `git worktree add` 的 post-checkout hook：停止、退出碼 130 | `TestAStopReachesGitWhileItIsCheckingOutTheCandidate/interrupt` |
+| 同上，SIGTERM：退出碼 143 | `TestAStopReachesGitWhileItIsCheckingOutTheCandidate/termination` |
+| 同上，run deadline 到期：`MAX_DURATION`、退出碼 3 | `TestAStopReachesGitWhileItIsCheckingOutTheCandidate/run_deadline` |
+| Git 被取消時不啟動正式 verification，也不開始下一張工作 | `TestAStopReachesGitWhileItIsCheckingOutTheCandidate`（三個 subtest 皆斷言） |
+| snapshot capture 被取消：使用者 HEAD、branch、real index、staging state 與工作檔案未被破壞 | `TestCancellingSnapshotCaptureLeavesTheUsersRepositoryAlone` |
+| SIGKILL 之後仍收不到 wait 結果時，在有界時間內回傳未確認結果 | `internal/process` 的 `TestAWaitResultThatNeverArrivesIsReportedRatherThanWaitedFor` |
+| 未確認停止的執行不被當成完成，不以零值退出碼變成 PASS | `internal/process` 的 `TestAnUnconfirmedStopIsNotACompletion` |
+| PID 重用且群組仍有成員時不猜測、不發送 signal，回報未確認 | `internal/agent` 的 `TestInspectDistinguishesGoneFromOursFromUnrelated` |
+| 取消與清理失敗同時發生時，`VerifyResult.Cleanup` 不遺失，原始中斷原因仍可讀 | `internal/app` 的 `TestACancellationDoesNotSwallowAnUnconfirmedCleanup`（canonical 與 runtime preflight 兩個 subtest） |
+| 清理未確認時不刪除恢復紀錄指向的 checkout | `internal/app` 的 `TestAnUnconfirmedCleanupLeavesTheCheckoutInPlace` |
+| 未確認的清理阻擋 resume 原 run、新 run 與同 workspace 的另一個 Goal | `TestAnUnconfirmedCleanupBlocksEveryWayBackIntoTheWorkspace` |
+| 被阻擋的嘗試不消耗 steps／attempts，也不改寫既有 run 的 deadline | `TestAnUnconfirmedCleanupBlocksEveryWayBackIntoTheWorkspace` |
+| `resume` 清除 `stop` 但不清除 `pending` | `TestResumeClearsTheStopButNotThePendingCleanup` |
+| 沒有觀察到 identity 的 pending execution 一律 fail closed | `TestAPendingExecutionWithNoObservedIdentityIsRefused` |
+| 群組確認消失後恢復解除，且 `pending` 在同一次確認中清除 | `TestRecoveryResumesOnceTheGroupIsConfirmedGone` |
+| 舊的正常紀錄、舊 worker 紀錄仍可恢復；毀損紀錄仍阻擋 | `TestOlderRunRecordsStillRecoverTheWayTheyDid`（三個 subtest） |
 
 ### Runner MVP Exit checklist
 
@@ -599,4 +615,5 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 - [x] `make verify` 與 `go test -race -count=1 ./...` 實跑通過。
 - [x] 針對狀態機繞過、錯誤成功判定、跨 Goal 執行、重疊 writer、crash window、預算重置、Candidate freshness 與無上限輸出做過 code review，**且修正本身也經過第二輪 review**——第一輪的六項修正帶進 2 HIGH 與 3 MEDIUM，已各自以先寫失敗測試的方式修掉。
 - [x] 停止訊號、程序清理與兩種期限的執行控制補強（[06-execution-control](specs/runner-mvp/issues/06-execution-control.md)）：SIGINT／SIGTERM 傳達到 canonical check、正常退出也清理程序群組、`--max-duration` 約束整段執行；決定記在 [ADR-0021](adr/0021-execution-limits-are-bounded-and-named.md)。
+- [x] 取消到得了執行中的 Git 子程序、終止與等待都有上限、清理未確認時跨 run／resume／重啟持續阻擋（[07-recovery-hardening](specs/runner-mvp/issues/07-recovery-hardening.md)）：決定記在 [ADR-0022](adr/0022-pending-cleanup-outlives-the-process.md)。
 - [x] ADR-0019／architecture 已明列兩個 state-write 偵測窗口與信任模型：agent session 比對整份 state，canonical check 只保護正在驗證的 Work Item，並明說這不是全域 state 完整性或 sandbox 保證。
