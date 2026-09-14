@@ -545,7 +545,14 @@ func currentRuntimeExecutable(name string) string {
 }
 
 func executableVersion(checkout, name, executable string) (string, error) {
-	command := exec.Command(executable, "--version")
+	arguments := []string{"--version"}
+	// Go reports its version through a subcommand, not a --version flag. Keep
+	// the invocation rule here with the output parsing so every runtime still
+	// goes through the same candidate-checkout and environment boundary.
+	if name == "go" {
+		arguments = []string{"version"}
+	}
+	command := exec.Command(executable, arguments...)
 	command.Dir = checkout
 	command.Env = mergedEnvironment([]string{"MISE_AUTO_INSTALL=0"})
 	output, err := command.CombinedOutput()

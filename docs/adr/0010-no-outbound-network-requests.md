@@ -8,4 +8,6 @@ M4 是這條界線第一次被真正推擠的地方。PR review 有一條看似�
 
 **Consequences:** PR review target 的 HEAD 必須是本機 repository 裡真實存在的 commit，`review` 才能記錄。PR reference 是使用者輸入的識別字串，ForgePilot 只驗格式，不查證那個 PR 存在、是否開著、HEAD 是不是它。PR 標錯不會被偵測，也不該假裝會。
 
+**Amended by [ADR-0018](0018-runner-may-launch-a-local-coding-cli.md):** 這條界線仍然完整適用於本文件寫作時存在的每一條命令。ADR-0018 加入的唯一例外是使用者明確執行 `forgepilot run` 時，Runner 可以啟動一個指定的本機 coding CLI，而該 CLI 自己會連線到模型服務。ForgePilot 自身仍不持有 HTTP client，Evidence 的 result 集合也未因此改變。下面的失效條件照原樣保留，因為它們檢查的正是沒有被放寬的那一半。
+
 **Falsified if:** `internal/repository/` 出現 `net/http` 或任何網路 client，或 `exec.Command` 開始呼叫 `gh`、`curl` 之類的外部客戶端，或 `internal/work/evidence.go` 的 result 集合新增表示「無法判斷」的值。任一項發生，都表示這條界線已被跨過，而上面三個理由需要重新回答。

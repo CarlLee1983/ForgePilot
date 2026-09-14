@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -377,4 +379,60 @@ func git(root string, environment []string, arguments ...string) (string, error)
 		return string(output), fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
+}
+
+// RunCanonicalCheckInContext executes the canonical check under a context. The
+// child gets its own process group and the whole group is signalled when the
+// context ends, because `make verify` forks: stopping only the outermost
+// process would leave the real work running and the worktree still changing.
+// See docs/adr/0020-worker-ownership-is-fail-closed.md.
+func RunCanonicalCheckInContext(ctx context.Context, directory string, runtime RuntimeEnvironment, log io.Writer) (int, error) {
+	command := exec.Command("make", "verify")
+	command.Dir = directory
+	command.Env = mergedEnvironment(runtime.environment)
+	command.Stdout = log
+	command.Stderr = log
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		return 0, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- command.Wait() }()
+	select {
+	case err := <-finished:
+		return canonicalExitCode(err)
+	case <-ctx.Done():
+		terminateGroup(command.Process.Pid)
+		<-finished
+		return 0, ctx.Err()
+	}
+}
+
+// terminateGroup asks a process group to stop, then insists. The grace period
+// lets a canonical check flush its output into the log before it dies.
+func terminateGroup(pid int) {
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	deadline := time.Now().Add(terminationGrace)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(-pid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+}
+
+// terminationGrace is how long a signalled process group has to exit on its own
+// before it is killed outright.
+const terminationGrace = 5 * time.Second
+
+func canonicalExitCode(err error) (int, error) {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
+	}
+	return 0, nil
 }

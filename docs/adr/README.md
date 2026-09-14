@@ -15,7 +15,7 @@
 | [0007](0007-blocking-is-not-a-status.md) | 阻擋由 Gate 表達，不佔用狀態欄 | accepted |
 | [0008](0008-approval-completes-work.md) | 沒有完成指令；`review approve` 在條件滿足時於同一交易內完成工作 | accepted |
 | [0009](0009-reclaim-before-refusing.md) | `verify` 先無條件回收孤兒，再判斷能不能開始新的執行 | accepted |
-| [0010](0010-no-outbound-network-requests.md) | 不主動發出網路請求——不自行 HTTP，也不 spawn `gh` | accepted |
+| [0010](0010-no-outbound-network-requests.md) | 不主動發出網路請求——不自行 HTTP，也不 spawn `gh` | accepted（由 0018 加註例外） |
 | [0011](0011-pr-identity-does-not-gate-completion.md) | PR identity 不參與完成判定與 stale 判定 | accepted |
 | [0012](0012-verification-log-outside-state.md) | Verification 輸出串流到 state 之外的 log，以 run 為鍵；Evidence 上不加欄位 | accepted |
 | [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 是否自我套用 ForgeFlowV2——尚未回答的開放問題 | proposed |
@@ -23,6 +23,9 @@
 | [0015](0015-runtime-contract-belongs-to-candidate.md) | Runtime Contract 從 Candidate checkout 解析；只固定該次 subprocess environment，actual versions 隨 run 進 Evidence | accepted |
 | [0016](0016-goal-level-review-is-policy.md) | Goal-level review 是持久化 policy，不是略過 Human review 的捷徑 | accepted |
 | [0017](0017-readiness-is-a-projection-made-durable.md) | Readiness 由 `reconcile` 明確重算；GOAL-policy stale VERIFIED 的重驗延後到無法前進時，仍欠在總審邊界 | accepted |
+| [0018](0018-runner-may-launch-a-local-coding-cli.md) | Runner 可以啟動本機 coding CLI；核心治理命令與狀態判定仍不依賴模型服務 | accepted |
+| [0019](0019-runner-executes-forgepilot-decides.md) | Runner 只保存 execution history，每一步重新向 typed query 取得合法動作 | accepted |
+| [0020](0020-worker-ownership-is-fail-closed.md) | Worker 程序 ownership 以 pgid 加識別比對判定，不確定時拒絕續跑 | accepted |
 
 ## 什麼時候該加一份
 
