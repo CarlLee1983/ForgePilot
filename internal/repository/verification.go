@@ -13,8 +13,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/CarlLee1983/ForgePilot/internal/process"
 )
 
 // CanonicalCommand is the only verification ForgePilot runs. The managed project
@@ -231,20 +232,20 @@ func Head(root string) (string, error) {
 	return revision, nil
 }
 
-// EnsureCanonicalCheck reports whether a checkout defines the canonical check at
-// all. A revision without one cannot be verified, which is not the same as
-// failing verification, so this is refused rather than recorded as Evidence.
+// EnsureCanonicalCheckInContext reports whether a checkout defines the canonical
+// check at all. A revision without one cannot be verified, which is not the same
+// as failing verification, so this is refused rather than recorded as Evidence.
 //
 // It must be given the isolated checkout, never the user's worktree: a Makefile
 // that is present but gitignored would make the main worktree look verifiable
 // while the committed revision has no canonical check at all.
-func EnsureCanonicalCheck(checkout string) error {
-	return EnsureCanonicalCheckWithRuntime(checkout, RuntimeEnvironment{})
-}
-
-// EnsureCanonicalCheckWithRuntime inspects the same checkout with the same
-// resolved environment that the guarded verification transaction will use.
-func EnsureCanonicalCheckWithRuntime(checkout string, runtime RuntimeEnvironment) error {
+//
+// `make -n verify` is a real external process — it reads the makefile the
+// project wrote and can do whatever that makefile does — so it is bounded by the
+// same stop signal and deadline as the check it precedes. A preflight that
+// cannot be interrupted is a blind spot in the middle of a cancellation path,
+// not a cheap probe.
+func EnsureCanonicalCheckInContext(ctx context.Context, checkout string, runtime RuntimeEnvironment) error {
 	found := false
 	for _, name := range []string{"GNUmakefile", "makefile", "Makefile"} {
 		if _, err := os.Stat(filepath.Join(checkout, name)); err == nil {
@@ -258,14 +259,25 @@ func EnsureCanonicalCheckWithRuntime(checkout string, runtime RuntimeEnvironment
 	command := exec.Command("make", "-n", "verify")
 	command.Dir = checkout
 	command.Env = mergedEnvironment(runtime.environment)
-	output, err := command.CombinedOutput()
-	if err == nil {
+	var collected strings.Builder
+	run, err := process.Start(ctx, command, &collected)
+	if err != nil {
+		return err
+	}
+	if !run.Completed {
+		return errors.Join(ctx.Err(), run.Cleanup)
+	}
+	if run.Cleanup != nil {
+		return run.Cleanup
+	}
+	if run.ExitCode == 0 {
 		return nil
 	}
-	if strings.Contains(string(output), "No rule to make target") {
+	output := collected.String()
+	if strings.Contains(output, "No rule to make target") {
 		return fmt.Errorf("this revision does not define `%s`", CanonicalCommand)
 	}
-	return fmt.Errorf("`%s` cannot be run against this revision: %s", CanonicalCommand, strings.TrimSpace(string(output)))
+	return fmt.Errorf("`%s` cannot be run against this revision: %s", CanonicalCommand, strings.TrimSpace(output))
 }
 
 // PruneWorktrees clears registrations left behind by runs that were killed. Git
@@ -321,37 +333,6 @@ func OpenLog(path string) (*os.File, error) {
 	return file, nil
 }
 
-// RunCanonicalCheck executes the managed project's canonical check, streaming
-// its combined output to log as it runs, and reports its exit code. A non-zero
-// code is a verification result, not an error here; err is reserved for being
-// unable to run the check at all.
-//
-// Streaming rather than collecting the output and writing it once means an
-// interrupted run still leaves behind whatever it produced before it was
-// killed, and a long run is not silent for its whole duration.
-func RunCanonicalCheck(directory string, log io.Writer) (int, error) {
-	return RunCanonicalCheckWithRuntime(directory, RuntimeEnvironment{}, log)
-}
-
-// RunCanonicalCheckWithRuntime executes the canonical check in the runtime
-// environment already resolved and validated for this candidate checkout.
-func RunCanonicalCheckWithRuntime(directory string, runtime RuntimeEnvironment, log io.Writer) (int, error) {
-	command := exec.Command("make", "verify")
-	command.Dir = directory
-	command.Env = mergedEnvironment(runtime.environment)
-	command.Stdout = log
-	command.Stderr = log
-	err := command.Run()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return exit.ExitCode(), nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
-	}
-	return 0, nil
-}
-
 func mergedEnvironment(overrides []string) []string {
 	if len(overrides) == 0 {
 		return nil
@@ -381,58 +362,26 @@ func git(root string, environment []string, arguments ...string) (string, error)
 	return string(output), nil
 }
 
-// RunCanonicalCheckInContext executes the canonical check under a context. The
-// child gets its own process group and the whole group is signalled when the
-// context ends, because `make verify` forks: stopping only the outermost
-// process would leave the real work running and the worktree still changing.
+// RunCanonicalCheckInContext executes the managed project's canonical check
+// under a context, streaming its combined output to log as it runs, and reports
+// how it ended. A non-zero exit code is a verification result, not an error
+// here; err is reserved for being unable to run the check at all.
+//
+// Streaming rather than collecting the output and writing it once means an
+// interrupted run still leaves behind whatever it produced before it was
+// killed, and a long run is not silent for its whole duration. The child gets its own process group, the whole group
+// is stopped when the context ends, and — the part that used to be missing —
+// the group is settled on the ordinary path too: a check that exits 0 having
+// forked a watcher has not stopped owning this worktree, and leaving that
+// watcher running would hand it to the next step.
 // See docs/adr/0020-worker-ownership-is-fail-closed.md.
-func RunCanonicalCheckInContext(ctx context.Context, directory string, runtime RuntimeEnvironment, log io.Writer) (int, error) {
+func RunCanonicalCheckInContext(ctx context.Context, directory string, runtime RuntimeEnvironment, log io.Writer) (process.Run, error) {
 	command := exec.Command("make", "verify")
 	command.Dir = directory
 	command.Env = mergedEnvironment(runtime.environment)
-	command.Stdout = log
-	command.Stderr = log
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := command.Start(); err != nil {
-		return 0, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
+	run, err := process.Start(ctx, command, log)
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return run, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
 	}
-	finished := make(chan error, 1)
-	go func() { finished <- command.Wait() }()
-	select {
-	case err := <-finished:
-		return canonicalExitCode(err)
-	case <-ctx.Done():
-		terminateGroup(command.Process.Pid)
-		<-finished
-		return 0, ctx.Err()
-	}
-}
-
-// terminateGroup asks a process group to stop, then insists. The grace period
-// lets a canonical check flush its output into the log before it dies.
-func terminateGroup(pid int) {
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	deadline := time.Now().Add(terminationGrace)
-	for time.Now().Before(deadline) {
-		if syscall.Kill(-pid, 0) != nil {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-}
-
-// terminationGrace is how long a signalled process group has to exit on its own
-// before it is killed outright.
-const terminationGrace = 5 * time.Second
-
-func canonicalExitCode(err error) (int, error) {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return exit.ExitCode(), nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)
-	}
-	return 0, nil
+	return run, err
 }

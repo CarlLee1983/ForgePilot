@@ -26,6 +26,7 @@
 | [0018](0018-runner-may-launch-a-local-coding-cli.md) | Runner 可以啟動本機 coding CLI；核心治理命令與狀態判定仍不依賴模型服務 | accepted |
 | [0019](0019-runner-executes-forgepilot-decides.md) | Runner 只保存 execution history，每一步重新向 typed query 取得合法動作 | accepted |
 | [0020](0020-worker-ownership-is-fail-closed.md) | Worker 程序 ownership 以 pgid 加識別比對判定，不確定時拒絕續跑 | accepted |
+| [0021](0021-execution-limits-are-bounded-and-named.md) | 停止原因在觸發當下寫定；單次期限與總期限取小；清理寬限是另一個量，且必須確認 | accepted |
 
 ## 什麼時候該加一份
 

@@ -69,14 +69,39 @@ func IsProtocolError(err error) bool {
 	return errors.As(err, &protocol)
 }
 
-// ErrTimedOut reports a session stopped by its own deadline.
-var ErrTimedOut = errors.New("agent session exceeded its timeout")
-
-// ErrStopped reports a session stopped because the caller asked it to, which is
-// what a SIGINT reaching the Runner looks like from here. It is deliberately
-// distinct from a runtime failure: the session was working, and the person
-// resuming later needs to know it was interrupted rather than broken.
+// ErrStopped reports a session stopped because the caller's context ended,
+// which is what a SIGINT, a session timeout or an expired run deadline all look
+// like from here. It is deliberately distinct from a runtime failure: the
+// session was working, and the person resuming later needs to know it was
+// interrupted rather than broken. Which limit ended it is the caller's to say —
+// only the caller set them — and StoppedError carries the cause back so it can.
 var ErrStopped = errors.New("agent session stopped on request")
+
+// StoppedError is a stopped session together with what the caller's context
+// gave as the reason, and whether the session's process group could be
+// confirmed empty afterwards.
+type StoppedError struct {
+	Cause   error
+	Cleanup error
+}
+
+func (err *StoppedError) Error() string {
+	message := ErrStopped.Error()
+	if err.Cause != nil {
+		message += ": " + err.Cause.Error()
+	}
+	if err.Cleanup != nil {
+		message += "; " + err.Cleanup.Error()
+	}
+	return message
+}
+
+func (err *StoppedError) Is(target error) bool { return target == ErrStopped }
+
+// Both are exposed to errors.Is: a caller asks "was it stopped" and "could its
+// process group be confirmed empty" separately, and the second question has an
+// answer on the completed path too.
+func (err *StoppedError) Unwrap() []error { return []error{err.Cause, err.Cleanup} }
 
 // MaxResultBytes caps the structured result a session may hand back. The
 // summary is meant to be read by a person and quoted into the next handoff;

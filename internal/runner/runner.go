@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/app"
+	"github.com/CarlLee1983/ForgePilot/internal/process"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
@@ -455,14 +455,26 @@ func (runner *Runner) checkLimits() (bool, error) {
 	if runner.record.Steps >= runner.options.Budget.MaxSteps {
 		return true, runner.stopNow(StopMaxSteps, fmt.Sprintf("%d steps is the configured maximum", runner.options.Budget.MaxSteps))
 	}
-	if !runner.now().Before(runner.record.Deadline) {
-		return true, runner.stopNow(StopMaxDuration,
-			fmt.Sprintf("the run passed its deadline of %s; resuming does not extend it", runner.record.Deadline.Format(time.RFC3339)))
+	return runner.beforeAction()
+}
+
+// beforeAction is the gate every new action and every new subprocess passes. A
+// check at the top of the loop is not enough on its own: an agent session can
+// finish after the deadline has already gone, and starting a verification then
+// would spend time the run no longer has. Signals are checked here for the same
+// reason — a signal must not be the moment a new session or a new check begins.
+func (runner *Runner) beforeAction() (bool, error) {
+	if runner.record.Stop != nil {
+		return true, nil
 	}
 	select {
 	case <-runner.options.Stop:
 		return true, runner.stopNow(runner.stopSignal(), "stopped on signal; resume this run to continue")
 	default:
+	}
+	if !runner.now().Before(runner.record.Deadline) {
+		return true, runner.stopNow(StopMaxDuration,
+			fmt.Sprintf("the run passed its deadline of %s; resuming does not extend it", runner.record.Deadline.Format(time.RFC3339)))
 	}
 	return false, nil
 }
@@ -630,19 +642,51 @@ func (runner *Runner) finish() error {
 // result is what decides: an agent's claim, its exit code, and the check's own
 // exit code are all irrelevant here — only recorded Evidence counts.
 func (runner *Runner) verify(itemID, label string) error {
+	// Asked again here rather than only at the top of the loop: this is the other
+	// side of the agent-session boundary, and a check is a subprocess that can
+	// run for as long as the run had left.
+	if stopped, err := runner.beforeAction(); stopped || err != nil {
+		return err
+	}
 	if stopped, err := runner.spendStep(); stopped || err != nil {
 		return err
 	}
 	runner.print("Step %d: %s %s\n", runner.record.Steps, label, itemID)
-	result, err := app.Verify(context.Background(), runner.options.Root, itemID, runner.options.Output,
-		app.VerifyOptions{Snapshot: runner.options.Snapshot, Timeout: runner.options.Budget.VerifyTimeout, Now: runner.now})
+	// The check is bound to the earlier of the run's deadline and its own
+	// timeout, and to the same stop signal the loop watches. Without this the
+	// canonical check was the one place a Ctrl-C did not reach.
+	execution := runner.newExecution(runner.options.Budget.VerifyTimeout)
+	defer execution.release()
+	// No Timeout is passed: app.VerifyOptions.Timeout is the standalone command's
+	// own limit, counted in full from when the check starts. The Runner's limit
+	// is already the earlier of that timeout and the run's deadline, and arming
+	// both would leave two timers measuring the same thing with only one of them
+	// honouring min().
+	result, err := app.Verify(execution.ctx, runner.options.Root, itemID, runner.options.Output,
+		app.VerifyOptions{Snapshot: runner.options.Snapshot, Now: runner.now})
 	if result.Reclaimed != nil {
 		runner.record.EvidenceIDs = append(runner.record.EvidenceIDs, result.Reclaimed.ID)
 	}
 	if result.HasEvidence {
 		runner.record.EvidenceIDs = append(runner.record.EvidenceIDs, result.Evidence.ID)
 	}
+	// Checked before the engineering outcome is acted on, and deliberately not
+	// turned into one: Evidence this call earned is already saved and stands,
+	// but a group that cannot be confirmed empty means the next step could
+	// overlap something still writing this workspace.
+	if result.Cleanup != nil {
+		return runner.stopNow(StopRecoveryBlocked, fmt.Sprintf(
+			"%s: the canonical check's process group could not be confirmed stopped: %v (the step ended %s). Find what is still running under this workspace and stop it before running anything else",
+			itemID, result.Cleanup, describe(execution.Cause())))
+	}
 	switch {
+	case errors.Is(err, app.ErrVerificationInterrupted):
+		// The run and the check ended together; which limit ended them is recorded
+		// here, where the limits were set, rather than guessed from the context.
+		if reason, ok := runner.stopReasonFor(execution.Cause(), StopVerifyTimeout); ok {
+			return runner.stopNow(reason, fmt.Sprintf("%s: %v", itemID, err))
+		}
+		return err
 	case errors.Is(err, app.ErrVerificationTimedOut):
 		return runner.stopNow(StopVerifyTimeout, err.Error())
 	case app.IsRefusal(err):
@@ -678,6 +722,12 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 	}
 	if runner.record.Steps >= runner.options.Budget.MaxSteps {
 		return runner.stopNow(StopMaxSteps, fmt.Sprintf("%d steps is the configured maximum", runner.options.Budget.MaxSteps))
+	}
+	// The last gate before a process is launched. Everything above this is
+	// bookkeeping; below it a coding CLI starts writing the workspace, and a run
+	// whose deadline has already passed must not be what starts one.
+	if stopped, err := runner.beforeAction(); stopped || err != nil {
+		return err
 	}
 	sessionDir, err := runner.sessionDirectory(itemID, attempt)
 	if err != nil {
@@ -767,7 +817,21 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 		}
 	}
 
-	result, waitErr := session.Wait(runner.options.Budget.AgentTimeout, runner.options.Stop)
+	// Bound to the earlier of the run's deadline and this session's own timeout,
+	// so a session started shortly before the deadline cannot add a full
+	// --agent-timeout on top of it.
+	execution := runner.newExecution(runner.options.Budget.AgentTimeout)
+	defer execution.release()
+	result, waitErr := session.Wait(execution.ctx)
+	// Asked before the worker record is withdrawn. That record is what names the
+	// pid and pgid whoever has to sort this out needs; clearing it because the
+	// call returned would make the next run look clean while something may still
+	// be writing this workspace.
+	if cleanupErr := stoppedCleanup(waitErr); cleanupErr != nil {
+		return runner.stopNow(StopRecoveryBlocked, fmt.Sprintf(
+			"%s attempt %d: the session's process group could not be confirmed stopped: %v (the step ended %s). Find what is still running under this workspace and stop it before running anything else",
+			itemID, attempt, cleanupErr, describe(execution.Cause())))
+	}
 	runner.record.Worker = nil
 	if stopped, err := runner.checkpoint(); stopped || err != nil {
 		return err
@@ -783,16 +847,18 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 		return runner.stopNow(StopStateTampered, fmt.Sprintf(
 			"%s: .forgepilot/state.json changed while the session was running. The session was told not to touch it, so its report cannot be trusted — but a ForgePilot command run in another terminal during the session would look the same from here. Inspect the state, and this run's journal, before running anything else", itemID))
 	}
-	return runner.afterSession(itemID, attempt, result, waitErr)
+	return runner.afterSession(itemID, attempt, result, waitErr, execution.Cause())
 }
 
-func (runner *Runner) afterSession(itemID string, attempt int, result agent.Result, waitErr error) error {
+func (runner *Runner) afterSession(itemID string, attempt int, result agent.Result, waitErr error, cause stopCause) error {
 	switch {
 	case errors.Is(waitErr, agent.ErrStopped):
-		return runner.stopNow(runner.stopSignal(),
-			fmt.Sprintf("%s attempt %d was stopped on signal; its process group was terminated. Resume this run with `forgepilot run resume %s`", itemID, attempt, runner.record.RunID))
-	case errors.Is(waitErr, agent.ErrTimedOut):
-		return runner.stopNow(StopAgentTimeout, fmt.Sprintf("%s attempt %d: %v", itemID, attempt, waitErr))
+		reason, ok := runner.stopReasonFor(cause, StopAgentTimeout)
+		if !ok {
+			return waitErr
+		}
+		return runner.stopNow(reason, fmt.Sprintf(
+			"%s attempt %d was stopped; its process group was terminated. Resume this run with `forgepilot run resume %s`", itemID, attempt, runner.record.RunID))
 	case agent.IsProtocolError(waitErr):
 		if err := runner.recordAttempt(itemID, attempt, "protocol_error", waitErr.Error()); err != nil {
 			return err
@@ -901,6 +967,17 @@ func sessionReservation(handoffBytes int, outputBytes int64) int64 {
 
 func sessionName(itemID string, attempt int) string {
 	return fmt.Sprintf("%s-attempt-%d", strings.ToLower(itemID), attempt)
+}
+
+// stoppedCleanup reports that a session's process group could not be confirmed
+// empty. It is a different question from why the session ended, and it has an
+// answer on the ordinary path too: a session that exited cleanly can still have
+// left a group behind.
+func stoppedCleanup(err error) error {
+	if errors.Is(err, process.ErrNotSettled) {
+		return err
+	}
+	return nil
 }
 
 func firstLine(text string) string {

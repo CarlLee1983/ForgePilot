@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/CarlLee1983/ForgePilot/internal/process"
 	"github.com/CarlLee1983/ForgePilot/internal/repository"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
@@ -40,6 +41,14 @@ func IsRefusal(err error) bool {
 // ErrVerificationTimedOut reports a canonical check stopped by its deadline. The
 // run produced no result, so it closes out as INTERRUPTED — never as a FAIL.
 var ErrVerificationTimedOut = errors.New("canonical check exceeded its timeout")
+
+// ErrVerificationInterrupted reports a canonical check that was stopped by its
+// caller — a signal, or a deadline the caller owns — rather than by the timeout
+// this command was given. The run produced no result either way, so it closes
+// out as INTERRUPTED; the two are kept apart because only the caller knows
+// which of its own limits ended the step, and guessing from context.Err() would
+// report every expiry as a verification timeout.
+var ErrVerificationInterrupted = errors.New("canonical check was interrupted")
 
 // ErrStateWrittenDuringCheck reports that .forgepilot/state.json changed while
 // the canonical check was running. The check is the repository's own script, so
@@ -81,6 +90,11 @@ type VerifyResult struct {
 	RefreshWarning error
 	// Interrupted marks a run that ended without producing a result.
 	Interrupted bool
+	// Cleanup records that the canonical check's process group could not be
+	// confirmed stopped. It is not an engineering result: any Evidence this call
+	// produced still stands, and the caller must nonetheless stop rather than
+	// start a step that could overlap whatever is still running.
+	Cleanup error
 }
 
 // Verify runs the canonical check against one Work Item's Candidate, holding
@@ -102,6 +116,16 @@ func Verify(ctx context.Context, root, id string, output io.Writer, options Veri
 
 func runVerification(ctx context.Context, root, id string, output io.Writer, options VerifyOptions) (VerifyResult, error) {
 	var result VerifyResult
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Every external process below is preceded by this. A step that has already
+	// been told to stop must not be the one that starts something new, and the
+	// preflight — snapshot capture, worktree checkout, runtime probes,
+	// `make -n verify` — is where a cancellation path used to go blind.
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("%w before it began: %w", ErrVerificationInterrupted, err)
+	}
 	// An abandoned run is a fact that already happened, so it is recorded before
 	// anything is allowed to refuse the command: a block stops new work, not the
 	// recording of what is already over. Reclaiming is never quiet — it is
@@ -145,15 +169,32 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	// worktree: those are different file trees, and only the checkout holds what
 	// the recorded revision actually contains.
 	worktree := WorktreePath(root, id, candidate.Revision)
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("%w before its checkout was made: %w", ErrVerificationInterrupted, err)
+	}
 	if err := repository.PruneWorktrees(root); err != nil {
 		return result, err
 	}
 	if err := repository.AddWorktree(root, worktree, candidate.Revision); err != nil {
 		return result, err
 	}
-	runtime, err := repository.ResolveRuntime(worktree)
+	runtime, err := repository.ResolveRuntimeInContext(ctx, worktree)
 	if err != nil {
 		_ = repository.RemoveWorktree(root, worktree)
+		// A cancelled resolution is not the repository failing to declare a usable
+		// runtime, so it must not be reported as a refusal: that would record a
+		// condition outside the code where there is only a stop signal.
+		if ctx.Err() != nil {
+			return result, fmt.Errorf("%w while resolving its runtime: %w", ErrVerificationInterrupted, err)
+		}
+		// Nor is a process group nobody could confirm empty. The preflight runs
+		// external processes too, and a refusal there would record "this revision
+		// has no usable runtime" for something that is only a stop that did not
+		// complete.
+		if errors.Is(err, process.ErrNotSettled) {
+			result.Cleanup = err
+			return result, err
+		}
 		return result, refuse(err)
 	}
 	defer func() {
@@ -161,8 +202,15 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 			fmt.Fprintf(output, "warning: could not remove resolved runtime environment: %v\n", closeErr)
 		}
 	}()
-	if err := repository.EnsureCanonicalCheckWithRuntime(worktree, runtime); err != nil {
+	if err := repository.EnsureCanonicalCheckInContext(ctx, worktree, runtime); err != nil {
 		_ = repository.RemoveWorktree(root, worktree)
+		if ctx.Err() != nil {
+			return result, fmt.Errorf("%w during its preflight: %w", ErrVerificationInterrupted, err)
+		}
+		if errors.Is(err, process.ErrNotSettled) {
+			result.Cleanup = err
+			return result, err
+		}
 		return result, refuse(err)
 	}
 
@@ -208,7 +256,8 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	if err != nil {
 		return result, err
 	}
-	exitCode, runErr := runCanonicalCheck(ctx, worktree, runtime, log, options.Timeout)
+	exitCode, cleanupErr, runErr := runCanonicalCheck(ctx, worktree, runtime, log, options.Timeout)
+	result.Cleanup = cleanupErr
 	// A state that no longer loads is the loudest version of the same signal:
 	// it parsed on the way in, so whatever happened to it happened here.
 	verdictAfter, fingerprintErr := verdictFingerprint(root, id)
@@ -222,9 +271,11 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		// command say so rather than quietly carry on.
 		return result, verificationVerdictChanged(id)
 	}
-	if errors.Is(runErr, ErrVerificationTimedOut) {
+	if errors.Is(runErr, ErrVerificationTimedOut) || errors.Is(runErr, ErrVerificationInterrupted) {
 		// The check produced no result, so the run is closed out the same way any
-		// other interruption is: INTERRUPTED Evidence, never an inferred FAIL.
+		// other interruption is: INTERRUPTED Evidence, never an inferred FAIL. A
+		// run that can still be settled legally is settled, so nobody is left with
+		// a VERIFYING that has no live runner behind it.
 		interrupted, _, _, _, reclaimErr := reclaimRun(id, root, options.now(), verdictBefore)
 		if reclaimErr != nil {
 			return result, reclaimErr
@@ -369,30 +420,52 @@ func statusOf(root, id string) work.Status {
 	return state.WorkItemStatus(id)
 }
 
-// runCanonicalCheck executes the canonical check, optionally under a deadline.
-// The child is given its own process group so a timeout stops the whole tree:
-// `make verify` forks, and killing only the outermost process leaves the real
-// work running. See docs/adr/0020-worker-ownership-is-fail-closed.md.
-func runCanonicalCheck(ctx context.Context, directory string, runtime repository.RuntimeEnvironment, log io.Writer, timeout time.Duration) (int, error) {
-	if timeout <= 0 && ctx == nil {
-		return repository.RunCanonicalCheckWithRuntime(directory, runtime, log)
-	}
+// runCanonicalCheck executes the canonical check under the caller's context and
+// this command's own optional deadline. It reports three things separately,
+// because they are three different questions: the engineering exit code, whether
+// the managed process group could be confirmed stopped, and why the step ended.
+//
+// The child is given its own process group so the whole tree is stopped rather
+// than only its outermost process, and the group is settled on every path — a
+// check that exits 0 having forked a watcher has not finished owning the
+// worktree. See docs/adr/0020-worker-ownership-is-fail-closed.md.
+func runCanonicalCheck(ctx context.Context, directory string, runtime repository.RuntimeEnvironment, log io.Writer, timeout time.Duration) (int, error, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	checkCtx := ctx
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		checkCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	exitCode, err := repository.RunCanonicalCheckInContext(ctx, directory, runtime, log)
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return 0, fmt.Errorf("%w after %s", ErrVerificationTimedOut, timeout)
+	run, err := repository.RunCanonicalCheckInContext(checkCtx, directory, runtime, log)
+	if run.Completed {
+		// "It reached its own end" is not the same as "it produced a result": a
+		// wait that failed for its own reasons — ECHILD, an I/O failure — leaves
+		// exit code zero, and returning that as an outcome would write a PASS for
+		// a check nobody watched finish.
+		if err != nil {
+			return 0, run.Cleanup, err
+		}
+		// Decided when it happened, not by asking the context afterwards: a result
+		// this check genuinely produced is not discarded because a signal arrived
+		// beside it, and it is the last thing to reach a durable Evidence write.
+		return run.ExitCode, run.Cleanup, nil
 	}
-	if err != nil && ctx.Err() != nil {
-		return 0, fmt.Errorf("canonical check cancelled: %w", ctx.Err())
+	// The caller's own end is asked about first. Classifying by the combined
+	// deadline would report a run that ran out of total duration as a
+	// verification timeout, sending whoever reads the record to the wrong flag.
+	if ctx.Err() != nil {
+		return 0, run.Cleanup, fmt.Errorf("%w: %w", ErrVerificationInterrupted, ctx.Err())
 	}
-	return exitCode, err
+	if timeout > 0 && errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+		return 0, run.Cleanup, fmt.Errorf("%w after %s", ErrVerificationTimedOut, timeout)
+	}
+	if err != nil {
+		return 0, run.Cleanup, err
+	}
+	return 0, run.Cleanup, fmt.Errorf("%w: the canonical check ended without a result", ErrVerificationInterrupted)
 }
 
 // reclaimOrphan closes out a run that was abandoned, recording it as INTERRUPTED
