@@ -350,7 +350,7 @@ Agent runtime（Codex 等 coding CLI）與 Verification toolchain（Candidate ch
 
 Runner 呼叫 `State.ActionableNextForGoal(goalID, repository)` 取得有型別的 `NextAction`，不解析任何 CLI 輸出。Goal-scoped 與全域查詢共用同一份 priority／legality 實作；篩選只作用在候選集合，依賴與 freshness 仍然看完整 state。`State.GoalStall` 把「沒有合法動作」分類成 VERIFYING、Gate、依賴未滿足、Goal 非 ACTIVE、空 Goal 或未知；VERIFYING 是 live 還是 orphan 由 `internal/app` 以既有的 flock 判斷，因為那不是狀態機能回答的事。
 
-Runner 能做的寫入只有三種：既有的 start transition、既有的 goal readiness reconciliation、既有的 verification orchestration。它不寫 VERIFIED、不寫 DONE、不核准 review、不解除 Gate、不完成 Goal。理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
+Runner 能做的寫入只有四種既有 transition：start、Goal readiness reconciliation、verification orchestration，以及 agent 以至少兩個選項回報 `needs_human` 時的 bounded `OpenGate`。最後一種只會增加阻擋，不會放行；Runner 不寫 VERIFIED／DONE、不核准 review、不解除 Gate、不完成 Goal。理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
 
 ### 網路邊界
 
@@ -370,7 +370,7 @@ Workspace lock 涵蓋整段 Runner，鍵是 canonical path，因此 symlink 別�
 
 那個 lock 只證明「沒有活著的 Runner」，不證明「沒有活著的 worker」：被 SIGKILL 的 Runner 會釋放 lock，而它啟動的 coding CLI 還活著。因此 `run` 與 `run resume` **都**會在取得 lock 之後掃描既有 run record，對每一筆仍宣稱有 worker 的記錄套用同一套四值判定；任何一筆判不出來就 recovery blocked，不新增 run、不啟動 writer。
 
-Agent session 拿到的是 workspace 寫入權限，而 `.forgepilot/` 在 workspace 裡。交接內容裡的禁令是對未受信任模型的請求，不是機制；機制是 session 前後各取一次 `state.json` 的 digest，不同即以 `AGENT_WROTE_FORGEPILOT_STATE` 停止，且不採信該次 attempt 的任何回報。這偵測得到已經發生的事，防不了正在發生的事——限度與理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
+Agent session 拿到的是 workspace 寫入權限，而 `.forgepilot/` 在 workspace 裡。交接內容裡的禁令是對未受信任模型的請求，不是機制；session 前後會比對整份 `state.json` digest，不同即以 `AGENT_WROTE_FORGEPILOT_STATE` 停止，且不採信該次 attempt 的任何回報。canonical check 是第二個不受 Runner 控制的執行窗口；它比較完整 target Work Item（含 `current_run`）、owning Goal 的 repository／review policy 與完整 latest Verification Evidence，並在寫入結果的同一個 state transaction 再檢查一次。Goal lifecycle 的變化不在此 projection，讓已開始的 check 在 Goal 被 block/cancel 後仍能依既有規則保存 Evidence。這表示它**不保證**偵測 sibling Work Item、其他 Goal 或 Gate 的改寫，亦防不了 transaction 完成後或仍在進行的寫入；兩個機制都是事後偵測，不是 sandbox。限度與理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
 
 程序 ownership 以 pgid 加「啟動時由作業系統自己報回的 start time 與 command」比對判定，四種結果分別對應繼續、停止自己的程序群組、不得發送 signal、以及 recovery blocked。詳見 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。attempt 預算在程序啟動前先保存；程序啟動後立即補記 identity。
 

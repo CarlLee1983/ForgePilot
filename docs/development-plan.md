@@ -569,7 +569,7 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 
 | session 正常結束也終止整個 process group，不留下背景子孫程序 | `internal/agent` 的 `TestACleanExitStillStopsTheWholeProcessGroup` |
 | 引用失敗 log 的節錄會說自己被截斷，且不從半行開始 | `internal/runner` 的 `TestTailSaysWhenItCut`、`TestTailQuotesAShortLogWhole` |
 | SIGINT 與 SIGTERM 分別以 130／143 退出，`run status` 也據實回報 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestTerminationExitsWithItsOwnCode` |
-| 真實 Codex smoke | `TestCodexSmokeDrivesOneWorkItem`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。2026-09-14 對 codex-cli 0.154.0 實跑通過：一次 attempt 完成實作，正式 verification 產生 PASS Evidence，停在 `AWAITING_GOAL_REVIEW`，40.5 秒 |
+| 真實 Codex smoke | `TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。以 disposable Go repository 的三張相依 Story 驗證三次新 session、三份 SNAPSHOT PASS Evidence 與 `AWAITING_GOAL_REVIEW`；不以 fake runtime 紀錄冒充。2026-09-14 對 codex-cli 0.154.0 實跑通過，run `run-20260914t045121-d8bd10` 用 339.28 秒；Candidate 演進後依 freshness 規則補跑 prerequisite，最終 Evidence 為 EV-004、EV-005、EV-003。 |
 | 結構化結果的 schema 符合 strict structured output（每個物件的 `required` 涵蓋全部 `properties`） | `internal/agent` 的 `TestResultSchemaSatisfiesStrictStructuredOutput`、`TestDecodeResultAcceptsTheNullsTheSchemaRequires` |
 
 ### Runner MVP Exit checklist
@@ -580,4 +580,4 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組、保存恢復資訊後以 
 - [x] Runner 只寫 execution history，lifecycle 更新全部走既有 transition；state schema 未升版。
 - [x] `make verify` 與 `go test -race -count=1 ./...` 實跑通過。
 - [x] 針對狀態機繞過、錯誤成功判定、跨 Goal 執行、重疊 writer、crash window、預算重置、Candidate freshness 與無上限輸出做過 code review，**且修正本身也經過第二輪 review**——第一輪的六項修正帶進 2 HIGH 與 3 MEDIUM，已各自以先寫失敗測試的方式修掉。
-- [ ] ADR-0019 的「信任邊界」段尚未更新：偵測窗口現在有兩個（agent session 與 canonical check），且比對的不是整份 `state.json` 的 digest 而是該 Work Item 的裁決指紋。要不要把偵測範圍擴回全域、代價是接受合法並行寫入造成的偽陽性，是尚未做成的威脅模型決定。
+- [x] ADR-0019／architecture 已明列兩個 state-write 偵測窗口與信任模型：agent session 比對整份 state，canonical check 只保護正在驗證的 Work Item，並明說這不是全域 state 完整性或 sandbox 保證。

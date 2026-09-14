@@ -54,6 +54,31 @@ func TestResolveRuntimeKeepsCurrentEnvironmentWithoutDeclarations(t *testing.T) 
 	}
 }
 
+func TestResolveRuntimeInvokesGoWithVersionSubcommand(t *testing.T) {
+	checkout := t.TempDir()
+	writeRuntimeFixture(t, checkout, "go.mod", "module example.com/test\n\ngo 1.25.5\n")
+	bin := filepath.Join(t.TempDir(), "bin")
+	writeRuntimeExecutable(t, bin, "go", `#!/bin/sh
+if [ "$1" != "version" ]; then
+  echo "expected go version, got: $*" >&2
+  exit 1
+fi
+echo 'go version go1.25.5 darwin/arm64'
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
+	t.Setenv("MISE_DATA_DIR", t.TempDir())
+	t.Setenv("ASDF_DATA_DIR", t.TempDir())
+
+	runtime, err := ResolveRuntime(checkout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeRuntime(t, runtime)
+	if got, want := runtime.Versions(), map[string]string{"go": "1.25.5"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Versions() = %#v, want %#v", got, want)
+	}
+}
+
 func TestResolveRuntimeDiscoversSupportedDeclarations(t *testing.T) {
 	tests := []struct {
 		name, file, contents string

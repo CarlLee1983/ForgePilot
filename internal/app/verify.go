@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -219,13 +220,12 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		// because a state this command no longer recognises is not a state to
 		// transition. The verification stays live, which is what makes the next
 		// command say so rather than quietly carry on.
-		return result, fmt.Errorf("%w while verifying %s; nothing it reported can be trusted. Inspect the state before running anything else",
-			ErrStateWrittenDuringCheck, id)
+		return result, verificationVerdictChanged(id)
 	}
 	if errors.Is(runErr, ErrVerificationTimedOut) {
 		// The check produced no result, so the run is closed out the same way any
 		// other interruption is: INTERRUPTED Evidence, never an inferred FAIL.
-		interrupted, _, _, _, reclaimErr := reclaimRun(id, root, options.now())
+		interrupted, _, _, _, reclaimErr := reclaimRun(id, root, options.now(), verdictBefore)
 		if reclaimErr != nil {
 			return result, reclaimErr
 		}
@@ -244,6 +244,9 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	var status work.Status
 	var factsErr error
 	if err := storage.Update(root, func(state *work.State) error {
+		if err := ensureVerificationVerdictUnchanged(state, id, verdictBefore); err != nil {
+			return err
+		}
 		var recordErr error
 		repositoryState, err := CandidateFacts(state, root)
 		if err != nil {
@@ -284,7 +287,7 @@ func VerificationRetryCommand(id string, candidate work.Candidate) string {
 }
 
 // verdictFingerprint captures the facts this verification is about to decide:
-// the Work Item's own status and its latest Evidence. Nothing else belongs in
+// the Work Item's own status and its latest Verification Evidence. Nothing else belongs in
 // it. A digest of the whole state file would be simpler and wrong — a person
 // running `goal block` or `gate resolve` in another terminal writes state
 // legitimately while a check runs, and ADR-0010's transaction lock is
@@ -295,11 +298,67 @@ func verdictFingerprint(root, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return verificationVerdictFingerprint(&state, id)
+}
+
+// verificationVerdictFingerprint is the complete state that can affect the
+// target verification's recorded result: its Work Item (including CurrentRun),
+// owning Goal's repository and review policy, and latest Verification Evidence.
+// It deliberately excludes mutable Goal lifecycle fields, sibling Work Items,
+// other Goals and Gates so a legitimate governance write does not discard an
+// honestly earned verification result.
+func verificationVerdictFingerprint(state *work.State, id string) (string, error) {
 	latest, ok := state.LatestVerification(id)
-	if !ok {
-		return fmt.Sprintf("%s|none", state.WorkItemStatus(id)), nil
+	type goalInputs struct {
+		ID           string            `json:"id"`
+		Repository   string            `json:"repository"`
+		ReviewPolicy work.ReviewPolicy `json:"review_policy"`
 	}
-	return fmt.Sprintf("%s|%s|%s|%s", state.WorkItemStatus(id), latest.ID, latest.Result, latest.Revision), nil
+	verdict := struct {
+		Item     *work.Item     `json:"item,omitempty"`
+		Goal     *goalInputs    `json:"goal,omitempty"`
+		Evidence *work.Evidence `json:"evidence,omitempty"`
+	}{}
+	for index := range state.WorkItems {
+		if state.WorkItems[index].ID != id {
+			continue
+		}
+		item := state.WorkItems[index]
+		verdict.Item = &item
+		for goalIndex := range state.Goals {
+			if state.Goals[goalIndex].ID == item.GoalID {
+				goal := state.Goals[goalIndex]
+				verdict.Goal = &goalInputs{ID: goal.ID, Repository: goal.Repository, ReviewPolicy: goal.ReviewPolicy}
+				break
+			}
+		}
+		break
+	}
+	if ok {
+		verdict.Evidence = &latest
+	}
+	encoded, err := json.Marshal(verdict)
+	if err != nil {
+		return "", fmt.Errorf("encode verification verdict: %w", err)
+	}
+	return string(encoded), nil
+}
+
+// ensureVerificationVerdictUnchanged is called inside the transaction that
+// writes an outcome, closing the gap between the post-check observation and
+// RecordVerification. It intentionally projects only the target Work Item's
+// verdict, so unrelated human governance writes remain legitimate.
+func ensureVerificationVerdictUnchanged(state *work.State, id, expected string) error {
+	actual, err := verificationVerdictFingerprint(state, id)
+	if err != nil || actual != expected {
+		return verificationVerdictChanged(id)
+	}
+	return nil
+}
+
+func verificationVerdictChanged(id string) error {
+	return fmt.Errorf("%w while verifying %s; nothing it reported can be trusted. Inspect the state before running anything else",
+		ErrStateWrittenDuringCheck, id)
 }
 
 func statusOf(root, id string) work.Status {
@@ -344,7 +403,7 @@ func runCanonicalCheck(ctx context.Context, directory string, runtime repository
 // It asks nothing about Gates or the Goal. Whether a new run may start is a
 // separate question, decided after this and by different rules.
 func reclaimOrphan(id, root string, output io.Writer, now time.Time) (*work.Evidence, error) {
-	reclaimed, abandoned, logFile, found, err := reclaimRun(id, root, now)
+	reclaimed, abandoned, logFile, found, err := reclaimRun(id, root, now, "")
 	if err != nil || !found {
 		return nil, err
 	}
@@ -364,11 +423,16 @@ func reclaimOrphan(id, root string, output io.Writer, now time.Time) (*work.Evid
 	return &reclaimed, nil
 }
 
-func reclaimRun(id, root string, now time.Time) (work.Evidence, string, string, bool, error) {
+func reclaimRun(id, root string, now time.Time, expectedVerdict string) (work.Evidence, string, string, bool, error) {
 	var reclaimed work.Evidence
 	var abandoned, logFile string
 	var found bool
 	err := storage.Update(root, func(state *work.State) error {
+		if expectedVerdict != "" {
+			if err := ensureVerificationVerdictUnchanged(state, id, expectedVerdict); err != nil {
+				return err
+			}
+		}
 		var updateErr error
 		reclaimed, abandoned, logFile, found, updateErr = state.ReclaimRun(id, repository.CanonicalCommand, now)
 		return updateErr
