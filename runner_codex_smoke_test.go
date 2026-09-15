@@ -21,6 +21,15 @@ import (
 // about an unattended run against a real model.
 const SmokeVariable = "FORGEPILOT_CODEX_SMOKE"
 
+// smokeOptedIn reports whether a value of SmokeVariable opts in to spending
+// model quota. The comparison is exact, and that is the whole contract: "0",
+// "false", "off", "no", "true", "yes", "2" and a "1" with whitespace around it
+// are every one of them off. The guard this backs used to read "non-empty means
+// on", which turned each of those spellings — including the ones a person types
+// to mean off — into a request to drive a real model. Trimming first would fix
+// the least dangerous half of that and keep the rest, so it is not done either.
+func smokeOptedIn(value string) bool { return value == "1" }
+
 // TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary is the only test
 // that talks to a model. It needs a locally installed and already-authenticated
 // Codex; ForgePilot never installs or logs in on anyone's behalf. Its three
@@ -28,7 +37,7 @@ const SmokeVariable = "FORGEPILOT_CODEX_SMOKE"
 // session comes from the disposable repository's own make verify rather than
 // from an agent's completion claim.
 func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
-	if os.Getenv(SmokeVariable) == "" {
+	if !smokeOptedIn(os.Getenv(SmokeVariable)) {
 		t.Skipf("set %s=1 to drive the real Codex CLI", SmokeVariable)
 	}
 	fixture := newRunnerFixture(t, "01-normalize.md", "02-cli.md", "03-errors.md")
