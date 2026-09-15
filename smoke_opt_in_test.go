@@ -129,7 +129,7 @@ func TestRealCodexSmokeConsultsTheOptInBeforeAnySideEffect(t *testing.T) {
 			// The destination is named but never created: the assertion afterwards
 			// is that it still does not exist.
 			evidence := filepath.Join(t.TempDir(), "evidence")
-			relative := "smoke-opt-in-must-not-create-this"
+			relative, relativeTarget := privateRelativeArtifactPath(t, projectRoot(t))
 
 			environment := []string{
 				// PATH puts the spy first, so even a guard that let the round start
@@ -220,28 +220,89 @@ func TestRealCodexSmokeConsultsTheOptInBeforeAnySideEffect(t *testing.T) {
 				t.Fatalf("Codex was invoked without an exact opt-in: %s", spy)
 			}
 			requireAbsent(t, evidence)
-			// A relative destination is resolved against the working directory,
-			// which is the checkout itself, so this both proves nothing was
-			// exported and keeps the source tree clean.
-			requireAbsent(t, filepath.Join(projectRoot(t), relative))
+			// A relative destination is resolved against the child's working
+			// directory, which is the checkout. The path it resolves to is the
+			// one checked here, and it sits in this subtest's own temporary
+			// space rather than in the checkout, so the assertion observes only
+			// ground this test owns.
+			requireAbsent(t, relativeTarget)
 		})
 	}
 }
 
-// requireAbsent fails when a path the guard should have prevented exists. A stat
-// error that is not "no such file" is reported as undecided rather than as
-// evidence of a leak: claiming the export ran because a stat returned EACCES
-// would be an assertion saying more than it checked.
+// requireAbsentFoundMessage is the fragment requireAbsent reports when the path
+// is occupied. It is a constant so the regression tests in
+// require_absent_test.go can recognise the real helper's failure rather than
+// accept any non-zero exit — a compile error, a timeout or a test that never
+// ran would otherwise pass for a correct refusal.
+const requireAbsentFoundMessage = "expected it not to exist, but found an existing entry"
+
+// requireAbsent fails when a path the guard should have prevented exists. It is
+// a read-only assertion: it observes and reports, and it removes nothing. The
+// helper cannot know whether what it found belongs to this test, so deleting it
+// would risk destroying data the test never created — and would also erase the
+// very evidence its failure message is about.
+//
+// The observation goes through os.Lstat rather than os.Stat, so a symbolic link
+// counts as an existing entry in its own right, including one whose target is
+// gone: a dangling link is something that was created, and a guard that let it
+// through has still had an effect.
+//
+// A stat error that is not "no such file" is reported as undecided rather than
+// as evidence of a leak: claiming the export ran because a stat returned EACCES
+// would be an assertion saying more than it checked. The message likewise states
+// only what was seen. It does not claim the entry came from the smoke export,
+// because nothing here establishes that.
 func requireAbsent(t *testing.T, path string) {
 	t.Helper()
-	switch _, err := os.Stat(path); {
+	switch _, err := os.Lstat(path); {
 	case err == nil:
-		_ = os.RemoveAll(path)
-		t.Fatalf("%s was created without an opt-in; the export ran before the guard", path)
+		t.Fatalf("%s: %s; it has been left untouched", path, requireAbsentFoundMessage)
 	case os.IsNotExist(err):
 	default:
 		t.Fatalf("whether %s exists could not be decided: %v", path, err)
 	}
+}
+
+// privateRelativeArtifactPath produces the relative evidence destination for the
+// discriminating case, together with the absolute path that destination names.
+//
+// The case needs a path the export helper refuses, which means a relative one,
+// and the child resolves it against the checkout it runs in. Spelling it as a
+// fixed name in the checkout made the test reach for a path it did not own: a
+// developer with something of that name had their own data inspected. Anchoring
+// the relative path at this subtest's own temporary directory keeps the refusal
+// being tested and moves the observed location onto ground the test created.
+//
+// Both halves are returned together so the environment the child receives and
+// the path afterwards asserted to be absent cannot drift apart.
+//
+// Both ends are resolved through filepath.EvalSymlinks before the relative path
+// is computed. filepath.Rel is lexical, and its ".." prefix assumes the depth it
+// counted is the depth the kernel will walk; os.Getwd may return the logical
+// path a shell arrived by, so a checkout reached through a symbolic link would
+// make the child resolve the relative path somewhere other than the absolute
+// path asserted here. Resolving first makes the two the same place by
+// construction.
+func privateRelativeArtifactPath(t *testing.T, workingDirectory string) (string, string) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(workingDirectory)
+	if err != nil {
+		t.Fatalf("resolve the working directory %s: %v", workingDirectory, err)
+	}
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve this subtest's temporary directory: %v", err)
+	}
+	target := filepath.Join(parent, "smoke-opt-in-must-not-create-this")
+	relative, err := filepath.Rel(root, target)
+	if err != nil {
+		t.Fatalf("express %s relative to %s: %v", target, root, err)
+	}
+	if filepath.IsAbs(relative) {
+		t.Fatalf("%s is absolute; the export would no longer refuse it and the case would stop discriminating", relative)
+	}
+	return relative, target
 }
 
 // requireShadowedCodex resolves `codex` the way the child will, and refuses to
