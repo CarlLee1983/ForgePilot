@@ -82,6 +82,7 @@ attempt=$(cat "$control/$item" 2>/dev/null || echo 0)
 attempt=$((attempt + 1))
 printf '%%s' "$attempt" > "$control/$item"
 printf '%%s\n' "$item" >> "$control/sessions"
+cp "$handoff" "$control/handoff-$item.txt" || { echo "fixture: the handoff could not be recorded" >&2; exit 90; }
 %s
 `, fixture.control, body)
 	write(t, path, script)
@@ -116,6 +117,19 @@ func (fixture runnerFixture) sessions(t *testing.T) []string {
 		}
 	}
 	return items
+}
+
+// handoff reports the briefing the most recent session for one Work Item was
+// given. A session count says something started; this says what it was told,
+// which is the part a handoff assertion is actually about. A missing briefing
+// fails the test rather than reading as an empty one.
+func (fixture runnerFixture) handoff(t *testing.T, itemID string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(fixture.control, "handoff-"+itemID+".txt"))
+	if err != nil {
+		t.Fatalf("no handoff was recorded for %s: %v", itemID, err)
+	}
+	return string(contents)
 }
 
 // runForge runs the CLI and reports its exit code, never failing the test for a
