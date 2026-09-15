@@ -1,11 +1,16 @@
 package forgepilot_test
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/CarlLee1983/ForgePilot/internal/app"
+	"github.com/CarlLee1983/ForgePilot/internal/runner"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
@@ -27,6 +32,12 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		t.Skipf("set %s=1 to drive the real Codex CLI", SmokeVariable)
 	}
 	fixture := newRunnerFixture(t, "01-normalize.md", "02-cli.md", "03-errors.md")
+	// The evidence export is opened before anything is started and torn down
+	// before the fixture is, so a round that ends badly still leaves its inputs
+	// and results behind. A round costs model quota and cannot be replayed.
+	round := &smokeRound{TimeZone: time.Now().Format("MST-07:00")}
+	openSmokeExport(t, fixture, round)
+
 	writeCodexSmokeRepository(t, fixture.root)
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "smoke",
@@ -34,9 +45,22 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		[]string{"specs/stories/02-cli.md", "WI-001"},
 		[]string{"specs/stories/03-errors.md", "WI-002"})
 
-	output, code := fixture.runForge(t, "", "run", "--goal", "smoke", "--runtime", "codex", "--snapshot",
-		"--max-steps", "18", "--max-attempts-per-work", "2", "--agent-timeout", "10m")
+	// The budget is stated in full at the call site rather than left to the
+	// product defaults: this round is a controlled one, and the limits it ran
+	// under are part of what the evidence has to say.
+	arguments := []string{"run", "--goal", "smoke", "--runtime", "codex", "--snapshot",
+		"--max-steps", "18", "--max-attempts-per-work", "2",
+		"--agent-timeout", "10m", "--max-duration", "45m", "--verify-timeout", "5m"}
+	round.Command = append([]string{"forgepilot"}, arguments...)
+	round.StartedAt = time.Now()
+	output, code := fixture.runForge(t, "", arguments...)
+	round.FinishedAt = time.Now()
+	round.RunnerOutput, round.RunnerExit = output, code
 	t.Logf("codex smoke output:\n%s", output)
+
+	if runs, err := storage.ListRuns(fixture.root); err == nil && len(runs) > 0 {
+		round.RunID = runs[len(runs)-1]
+	}
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
@@ -51,6 +75,13 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		t.Fatalf("work items = %d, want 3", len(state.WorkItems))
 	}
 	for _, item := range state.WorkItems {
+		// DONE is checked first, and on its own. It is the outcome of a person
+		// approving a review, so a Runner that produced one crossed the boundary
+		// this whole round exists to prove it stops at — and reporting that as
+		// "want VERIFIED" would bury it.
+		if item.Status == work.Done {
+			t.Fatalf("%s is DONE; the runner completed work a person had not approved", item.ID)
+		}
 		if item.Status != work.Verified {
 			t.Fatalf("%s status = %s, want VERIFIED", item.ID, item.Status)
 		}
@@ -58,33 +89,115 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		if !ok || evidence.Result != work.Pass || evidence.CandidateKind != work.SnapshotCandidate {
 			t.Fatalf("%s evidence = %#v, want a SNAPSHOT PASS", item.ID, evidence)
 		}
+		t.Logf("%s: VERIFIED on %s candidate %s (%s), evidence %s",
+			item.ID, evidence.CandidateKind, shortCandidate(evidence), evidence.CandidateDigest, evidence.ID)
 	}
-	runID := lastRun(t, fixture.root)
-	record := loadRunRecord(t, fixture.root, runID)
-	attempts, ok := record["attempts"].(map[string]any)
-	if !ok || len(attempts) != 3 {
-		t.Fatalf("run %s attempts = %#v, want one attempt for each Work Item", runID, record["attempts"])
-	}
-	for _, id := range []string{"WI-001", "WI-002", "WI-003"} {
-		if attempts[id] != float64(1) {
-			t.Fatalf("run %s attempt for %s = %#v, want 1", runID, id, attempts[id])
+
+	// No review may exist either. A Goal still ACTIVE with no Review Evidence is
+	// what "the machine stopped before the human boundary" looks like in state.
+	for _, evidence := range state.Evidence {
+		if evidence.Type == work.ReviewEvidence {
+			t.Fatalf("a review was recorded without a person: %#v", evidence)
 		}
-		for _, name := range []string{"result.json", "session.log"} {
-			artifact := filepath.Join(fixture.root, ".forgepilot", "runs", runID, strings.ToLower(id)+"-attempt-1", name)
-			if _, err := os.Stat(artifact); err != nil {
-				t.Fatalf("run %s has no %s artifact for %s: %v", runID, name, id, err)
+	}
+	for _, goal := range state.Goals {
+		if goal.ID == "smoke" && goal.Status != work.GoalActive {
+			t.Fatalf("goal smoke is %s, want it still ACTIVE", goal.Status)
+		}
+	}
+
+	runID := round.RunID
+	if runID == "" {
+		t.Fatal("no run was recorded")
+	}
+	record, err := runner.LoadRecord(fixture.root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Stop == nil || record.Stop.Reason != runner.StopAwaitingGoalReview {
+		t.Fatalf("run %s stop = %#v, want AWAITING_GOAL_REVIEW", runID, record.Stop)
+	}
+	if record.Stop.Reason.ExitCode() != code {
+		t.Fatalf("exit = %d but %s is documented as %d", code, record.Stop.Reason, record.Stop.Reason.ExitCode())
+	}
+	if len(record.Stop.EvidenceIDs) != 3 {
+		t.Fatalf("run %s final-review Evidence = %#v, want three current PASS records", runID, record.Stop.EvidenceIDs)
+	}
+	// Nothing may still be recorded as executing. A worker or an unresolved
+	// pending execution would mean the run ended while something it started was
+	// unaccounted for, which no stop reason may hide.
+	if record.Worker != nil {
+		t.Fatalf("run %s still records a live worker: %#v", runID, record.Worker)
+	}
+	if pending := record.UnresolvedPending(); len(pending) != 0 {
+		t.Fatalf("run %s still has unresolved pending executions: %#v", runID, pending)
+	}
+	// state.Gates is the complete history, closed ones included, so "none
+	// outstanding" has to be asked of each Gate's status rather than of the
+	// slice's length.
+	for _, gate := range state.Gates {
+		if gate.Status == work.GateOpen {
+			t.Fatalf("gate %s on %s is still open: %q", gate.ID, gate.WorkItemID, gate.Question)
+		}
+	}
+
+	// Each Work Item got its own session, with its own briefing and its own
+	// structured result on disk.
+	for _, id := range []string{"WI-001", "WI-002", "WI-003"} {
+		attempts := record.Attempts[id]
+		if attempts < 1 {
+			t.Fatalf("run %s started no session for %s", runID, id)
+		}
+		for number := 1; number <= attempts; number++ {
+			for _, name := range []string{"result.json", "session.log", "handoff.md"} {
+				artifact := filepath.Join(fixture.root, ".forgepilot", "runs", runID,
+					fmt.Sprintf("%s-attempt-%d", strings.ToLower(id), number), name)
+				if _, err := os.Stat(artifact); err != nil {
+					t.Fatalf("run %s has no %s artifact for %s attempt %d: %v", runID, name, id, number, err)
+				}
 			}
 		}
 	}
-	stop, ok := record["stop"].(map[string]any)
-	if !ok || stop["reason"] != "AWAITING_GOAL_REVIEW" {
-		t.Fatalf("run %s stop = %#v", runID, record["stop"])
+
+	// The Goal review boundary is recomputed here, before the fixture is torn
+	// down, through the same typed query the product uses. Finding the words in
+	// the run's console output is not the same claim.
+	summary, err := app.GoalReadiness(context.Background(), fixture.root, "smoke")
+	if err != nil {
+		t.Fatal(err)
 	}
-	evidenceIDs, ok := stop["evidence_ids"].([]any)
-	if !ok || len(evidenceIDs) != 3 {
-		t.Fatalf("run %s final-review Evidence = %#v, want three current PASS records", runID, stop["evidence_ids"])
+	if summary.Completion != work.GoalAwaitingFinalReview {
+		t.Fatalf("recomputed goal readiness = %s, want %s", summary.Completion, work.GoalAwaitingFinalReview)
 	}
-	t.Logf("codex smoke run id: %s; evidence: %v; session artifacts: %s", runID, stop["evidence_ids"], filepath.Join(fixture.root, ".forgepilot", "runs", runID))
+	if strings.Join(summary.VerificationEvidenceIDs, ",") != strings.Join(record.Stop.EvidenceIDs, ",") {
+		t.Fatalf("recomputed Evidence %v does not match the run's %v",
+			summary.VerificationEvidenceIDs, record.Stop.EvidenceIDs)
+	}
+
+	// Checked last, and labelled, because it is a different kind of claim from
+	// everything above: those are ForgePilot's contract, this is an expectation
+	// about the model. A second attempt is within the budget this round was
+	// given, so the Runner reaching AWAITING_GOAL_REVIEW from one still
+	// satisfies the contract — but the expectation is not quietly dropped
+	// either. It fails the test, and the message says which of the two failed,
+	// so a red run is never ambiguous about what went wrong.
+	for _, id := range []string{"WI-001", "WI-002", "WI-003"} {
+		if record.Attempts[id] != 1 {
+			t.Errorf("SMOKE EXPECTATION FAILED (the Runner contract above held): %s took %d attempts, "+
+				"the test expected one; the Runner reached %s regardless",
+				id, record.Attempts[id], record.Stop.Reason)
+		}
+	}
+	t.Logf("codex smoke run id: %s; evidence: %v; session artifacts: %s",
+		runID, record.Stop.EvidenceIDs, filepath.Join(fixture.root, ".forgepilot", "runs", runID))
+}
+
+// shortCandidate names the immutable revision a piece of Evidence is bound to.
+func shortCandidate(evidence work.Evidence) string {
+	if len(evidence.Revision) > 12 {
+		return evidence.Revision[:12]
+	}
+	return evidence.Revision
 }
 
 func writeCodexSmokeRepository(t *testing.T, root string) {

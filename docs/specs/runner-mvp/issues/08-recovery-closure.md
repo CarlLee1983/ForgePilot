@@ -135,6 +135,8 @@ ownership 仍 fail-closed（[ADR-0020](../../../adr/0020-worker-ownership-is-fai
 - [x] 正常 PASS、工程 FAIL、有限 repair、Gate 與 Goal review 不退化，最終仍停在 `AWAITING_GOAL_REVIEW`。
 - [x] 獨立 `forgepilot verify` 的契約不變。
 - [ ] 真實 Codex smoke（`FORGEPILOT_CODEX_SMOKE=1`）。**NOT RUN**——opt-in，未取得額度授權。
+      後續：[ticket 11](11-real-codex-smoke-acceptance.md) 於 `2deaf14` 實跑一輪並留下證據；
+      那是本輪之後的獨立驗收，本輪當時的 NOT RUN 是歷史事實。
 
 ## 這一輪的代價
 
