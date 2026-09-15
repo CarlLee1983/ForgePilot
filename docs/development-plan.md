@@ -635,6 +635,8 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 `make verify` 因 `internal/app` 的兩個 cleanup-window 測試各跑一次超過 `process.CleanupGrace` 的
 業務工作而增加約 50 秒；理由與備選記在 [08-recovery-closure](specs/runner-mvp/issues/08-recovery-closure.md)。
 
+本期結案紀錄（交付邊界、證據對照表、本機與 CI 驗證結果、已知限制）在 [specs/runner-mvp/closure.md](specs/runner-mvp/closure.md)。
+
 ### Runner MVP Exit checklist
 
 - [x] ADR-0018／0019／0020 與 spec、tickets 寫在實作之前；ADR-0010 加註例外並保留原本的失效條件。

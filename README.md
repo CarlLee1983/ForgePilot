@@ -50,6 +50,8 @@ Goal 可選擇持久化的 Review Policy：`WORK_ITEM`（預設）維持既有�
 
 Long-running Runner MVP 新增 `forgepilot run`：對單一 `GOAL` policy 的 Goal 循序執行——取得下一個合法動作、為每張工作（與每次修復）啟動一個**全新的** coding agent session、跑正式 snapshot verification、重新讀取狀態再繼續，直到停在等待 Goal final review、遇到需要人的條件，或撞到預算上限。Runner 只保存 execution history，判定完全交給既有 domain：它不寫 VERIFIED／DONE、不核准 review、不解除 Gate、不完成 Goal。Agent 宣稱完成、agent exit code 0、verification 命令 exit code 0 都不是 PASS——只有 Candidate checkout 上的 canonical check 算數。詳見 [ADR-0019](docs/adr/0019-runner-executes-forgepilot-decides.md)。
 
+Runner MVP 這一期的交付邊界、證據對照與已知限制記在 [docs/specs/runner-mvp/closure.md](docs/specs/runner-mvp/closure.md)。它停在自動執行與 machine verification 的終點——Goal 最終人工接受不在那一期。
+
 這是這個產品第一次允許啟動會連線到模型服務的程序，而例外只有這一處：核心治理命令與狀態判定仍然完全離線，ForgePilot 自己沒有 HTTP client，也不持有任何憑證。見 [ADR-0018](docs/adr/0018-runner-may-launch-a-local-coding-cli.md)。
 
 初始支援平台是 macOS 的本機檔案系統，使用 Go 1.25.5。state 由程序鎖與原子替換保護；其他平台尚未宣稱支援。
