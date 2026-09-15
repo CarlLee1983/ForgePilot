@@ -100,6 +100,12 @@ placeholder Pending 換成具體群組的 Pending 也本來就在同一次原子
 - [ ] 真實 Codex smoke（`FORGEPILOT_CODEX_SMOKE=1`）。**NOT RUN**——opt-in，本輪未取得額度授權；
       fake runtime 的綠燈不是真實模型驗收。
 
+## 後續
+
+解除阻擋之後同一個 run 繼續執行到 Goal 最終人工審查的那一段，
+由 [10](10-recovery-to-final-review.md) 補上驗收（含負向對照）。
+本票的驗收範圍不因此改變。
+
 ## 不在範圍
 
 重新設計 Runner／storage／lifecycle、擴充 runtime／daemon／scheduler／A2A／MCP／UI、
