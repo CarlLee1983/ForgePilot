@@ -38,9 +38,11 @@ type artifactEntry struct {
 	Attempt    int    `json:"attempt,omitempty"`
 }
 
-// artifactGap is something the export expected and did not get. It is a first
-// class manifest record rather than a log line, because an export that quietly
-// omits a file reads afterwards exactly like a run that never produced one.
+// artifactGap is something the export did not copy, with the reason. It is a
+// first class manifest record rather than a log line, because an export that
+// quietly omits a file reads afterwards exactly like a run that never produced
+// one. Gaps and deliberate exclusions are held in separate lists: only the
+// first means evidence is actually missing.
 type artifactGap struct {
 	Path   string `json:"path"`
 	Reason string `json:"reason"`
@@ -59,6 +61,7 @@ type artifactExport struct {
 	dir      string
 	entries  []artifactEntry
 	missing  []artifactGap
+	excluded []artifactGap
 	failures []string
 }
 
@@ -110,11 +113,24 @@ func (export *artifactExport) write(relative string, contents []byte) {
 // copyFile copies one source file. A source that does not exist is a gap; any
 // other error is a failure.
 func (export *artifactExport) copyFile(relative, source string) {
-	contents, err := os.ReadFile(source)
+	// The fixture is a directory a real model was given write access to, so a
+	// source is checked for being an ordinary file before it is read: following
+	// a symlink would copy something from outside the fixture under a name
+	// claiming it came from inside.
+	info, err := os.Lstat(source)
 	if errors.Is(err, fs.ErrNotExist) {
 		export.gap(relative, "the source file was never produced: "+source)
 		return
 	}
+	if err != nil {
+		export.fail(relative, err)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		export.gap(relative, "not a regular file: "+info.Mode().String()+": "+source)
+		return
+	}
+	contents, err := os.ReadFile(source)
 	if err != nil {
 		export.fail(relative, err)
 		return
@@ -158,7 +174,7 @@ func (export *artifactExport) copyTree(relative, source string, skip func(relati
 		// would bury the gaps that matter.
 		if skip != nil {
 			if reason := skip(filepath.ToSlash(within)); reason != "" {
-				export.gap(target, reason)
+				export.exclude(target, reason)
 				if entry.IsDir() {
 					return fs.SkipDir
 				}
@@ -182,9 +198,35 @@ func (export *artifactExport) copyTree(relative, source string, skip func(relati
 	}
 }
 
-// gap records something the export expected and did not find.
+// adopt records a file a caller wrote straight into the export directory —
+// a Git bundle, which has to be produced by a command that writes its own
+// output. It saves staging the file elsewhere first and copying it in.
+func (export *artifactExport) adopt(relative string) {
+	path, err := export.destination(relative)
+	if err != nil {
+		export.fail(relative, err)
+		return
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		export.fail(relative, err)
+		return
+	}
+	export.entries = append(export.entries, describe(relative, contents))
+}
+
+// gap records something the export expected and did not find. It makes the
+// manifest incomplete: evidence that should exist does not.
 func (export *artifactExport) gap(relative, reason string) {
 	export.missing = append(export.missing, artifactGap{Path: filepath.ToSlash(relative), Reason: reason})
+}
+
+// exclude records something the export chose not to copy. It does not make the
+// manifest incomplete — a lock file and a re-derivable worktree are not
+// evidence — but it is still written down, so an absence is never left to be
+// guessed at.
+func (export *artifactExport) exclude(relative, reason string) {
+	export.excluded = append(export.excluded, artifactGap{Path: filepath.ToSlash(relative), Reason: reason})
 }
 
 func (export *artifactExport) fail(relative string, err error) {
@@ -235,6 +277,7 @@ type artifactManifest struct {
 	Complete  bool            `json:"complete"`
 	Files     []artifactEntry `json:"files"`
 	Missing   []artifactGap   `json:"missing,omitempty"`
+	Excluded  []artifactGap   `json:"excluded_on_purpose,omitempty"`
 	Failures  []string        `json:"failures,omitempty"`
 }
 
@@ -244,12 +287,14 @@ type artifactManifest struct {
 func (export *artifactExport) close(at time.Time) error {
 	sort.Slice(export.entries, func(i, j int) bool { return export.entries[i].Path < export.entries[j].Path })
 	sort.Slice(export.missing, func(i, j int) bool { return export.missing[i].Path < export.missing[j].Path })
+	sort.Slice(export.excluded, func(i, j int) bool { return export.excluded[i].Path < export.excluded[j].Path })
 	manifest := artifactManifest{
 		Round:     filepath.Base(export.dir),
 		WrittenAt: at.UTC().Format(time.RFC3339Nano),
 		Complete:  len(export.failures) == 0 && len(export.missing) == 0,
 		Files:     export.entries,
 		Missing:   export.missing,
+		Excluded:  export.excluded,
 		Failures:  export.failures,
 	}
 	encoded, err := json.MarshalIndent(manifest, "", "  ")
@@ -258,8 +303,10 @@ func (export *artifactExport) close(at time.Time) error {
 	}
 	writeErr := os.WriteFile(filepath.Join(export.dir, "manifest.json"), append(encoded, '\n'), 0o600)
 	if len(export.failures) > 0 {
-		return fmt.Errorf("the evidence export did not complete; %d file(s) failed: %s",
-			len(export.failures), strings.Join(export.failures, "; "))
+		// Both are returned: a manifest that could not be written is the record
+		// the failures themselves would otherwise have to be read from.
+		return errors.Join(fmt.Errorf("the evidence export did not complete; %d file(s) failed: %s",
+			len(export.failures), strings.Join(export.failures, "; ")), writeErr)
 	}
 	return writeErr
 }

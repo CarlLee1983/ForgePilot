@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 )
 
@@ -197,6 +198,11 @@ func TestArtifactExportNeedsAnAbsoluteDestination(t *testing.T) {
 // otherwise discovered only after the quota is spent.
 func TestSmokeEvidenceOutlivesTheFixtureItCameFrom(t *testing.T) {
 	fixture := newRunnerFixture(t)
+	// The rehearsal fixture carries the same shape the smoke fixture does, so a
+	// file the export looks for is absent here only when it would be absent
+	// there too.
+	write(t, filepath.Join(fixture.root, "AGENTS.md"), "# Rehearsal fixture\n")
+	write(t, filepath.Join(fixture.root, "go.mod"), "module example.com/forgepilot-export-rehearsal\n\ngo 1.25.5\n")
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "evidence", []string{"specs/stories/a.md"})
 	agent := fixture.fakeAgent(t, implementsCleanly)
@@ -250,13 +256,18 @@ func TestSmokeEvidenceOutlivesTheFixtureItCameFrom(t *testing.T) {
 	// A lock file is deliberately not copied, and the manifest says so rather
 	// than leaving its absence to be guessed at.
 	explained := false
-	for _, gap := range manifest.Missing {
-		if strings.HasPrefix(gap.Path, "forgepilot/locks") {
+	for _, excluded := range manifest.Excluded {
+		if strings.HasPrefix(excluded.Path, "forgepilot/locks") {
 			explained = true
 		}
 	}
 	if !explained {
-		t.Errorf("gaps = %#v, want the skipped lock directory named", manifest.Missing)
+		t.Errorf("exclusions = %#v, want the skipped lock directory named", manifest.Excluded)
+	}
+	// A deliberate exclusion is not a gap, so it must not make a whole export
+	// report itself as missing evidence.
+	if !manifest.Complete {
+		t.Errorf("manifest is incomplete: missing %#v, failures %#v", manifest.Missing, manifest.Failures)
 	}
 
 	// The Candidate must be recoverable from the export alone, which is the
@@ -294,4 +305,33 @@ func mustReadExport(t *testing.T, export *artifactExport, relative string) []byt
 		t.Fatal(err)
 	}
 	return contents
+}
+
+// TestTheRecordedSandboxIsTheOneTheAdapterAsks binds the sandbox sentence in
+// environment.json to the adapter it describes. The sentence is written by
+// hand, so without this the adapter could change and the evidence would go on
+// claiming the old setting — which is worse than saying nothing.
+func TestTheRecordedSandboxIsTheOneTheAdapterAsks(t *testing.T) {
+	// Any resolvable executable will do: Plan's argument list does not depend on
+	// which CLI it found, only on the adapter's own choices.
+	plan, err := (agent.Codex{Command: "git"}).Plan(agent.Request{
+		Workspace: t.TempDir(), ArtifactDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := strings.Join(plan.Args, " ")
+	if !strings.Contains(arguments, "--sandbox workspace-write") {
+		t.Fatalf("the adapter asks for %q; environment.json says workspace-write", arguments)
+	}
+	for _, bypass := range []string{"--dangerously-bypass-approvals-and-sandbox", "--full-auto", "--yolo"} {
+		if strings.Contains(arguments, bypass) {
+			t.Fatalf("the adapter now passes %s; environment.json claims no bypass flags", bypass)
+		}
+	}
+	round := &smokeRound{}
+	sandbox := collectEnvironment(t, runnerFixture{root: t.TempDir()}, round).AdapterSandbox
+	if !strings.Contains(sandbox, "workspace-write") || !strings.Contains(sandbox, "no bypass flags") {
+		t.Fatalf("recorded sandbox = %q, want it to describe what the adapter asks for", sandbox)
+	}
 }

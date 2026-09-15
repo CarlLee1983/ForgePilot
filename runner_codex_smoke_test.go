@@ -75,6 +75,13 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		t.Fatalf("work items = %d, want 3", len(state.WorkItems))
 	}
 	for _, item := range state.WorkItems {
+		// DONE is checked first, and on its own. It is the outcome of a person
+		// approving a review, so a Runner that produced one crossed the boundary
+		// this whole round exists to prove it stops at — and reporting that as
+		// "want VERIFIED" would bury it.
+		if item.Status == work.Done {
+			t.Fatalf("%s is DONE; the runner completed work a person had not approved", item.ID)
+		}
 		if item.Status != work.Verified {
 			t.Fatalf("%s status = %s, want VERIFIED", item.ID, item.Status)
 		}
@@ -86,15 +93,7 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 			item.ID, evidence.CandidateKind, shortCandidate(evidence), evidence.CandidateDigest, evidence.ID)
 	}
 
-	// No Work Item may be DONE. DONE is the outcome of a human approving a
-	// review, and a Runner that produced one would have crossed the boundary
-	// this whole round exists to prove it stops at.
-	for _, item := range state.WorkItems {
-		if item.Status == work.Done {
-			t.Fatalf("%s is DONE; the runner completed work a person had not approved", item.ID)
-		}
-	}
-	// Nor may any review exist. A Goal still ACTIVE with no Review Evidence is
+	// No review may exist either. A Goal still ACTIVE with no Review Evidence is
 	// what "the machine stopped before the human boundary" looks like in state.
 	for _, evidence := range state.Evidence {
 		if evidence.Type == work.ReviewEvidence {
@@ -133,8 +132,13 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 	if pending := record.UnresolvedPending(); len(pending) != 0 {
 		t.Fatalf("run %s still has unresolved pending executions: %#v", runID, pending)
 	}
-	if len(state.Gates) != 0 {
-		t.Fatalf("gates = %#v, want none outstanding", state.Gates)
+	// state.Gates is the complete history, closed ones included, so "none
+	// outstanding" has to be asked of each Gate's status rather than of the
+	// slice's length.
+	for _, gate := range state.Gates {
+		if gate.Status == work.GateOpen {
+			t.Fatalf("gate %s on %s is still open: %q", gate.ID, gate.WorkItemID, gate.Question)
+		}
 	}
 
 	// Each Work Item got its own session, with its own briefing and its own
@@ -170,14 +174,18 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 			summary.VerificationEvidenceIDs, record.Stop.EvidenceIDs)
 	}
 
-	// Reported last and on its own: everything above is ForgePilot's contract,
-	// and this is an expectation about the model. A second legitimate attempt
-	// that the Runner recovered from still satisfies the contract, so it is
-	// named as a separate result rather than folded into the same verdict.
+	// Checked last, and labelled, because it is a different kind of claim from
+	// everything above: those are ForgePilot's contract, this is an expectation
+	// about the model. A second attempt is within the budget this round was
+	// given, so the Runner reaching AWAITING_GOAL_REVIEW from one still
+	// satisfies the contract — but the expectation is not quietly dropped
+	// either. It fails the test, and the message says which of the two failed,
+	// so a red run is never ambiguous about what went wrong.
 	for _, id := range []string{"WI-001", "WI-002", "WI-003"} {
 		if record.Attempts[id] != 1 {
-			t.Errorf("SMOKE EXPECTATION (not a Runner contract failure): %s took %d attempts, the test expected one; "+
-				"the Runner reached %s regardless", id, record.Attempts[id], record.Stop.Reason)
+			t.Errorf("SMOKE EXPECTATION FAILED (the Runner contract above held): %s took %d attempts, "+
+				"the test expected one; the Runner reached %s regardless",
+				id, record.Attempts[id], record.Stop.Reason)
 		}
 	}
 	t.Logf("codex smoke run id: %s; evidence: %v; session artifacts: %s",

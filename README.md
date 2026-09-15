@@ -105,7 +105,7 @@ forgepilot status
 forgepilot goal create --id dbcli-dba --title "DBA Workflow Support" --review-policy goal
 ```
 
-接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 只改變 Work Item 間的 progression；Goal 最終 Human acceptance 的 command／Evidence／Runner 尚未實作。
+接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 只改變 Work Item 間的 progression。Runner 已經實作（[`forgepilot run`](#交給-runner-連續跑)），它能把一個 `GOAL` policy 的 Goal 推進到**等待 Goal final review 為止**；跨過那條邊界的東西還沒有——Goal 最終 Human acceptance 的 command 與 Goal Evidence 尚未實作，`goal complete` 對 `GOAL` policy 仍然拒絕。
 
 `--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 ForgeFlowV2 執行工程工作。
 

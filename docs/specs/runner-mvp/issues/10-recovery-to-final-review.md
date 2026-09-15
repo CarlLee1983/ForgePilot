@@ -119,6 +119,7 @@ Stopped: AWAITING_GOAL_REVIEW
 
 真實 Codex smoke（`FORGEPILOT_CODEX_SMOKE=1`）：**NOT RUN**——opt-in，本輪未取得額度授權。
 fake runtime 的綠燈不是真實模型驗收。
+後續：[ticket 11](11-real-codex-smoke-acceptance.md) 於 `2deaf14` 實跑一輪並留下證據；那是本輪之後的獨立驗收，本輪當時的 NOT RUN 是歷史事實。
 
 ## 不在範圍
 

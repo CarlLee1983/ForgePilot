@@ -46,7 +46,7 @@
 
 **每次 schema 升版，兩處 fixture 的版本號必須跟著往上調**——`internal/storage/storage_test.go` 中驗證「較新 schema 應被拒讀」的那一筆，與 `internal/work/work_test.go` 中區分較舊／較新 schema 錯誤的那一筆。它們壞掉的方式不是變紅，是在無人察覺下改為驗證一個合法的 state。M2 踩過一次。同一個檔案裡還有一處用字串替換改寫版本號的測試，改動時確認它仍然抓得到你要它抓的東西。
 
-**Runner 的測試不能全用記憶體 mock。** 程序群組、flock、crash recovery 都必須用真的 subprocess 驗證——`--runtime fake` 的 adapter 就是為此存在的產品程式碼，不是測試替身。fake 跑綠只證明 ForgePilot 的程序、鎖與恢復處理正確，不證明無人值守跑真實模型會成功。真實 Codex smoke test 是 opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。
+**Runner 的測試不能全用記憶體 mock。** 程序群組、flock、crash recovery 都必須用真的 subprocess 驗證——`--runtime fake` 的 adapter 就是為此存在的產品程式碼，不是測試替身。fake 跑綠只證明 ForgePilot 的程序、鎖與恢復處理正確，不證明無人值守跑真實模型會成功。真實 Codex smoke test 是 opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。smoke fixture 是 `t.TempDir()`，測試結束就連同 `.forgepilot/` 與 Git objects 一起消失；一輪真實執行無法重播，所以要留證據就設 `FORGEPILOT_SMOKE_ARTIFACT_DIR`（fixture 外的絕對路徑）——它是測試用設定，不是產品 flag，而且**單獨設它不會啟動真實模型**。見 [ticket 11](docs/specs/runner-mvp/issues/11-real-codex-smoke-acceptance.md)。
 
 **測試的註解不算數，斷言才算數。** M4 有一條測試，註解寫「同一 revision 上標不同 PR 的兩筆 review 仍互相取代」、變數也叫 `rejecting`，但整段只記了一筆 review。它照樣通過，exit checklist 也照樣被勾成完成。寫完一條測試後讀一遍：註解宣稱的事，斷言真的驗到了嗎。
 

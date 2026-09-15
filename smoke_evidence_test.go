@@ -44,12 +44,12 @@ type smokeRound struct {
 //
 // It returns nil when the variable is unset, which is what keeps ordinary test
 // runs from writing anywhere outside their own temporary directories.
-func openSmokeExport(t *testing.T, fixture runnerFixture, round *smokeRound) *artifactExport {
+func openSmokeExport(t *testing.T, fixture runnerFixture, round *smokeRound) {
 	t.Helper()
 	base := os.Getenv(SmokeArtifactVariable)
 	if base == "" {
 		t.Logf("set %s to an absolute path outside the fixture to keep this round's evidence", SmokeArtifactVariable)
-		return nil
+		return
 	}
 	export, err := openArtifactExport(base, "codex-smoke", time.Now())
 	if err != nil {
@@ -58,14 +58,19 @@ func openSmokeExport(t *testing.T, fixture runnerFixture, round *smokeRound) *ar
 	t.Logf("codex smoke evidence: %s", export.dir)
 	t.Cleanup(func() {
 		collectSmokeEvidence(t, export, fixture, round)
-		if err := export.close(time.Now()); err != nil {
-			// An export failure is reported as a test failure: a round that says it
-			// passed while its evidence was lost is the outcome this guards against.
-			t.Errorf("the evidence export did not complete: %v", err)
+		closeErr := export.close(time.Now())
+		// Both are test failures. A round that reports success while half its
+		// evidence was lost is the outcome this whole file guards against, and a
+		// gap loses evidence just as effectively as a failed write does.
+		if closeErr != nil {
+			t.Errorf("the evidence export did not complete: %v", closeErr)
 		}
-		t.Logf("codex smoke evidence written to %s", export.dir)
+		if len(export.missing) > 0 {
+			t.Errorf("the evidence export has %d gap(s): %#v", len(export.missing), export.missing)
+		}
+		t.Logf("codex smoke evidence written to %s (%d files, %d gap(s), %d deliberate exclusion(s))",
+			export.dir, len(export.entries), len(export.missing), len(export.excluded))
 	})
-	return export
 }
 
 // collectSmokeEvidence copies the round's identity, inputs and results out of
@@ -73,11 +78,25 @@ func openSmokeExport(t *testing.T, fixture runnerFixture, round *smokeRound) *ar
 // round that failed halfway is exactly when the partial evidence matters.
 func collectSmokeEvidence(t *testing.T, export *artifactExport, fixture runnerFixture, round *smokeRound) {
 	t.Helper()
-	export.write("environment.json", encodeEvidence(t, collectEnvironment(t, fixture, round)))
-	if patch := gitCapture(projectRoot(t), "diff", "HEAD"); patch != "" {
+	if encoded, err := json.MarshalIndent(collectEnvironment(t, fixture, round), "", "  "); err != nil {
+		// A collector must not end the test: doing so would skip the manifest and
+		// leave the files it already copied with no index.
+		export.gap("environment.json", "the environment record could not be encoded: "+err.Error())
+	} else {
+		export.write("environment.json", append(encoded, '\n'))
+	}
+	// The patch is the working tree of the ForgePilot checkout under test. It is
+	// present only when that tree was modified, so its absence is not a gap.
+	if patch, err := gitCapture(projectRoot(t), "diff", "HEAD"); err != nil {
+		export.gap("forgepilot-working-tree.patch", err.Error())
+	} else if patch != "" {
 		export.write("forgepilot-working-tree.patch", []byte(patch))
 	}
-	export.write("runner-output.txt", []byte(round.RunnerOutput))
+	if round.FinishedAt.IsZero() {
+		export.gap("runner-output.txt", "the round ended before the Runner was started, so there is no output")
+	} else {
+		export.write("runner-output.txt", []byte(round.RunnerOutput))
+	}
 
 	// The inputs: the Stories the sessions were given, the fixture's own AGENTS.md
 	// and the canonical check that produced every PASS. A Story path is not an
@@ -104,24 +123,16 @@ func collectSmokeEvidence(t *testing.T, export *artifactExport, fixture runnerFi
 	// The Candidate content itself. Snapshot Evidence names a commit that lives
 	// only in the fixture's object database, so recording the SHA without the
 	// objects would leave nothing to re-verify against.
-	staging, err := os.MkdirTemp("", "forgepilot-smoke-bundle")
+	bundle, err := export.destination("fixture.bundle")
 	if err != nil {
-		export.gap("fixture.bundle", "no staging directory for the bundle: "+err.Error())
-		staging = ""
-	}
-	defer func() {
-		if staging != "" {
-			_ = os.RemoveAll(staging)
-		}
-	}()
-	bundle := filepath.Join(staging, "fixture.bundle")
-	if output, err := exec.Command("git", "-C", fixture.root, "bundle", "create", bundle, "--all").CombinedOutput(); err != nil {
+		export.gap("fixture.bundle", err.Error())
+	} else if output, err := exec.Command("git", "-C", fixture.root, "bundle", "create", bundle, "--all").CombinedOutput(); err != nil {
 		export.gap("fixture.bundle", fmt.Sprintf("git bundle failed: %v: %s", err, strings.TrimSpace(string(output))))
 	} else {
-		export.copyFile("fixture.bundle", bundle)
+		export.adopt("fixture.bundle")
 	}
-	export.write("fixture-refs.txt", []byte(gitCapture(fixture.root, "show-ref")))
-	export.write("fixture-log.txt", []byte(gitCapture(fixture.root, "log", "--all", "--oneline", "--decorate")))
+	captureInto(export, "fixture-refs.txt", fixture.root, "show-ref")
+	captureInto(export, "fixture-log.txt", fixture.root, "log", "--all", "--oneline", "--decorate")
 
 	// The final working tree, so the code the last PASS was taken on is readable
 	// without unpacking the bundle.
@@ -177,10 +188,17 @@ type smokeEnvironment struct {
 
 func collectEnvironment(t *testing.T, fixture runnerFixture, round *smokeRound) smokeEnvironment {
 	t.Helper()
-	status := gitCapture(projectRoot(t), "status", "--porcelain")
+	status, statusErr := gitCapture(projectRoot(t), "status", "--porcelain")
+	if statusErr != nil {
+		status = "unknown: " + statusErr.Error()
+	}
+	commit, commitErr := gitCapture(projectRoot(t), "rev-parse", "HEAD")
+	if commitErr != nil {
+		commit = "unknown: " + commitErr.Error()
+	}
 	environment := smokeEnvironment{
-		ForgePilotCommit: strings.TrimSpace(gitCapture(projectRoot(t), "rev-parse", "HEAD")),
-		ForgePilotDirty:  strings.TrimSpace(status) != "",
+		ForgePilotCommit: strings.TrimSpace(commit),
+		ForgePilotDirty:  statusErr == nil && strings.TrimSpace(status) != "",
 		ForgePilotStatus: status,
 		OS:               capture("sw_vers", "-productVersion"),
 		Architecture:     capture("uname", "-m"),
@@ -247,9 +265,11 @@ func codexConfiguredSettings() map[string]string {
 	return settings
 }
 
-// modelLine finds a model identity a session log reported about itself. A CLI
-// version does not imply a model, so anything not printed by the run is
-// reported as unknown rather than inferred.
+// modelLine finds a model identity a session log reported about itself. It
+// matches anywhere in the log, so a model that echoes the words in its own
+// output is reported too — the field says "reported by the session logs", which
+// is exactly that and no stronger. A CLI version does not imply a model, so
+// anything not printed by the run is reported as unknown rather than inferred.
 var modelLine = regexp.MustCompile(`(?im)^\s*(?:model|reasoning)\s*[:=]\s*(.+)$`)
 
 func observedModel(root, runID string) string {
@@ -282,15 +302,6 @@ func observedModel(root, runID string) string {
 	return strings.Join(reported, "; ")
 }
 
-func encodeEvidence(t *testing.T, value any) []byte {
-	t.Helper()
-	encoded, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(encoded, '\n')
-}
-
 // capture runs a command for its version string. A failure is recorded as text
 // rather than failing the round: an unreadable version is a gap in the evidence,
 // not a reason to throw the evidence away.
@@ -302,10 +313,23 @@ func capture(name string, arguments ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
-func gitCapture(root string, arguments ...string) string {
+// gitCapture reports a failure rather than returning its message as content. A
+// command's error text saved under a .patch name reads afterwards exactly like
+// a patch, which is how an export starts lying about what it holds.
+func gitCapture(root string, arguments ...string) (string, error) {
 	output, err := exec.Command("git", append([]string{"-C", root}, arguments...)...).CombinedOutput()
 	if err != nil {
-		return "unknown: " + err.Error() + ": " + strings.TrimSpace(string(output))
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
 	}
-	return string(output)
+	return string(output), nil
+}
+
+// captureInto stores one Git query, or records why it could not be made.
+func captureInto(export *artifactExport, relative, root string, arguments ...string) {
+	output, err := gitCapture(root, arguments...)
+	if err != nil {
+		export.gap(relative, err.Error())
+		return
+	}
+	export.write(relative, []byte(output))
 }
