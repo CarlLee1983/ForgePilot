@@ -158,6 +158,13 @@ func writeFileAtomically(directory, destination string, encoded []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
+	// The one point the internal failure seam is consulted. It is here rather
+	// than at the top of save because "the replacement did not happen" is the
+	// fact the callers above depend on, and the temporary file the defer removes
+	// is the proof that nothing of the new contents reached the destination.
+	if err := injectedSaveFailure(destination); err != nil {
+		return err
+	}
 	if err := os.Rename(temporaryName, destination); err != nil {
 		return err
 	}

@@ -429,7 +429,7 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	var evidence work.Evidence
 	var status work.Status
 	var factsErr error
-	if err := storage.Update(root, func(state *work.State) error {
+	updateErr := storage.Update(root, func(state *work.State) error {
 		if err := ensureVerificationVerdictUnchanged(state, id, verdictBefore); err != nil {
 			return err
 		}
@@ -445,18 +445,36 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 			status = state.WorkItemStatus(id)
 		}
 		return recordErr
-	}); err != nil {
-		return result, err
-	}
-	result.Evidence, result.HasEvidence, result.Status = evidence, true, status
-	result.RefreshWarning = factsErr
-	// Failing to refresh dependency readiness is a warning: the Evidence stands
-	// and a rerun repairs it. Failing to confirm a process group started while
-	// reading those facts is not — the next step must not begin, whatever the
-	// Evidence says.
+	})
+	// Asked before the transaction's own verdict, and on both of its paths.
+	// Whether Evidence was saved and whether something is still running in this
+	// workspace are two different facts, and only one of them is about storage:
+	// the group was observed while the callback read repository facts, so it
+	// exists whether or not the write that followed landed. Returning the
+	// transaction error first is how it used to disappear — the Runner then saw
+	// a result with no Cleanup, cleared the pending it had recorded before the
+	// verification started, and the next process found a workspace that looked
+	// clear. Recorded exactly once, here, at the same location CandidateFacts
+	// actually ran in. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
 	if unsettled := unsettledPart(factsErr); unsettled != nil {
 		result.note(UnresolvedGit, root, unsettled)
 	}
+	if updateErr != nil {
+		// Nothing below may run: the Evidence the callback built exists only in
+		// memory, and claiming a transaction that failed produced a result would
+		// invent exactly the kind of outcome a refusal is careful not to. The
+		// operational error travels unwrapped so errors.Is and errors.As still
+		// recognise it; what was added above travels with it on the result, where
+		// the caller looks for it — and where the deferred cleanup above reads it,
+		// so the checkout is kept rather than tidied away.
+		return result, updateErr
+	}
+	result.Evidence, result.HasEvidence, result.Status = evidence, true, status
+	// Failing to refresh dependency readiness is a warning: the Evidence stands
+	// and a rerun repairs it. Failing to confirm a process group started while
+	// reading those facts is not — the next step must not begin, whatever the
+	// Evidence says, which is what the note above already recorded.
+	result.RefreshWarning = factsErr
 	// Non-PASS output no longer floods stdout: the log just printed above is
 	// where it lives now. See docs/adr/0012-verification-log-outside-state.md.
 	if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\n", evidence.ID, evidence.Result, evidence.Revision, id, status); err != nil {

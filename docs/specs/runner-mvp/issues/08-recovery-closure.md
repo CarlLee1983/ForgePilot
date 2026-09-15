@@ -98,6 +98,11 @@ ownership 仍 fail-closed（[ADR-0020](../../../adr/0020-worker-ownership-is-fai
       以新的 CLI 程序 resume／新 run／另一個 Goal 皆被阻擋；群組確認消失後解除。
 - [x] 驗證後 facts／readiness refresh 回傳 `ErrNotSettled` 時一併帶回，且因為它成立在 PASS **之後**，
       接著的 deferred 清理改走「留著 checkout」那條路。
+      **邊界（這一輪只覆蓋 transaction 成功的情況）**：上面這條的測試走的是「facts refresh 回報未確認、
+      而記錄 Evidence 的那次 `storage.Update` 成功」。同一個 `factsErr` 在 transaction **失敗**時被
+      跳過不記——舊碼在 `storage.Update` 回傳錯誤時直接 return，`result.note` 從未執行——
+      因此存檔失敗但 run record 仍可保存的窗口裡，恢復阻擋會整個消失。
+      這條複合路徑由 [09](09-cleanup-survives-state-save-failure.md) 修正並驗收。
 
 ### C — 清理預算的生命週期
 
@@ -141,5 +146,7 @@ ownership 仍 fail-closed（[ADR-0020](../../../adr/0020-worker-ownership-is-fai
 ## 未關閉的邊界
 
 - 07 的兩項未驗收項目（準備完成到 `agent.Start` 之間的取消、存檔失敗的注入）仍未驗收，本輪沒有動它們。
+  後者的接縫與其中一條路徑的驗收在 [09](09-cleanup-survives-state-save-failure.md)；
+  07 其餘的 crash window 至今仍未驗收。
 - `reclaimOrphan` 仍會移除它回收的舊 worktree；這一輪讓那個移除**回報**未確認的群組並阻擋後續執行，
   但沒有改變「獨立 `forgepilot verify` 不讀 run record」的契約，ADR-0022 Consequences 描述的暴露面依舊。
