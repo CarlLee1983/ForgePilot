@@ -29,6 +29,7 @@
 | [0021](0021-execution-limits-are-bounded-and-named.md) | 停止原因在觸發當下寫定；單次期限與總期限取小；清理寬限是另一個量，且必須確認 | accepted |
 | [0022](0022-pending-cleanup-outlives-the-process.md) | 未確認的清理持久化為 workspace 層級的恢復阻擋，與「上一次為什麼停」分開 | accepted |
 | [0023](0023-verification-does-not-submit-for-review.md) | Verification 只記錄 Evidence；只有明確 `review request` 才送入 Human Review | accepted |
+| [0026](0026-resolved-gates-cross-agent-session-boundaries.md) | Resolved Gate 從 current state 投影到後續 session；合法 Human wait 不消耗 technical attempt budget | accepted |
 
 ## 什麼時候該加一份
 

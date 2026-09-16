@@ -107,6 +107,40 @@ func TestAttemptHistoryIsBoundedPerWorkItem(t *testing.T) {
 	}
 }
 
+// A versionless run record written before human-wait accounting existed has no
+// safe basis for reconstructing old waits from its bounded history. Decode the
+// old persisted shape rather than constructing today's type directly: that is
+// the compatibility seam a real resume and run status both cross.
+func TestLegacyRunRecordAttemptsRemainTechnicalUntilAHumanWaitIsRecorded(t *testing.T) {
+	root := t.TempDir()
+	runID := "run-20260916t000000-abcdef"
+	legacy := []byte(`{"run_id":"run-20260916t000000-abcdef","attempts":{"WI-001":3}}`)
+	if err := storage.WriteRunArtifact(root, runID, recordName, legacy, storage.ArtifactLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := LoadRecord(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := record.technicalAttemptsFor("WI-001"); got != 3 {
+		t.Fatalf("legacy technical attempts = %d, want 3", got)
+	}
+	record.recordHumanWait("WI-001")
+	if got := record.technicalAttemptsFor("WI-001"); got != 2 {
+		t.Fatalf("technical attempts after human wait = %d, want 2", got)
+	}
+	if record.Attempts["WI-001"] != 3 {
+		t.Fatalf("recording a human wait reused the session sequence: %v", record.Attempts)
+	}
+	record.HumanWaits["WI-001"] = 4
+	if err := record.save(root, storage.ArtifactLimits{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRecord(root, runID); err == nil {
+		t.Fatal("impossible human-wait accounting was accepted")
+	}
+}
+
 // Artifact limits are ceilings a long unattended run depends on. Zero reads as
 // "unchecked" everywhere they are applied, so accepting it from a flag would
 // switch those ceilings off entirely.

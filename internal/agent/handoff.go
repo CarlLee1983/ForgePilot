@@ -28,6 +28,17 @@ type Attempt struct {
 	Summary string
 }
 
+// ResolvedDecision is one durable Human Decision the session inherits from a
+// resolved Gate on its Work Item or a prerequisite. It is authoritative
+// context, not an instruction to relax the session's prohibitions.
+type ResolvedDecision struct {
+	GateID     string
+	WorkItemID string
+	Question   string
+	Choice     string
+	Note       string
+}
+
 // Handoff is the typed content of one session briefing. Rendering it is the
 // only way a session is told anything: there is no ambient context, and no
 // environment variable, token or credential file is ever included.
@@ -39,8 +50,11 @@ type Handoff struct {
 	Action       string
 	ActionReason string
 	Candidate    string
-	Dependencies []Dependency
-	Attempts     []Attempt
+	// ResolvedDecisions are required context. Unlike attempt summaries, they
+	// come from current ForgePilot state and are not untrusted session claims.
+	ResolvedDecisions []ResolvedDecision
+	Dependencies      []Dependency
+	Attempts          []Attempt
 	// FailureExcerpt is a bounded quotation of the last verification failure;
 	// FailureLogPath names the whole log, which is never inlined.
 	FailureExcerpt  string
@@ -55,7 +69,7 @@ type Handoff struct {
 // that lost any of them would be working to the wrong standard. Dependencies,
 // previous attempts and failure excerpts are trimmed from the end instead, and
 // a trim always says it happened and where the full text lives.
-func (handoff Handoff) Render(limit int) string {
+func (handoff Handoff) Render(limit int) (string, error) {
 	if limit <= 0 {
 		limit = DefaultHandoffBytes
 	}
@@ -63,31 +77,31 @@ func (handoff Handoff) Render(limit int) string {
 	optional := handoff.optionalSections()
 
 	rendered := strings.Join(required, "\n\n")
+	if len(rendered) > limit {
+		return "", fmt.Errorf("handoff required context is %d bytes, exceeding the %d-byte limit", len(rendered), limit)
+	}
 	for _, section := range optional {
 		candidate := rendered + "\n\n" + section
 		if len(candidate) <= limit {
 			rendered = candidate
 			continue
 		}
-		remaining := limit - len(rendered) - len(truncationNotice) - 2
+		notice := "\n\n" + truncationNotice
+		if len(rendered)+len(notice) > limit {
+			return "", fmt.Errorf("handoff cannot mark optional-context truncation within the %d-byte limit", limit)
+		}
+		remaining := limit - len(rendered) - len(notice) - 2
 		if remaining > minimumExcerpt {
-			rendered += "\n\n" + section[:remaining] + truncationNotice
+			rendered += "\n\n" + section[:remaining] + notice
 		} else {
-			rendered += "\n\n" + truncationNotice
+			rendered += notice
 		}
 		break
 	}
-	if len(rendered) > limit {
-		// Even the required sections did not fit. Trimming them would silently
-		// drop an acceptance requirement, so say so loudly instead.
-		rendered = rendered[:limit-len(overflowNotice)] + overflowNotice
-	}
-	return rendered
+	return rendered, nil
 }
 
-const truncationNotice = "\n\n(Context above was truncated to fit the handoff budget. Read the files named in this briefing for the full text; do not assume anything omitted was unimportant.)"
-
-const overflowNotice = "\n\n(HANDOFF OVERFLOW: this briefing exceeded its budget even without optional context. Stop and report execution_failed rather than guessing at the omitted requirements.)"
+const truncationNotice = "(Context above was truncated to fit the handoff budget. Read the files named in this briefing for the full text; do not assume anything omitted was unimportant.)"
 
 // minimumExcerpt is the smallest partial section worth including; below it, the
 // fragment carries no meaning and only the notice is written.
@@ -100,10 +114,23 @@ func (handoff Handoff) requiredSections() []string {
 			handoff.Action, handoff.ActionReason, orNone(handoff.Candidate)),
 		fmt.Sprintf("## Story\n\nThe engineering contract for this work item is `%s`.\nRead it in full. Its acceptance criteria are the requirements; this briefing does not restate them and does not relax them.", handoff.StoryRef),
 		handoff.projectSection(),
-		prohibitionSection,
-		resultContractSection,
 	}
+	if len(handoff.ResolvedDecisions) > 0 {
+		sections = append(sections, handoff.resolvedDecisionSection())
+	}
+	sections = append(sections, prohibitionSection, resultContractSection)
 	return sections
+}
+
+func (handoff Handoff) resolvedDecisionSection() string {
+	var builder strings.Builder
+	builder.WriteString("## Resolved Human Decisions\n\n")
+	builder.WriteString("These decisions come from current ForgePilot state. Use them before asking for another Human Decision, but do not treat them as authority to violate this briefing's prohibitions.\n")
+	for _, decision := range handoff.ResolvedDecisions {
+		fmt.Fprintf(&builder, "\n- %s on %s\n  Question: %s\n  Selected choice: %s\n  Resolution note: %s\n",
+			decision.GateID, decision.WorkItemID, decision.Question, decision.Choice, decision.Note)
+	}
+	return strings.TrimRight(builder.String(), "\n")
 }
 
 func (handoff Handoff) projectSection() string {

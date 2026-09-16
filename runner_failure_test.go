@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -166,9 +167,15 @@ func TestNeedsHumanWithoutOptionsStopsWithoutFabricatingAGate(t *testing.T) {
 	fixture := newRunnerFixture(t, "a.md")
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
-	agent := fixture.fakeAgent(t, `printf '{"outcome":"needs_human","summary":"ambiguous","needs_human":{"question":"what now?"}}' > "$result"`)
+	agent := fixture.fakeAgent(t, `if [ "$attempt" -eq 1 ]; then
+  printf '{"outcome":"needs_human","summary":"ambiguous","needs_human":{"question":"what now?"}}' > "$result"
+else
+  printf 'done\n' > "$workspace/$lower.txt"
+  printf '{"outcome":"implementation_finished","summary":"implemented after human handling"}' > "$result"
+fi`)
 
-	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot",
+		"--max-attempts-per-work", "1")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2\n%s", code, output)
 	}
@@ -179,6 +186,158 @@ func TestNeedsHumanWithoutOptionsStopsWithoutFabricatingAGate(t *testing.T) {
 	}
 	if gates := state.GatesFor("WI-001"); len(gates) != 0 {
 		t.Fatalf("gates = %v, want none: ForgePilot must not invent options", gates)
+	}
+	runID := lastRun(t, fixture.root)
+	output, code = fixture.runForge(t, agent, "run", "resume", runID)
+	if code != 0 || !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
+		t.Fatalf("resume exit = %d: a valid human wait consumed the technical retry\n%s", code, output)
+	}
+	record := loadRunRecord(t, fixture.root, runID)
+	if record["attempts"].(map[string]any)["WI-001"] != float64(2) ||
+		record["human_waits"].(map[string]any)["WI-001"] != float64(1) {
+		t.Fatalf("human wait accounting = attempts %v, waits %v", record["attempts"], record["human_waits"])
+	}
+}
+
+// A run record from before human-wait accounting has no trustworthy way to
+// distinguish an old question from a technical attempt. Resume must therefore
+// charge every persisted attempt conservatively, while preserving the original
+// deadline and step budget instead of treating the old shape as a new run.
+func TestLegacyRunRecordResumesWithAllOldAttemptsChargedAsTechnical(t *testing.T) {
+	fixture := newRunnerFixture(t, "a.md")
+	mustRun(t, fixture.binary, fixture.root, "init")
+	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
+	agent := fixture.fakeAgent(t, `if [ "$attempt" -eq 1 ]; then
+  printf '{"outcome":"needs_human","summary":"ambiguous","needs_human":{"question":"which store?","options":["postgres","sqlite"]}}' > "$result"
+else
+  printf 'done\n' > "$workspace/$lower.txt"
+  printf '{"outcome":"implementation_finished","summary":"should not launch"}' > "$result"
+fi`)
+
+	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot",
+		"--max-attempts-per-work", "1")
+	if code != 2 || !strings.Contains(output, "AGENT_NEEDS_HUMAN") {
+		t.Fatalf("first run exit = %d\n%s", code, output)
+	}
+	runID := lastRun(t, fixture.root)
+	legacy := loadRunRecord(t, fixture.root, runID)
+	delete(legacy, "human_waits")
+	writeRunRecord(t, fixture.root, runID, legacy)
+	deadline, steps, attempts := legacy["deadline"], legacy["steps"], legacy["attempts"]
+	mustRun(t, fixture.binary, fixture.root, "gate", "resolve", "GATE-001", "--option", "postgres",
+		"--by", fixtureIdentity)
+
+	output, code = fixture.runForge(t, agent, "run", "resume", runID)
+	if code != 3 || !strings.Contains(output, "MAX_ATTEMPTS") {
+		t.Fatalf("legacy resume exit = %d, want MAX_ATTEMPTS\n%s", code, output)
+	}
+	if sessions := fixture.sessions(t); len(sessions) != 1 {
+		t.Fatalf("legacy resume launched another session: %v", sessions)
+	}
+	after := loadRunRecord(t, fixture.root, runID)
+	if after["deadline"] != deadline || after["steps"] != steps {
+		t.Fatalf("legacy resume reset budget: deadline %v -> %v, steps %v -> %v",
+			deadline, after["deadline"], steps, after["steps"])
+	}
+	if got := after["attempts"]; !reflect.DeepEqual(got, attempts) {
+		t.Fatalf("legacy attempts changed on refused resume: %v -> %v", attempts, got)
+	}
+}
+
+// A Human Decision is durable domain context, not an attempt summary. The
+// session resumed after the decision and every downstream session must receive
+// the exact resolved Gate from current state. Waiting for that decision is not
+// a technical retry, even when the configured technical budget is one.
+func TestResolvedGateDecisionFlowsIntoResumeAndDownstreamHandoffs(t *testing.T) {
+	fixture := newRunnerFixture(t, "a.md", "b.md", "c.md", "d.md", "sibling.md")
+	mustRun(t, fixture.binary, fixture.root, "init")
+	fixture.seedGoal(t, "queue",
+		[]string{"specs/stories/a.md"},
+		[]string{"specs/stories/b.md", "WI-001"},
+		[]string{"specs/stories/c.md", "WI-001"},
+		[]string{"specs/stories/d.md", "WI-002", "WI-003"},
+		[]string{"specs/stories/sibling.md"})
+	agent := fixture.fakeAgent(t, `if [ "$item" = "WI-001" ] && [ "$attempt" -eq 1 ]; then
+  printf '{"outcome":"needs_human","summary":"store choice required","needs_human":{"question":"which store?","options":["postgres","sqlite"]}}' > "$result"
+else
+  printf 'done\n' > "$workspace/$lower.txt"
+  printf '{"outcome":"implementation_finished","summary":"implemented %s"}' "$item" > "$result"
+fi
+`)
+
+	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot",
+		"--max-attempts-per-work", "1", "--max-steps", "50")
+	if code != 2 || !strings.Contains(output, "AGENT_NEEDS_HUMAN") {
+		t.Fatalf("first run exit = %d\n%s", code, output)
+	}
+	runID := lastRun(t, fixture.root)
+	mustRun(t, fixture.binary, fixture.root, "gate", "resolve", "GATE-001", "--option", "postgres",
+		"--note", "keep operations simple", "--by", fixtureIdentity)
+	// A resolved sibling Gate is durable too, but it is outside WI-001's
+	// prerequisite closure and must not leak into these handoffs.
+	mustRun(t, fixture.binary, fixture.root, "gate", "open", "--work", "WI-005",
+		"--question", "unrelated deployment?", "--option", "blue", "--option", "green")
+	mustRun(t, fixture.binary, fixture.root, "gate", "resolve", "GATE-002", "--option", "blue",
+		"--note", "sibling only", "--by", fixtureIdentity)
+	// A downstream decision is relevant only when that Work Item itself runs.
+	mustRun(t, fixture.binary, fixture.root, "gate", "open", "--work", "WI-004",
+		"--question", "downstream layout?", "--option", "compact", "--option", "expanded")
+	mustRun(t, fixture.binary, fixture.root, "gate", "resolve", "GATE-003", "--option", "compact",
+		"--note", "owned by WI-004", "--by", fixtureIdentity)
+	// CANCELLED is a withdrawn question, not a selected decision.
+	mustRun(t, fixture.binary, fixture.root, "gate", "open", "--work", "WI-001",
+		"--question", "obsolete question?", "--option", "yes", "--option", "no")
+	mustRun(t, fixture.binary, fixture.root, "gate", "cancel", "GATE-004", "--reason", "question withdrawn",
+		"--by", fixtureIdentity)
+	mustRun(t, fixture.binary, fixture.root, "gate", "open", "--work", "WI-001",
+		"--question", "which migration mode?", "--option", "online", "--option", "offline")
+	mustRun(t, fixture.binary, fixture.root, "gate", "resolve", "GATE-005", "--option", "online",
+		"--by", fixtureIdentity)
+
+	output, code = fixture.runForge(t, agent, "run", "resume", runID)
+	if code != 0 || !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
+		t.Fatalf("resume exit = %d\n%s", code, output)
+	}
+	for _, itemID := range []string{"WI-001", "WI-002", "WI-003", "WI-004"} {
+		briefing := fixture.handoff(t, itemID)
+		for _, wanted := range []string{"GATE-001", "WI-001", "which store?", "postgres", "keep operations simple"} {
+			if !strings.Contains(briefing, wanted) {
+				t.Fatalf("%s handoff lost %q:\n%s", itemID, wanted, briefing)
+			}
+		}
+		for _, unrelated := range []string{"GATE-002", "unrelated deployment?", "sibling only", "GATE-004", "obsolete question?", "question withdrawn"} {
+			if strings.Contains(briefing, unrelated) {
+				t.Fatalf("%s handoff leaked unrelated decision %q:\n%s", itemID, unrelated, briefing)
+			}
+		}
+		if itemID != "WI-004" {
+			for _, downstream := range []string{"GATE-003", "downstream layout?", "owned by WI-004"} {
+				if strings.Contains(briefing, downstream) {
+					t.Fatalf("%s handoff leaked downstream decision %q:\n%s", itemID, downstream, briefing)
+				}
+			}
+		}
+	}
+	if briefing := fixture.handoff(t, "WI-004"); strings.Count(briefing, "GATE-001") != 1 {
+		t.Fatalf("diamond dependencies duplicated the resolved Gate:\n%s", briefing)
+	} else {
+		first, downstream, later := strings.Index(briefing, "GATE-001"), strings.Index(briefing, "GATE-003"), strings.Index(briefing, "GATE-005")
+		if first < 0 || downstream < first || later < downstream {
+			t.Fatalf("resolved Gates lost durable opening order:\n%s", briefing)
+		}
+		if !strings.Contains(briefing, "GATE-005 on WI-001\n  Question: which migration mode?\n  Selected choice: online\n  Resolution note: ") ||
+			strings.Contains(briefing, "GATE-005 on WI-001\n  Question: which migration mode?\n  Selected choice: online\n  Resolution note: none") {
+			t.Fatalf("empty resolution note was not rendered exactly:\n%s", briefing)
+		}
+	}
+	record := loadRunRecord(t, fixture.root, runID)
+	attempts := record["attempts"].(map[string]any)
+	if attempts["WI-001"] != float64(2) {
+		t.Fatalf("WI-001 attempts = %v, want two launched sessions", attempts["WI-001"])
+	}
+	humanWaits := record["human_waits"].(map[string]any)
+	if humanWaits["WI-001"] != float64(1) {
+		t.Fatalf("WI-001 human waits = %v, want one", humanWaits["WI-001"])
 	}
 }
 
@@ -201,8 +360,8 @@ printf '{"outcome":"implementation_finished","summary":"attempt %s"}' "$attempt"
 	if !strings.Contains(output, "MAX_ATTEMPTS") && !strings.Contains(output, "NO_PROGRESS") {
 		t.Fatalf("output does not name a bounded stop reason:\n%s", output)
 	}
-	if sessions := fixture.sessions(t); len(sessions) > 3 {
-		t.Fatalf("sessions = %v, the attempt limit did not bound the loop", sessions)
+	if sessions := fixture.sessions(t); len(sessions) != 2 {
+		t.Fatalf("sessions = %v, want exactly two technical attempts", sessions)
 	}
 }
 

@@ -352,7 +352,7 @@ func newRunner(options Options) (*Runner, error) {
 		RuntimeCommand: options.RuntimeCommand, Snapshot: options.Snapshot,
 		Budget: options.Budget, Limits: options.Limits,
 		StartedAt: startedAt, Deadline: startedAt.Add(options.Budget.MaxDuration),
-		Attempts: map[string]int{},
+		Attempts: map[string]int{}, HumanWaits: map[string]int{},
 	}
 	if err := runner.record.save(options.Root, options.Limits, startedAt); err != nil {
 		return nil, err
@@ -770,9 +770,10 @@ func (runner *Runner) verify(itemID, label string) error {
 func (runner *Runner) implement(action work.NextAction, decision app.Decision) error {
 	itemID := action.Item.ID
 	attempt := runner.record.Attempts[itemID] + 1
-	if attempt > runner.options.Budget.MaxAttemptsPerWork {
+	technicalAttempt := runner.record.technicalAttemptsFor(itemID) + 1
+	if technicalAttempt > runner.options.Budget.MaxAttemptsPerWork {
 		return runner.stopNow(StopMaxAttempts,
-			fmt.Sprintf("%s has used its %d attempts in this run", itemID, runner.options.Budget.MaxAttemptsPerWork))
+			fmt.Sprintf("%s has used its %d technical attempts in this run", itemID, runner.options.Budget.MaxAttemptsPerWork))
 	}
 	if runner.record.Steps >= runner.options.Budget.MaxSteps {
 		return runner.stopNow(StopMaxSteps, fmt.Sprintf("%d steps is the configured maximum", runner.options.Budget.MaxSteps))
@@ -788,44 +789,51 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 		return err
 	}
 	startedAt := runner.now()
-	// The attempt and the step are charged, and the worker recorded, before the
-	// process exists. A crash here costs one attempt; the alternative — charging
-	// afterwards — costs an unbounded number.
+	// The attempt and the step are charged before any fallible preparation. A
+	// crash here costs one attempt; the alternative — charging afterwards —
+	// costs an unbounded number. Worker ownership is recorded separately after
+	// the state digest succeeds, because no process can exist before then.
 	runner.record.Attempts[itemID] = attempt
 	runner.record.Steps++
+	if stopped, err := runner.checkpoint(); stopped || err != nil {
+		return err
+	}
+	// Anchor governance state before assembling the briefing. A Gate resolution
+	// or other state change after this point must invalidate the session result,
+	// not leave the worker acting on a stale handoff that still happens to match
+	// a digest captured after the change.
+	stateBefore, digestErr := storage.StateDigest(runner.options.Root)
+	if digestErr != nil {
+		return digestErr
+	}
+	// From this checkpoint onward a crash cannot prove whether the launch below
+	// happened, so recovery must see the prospective worker before it exists.
 	runner.record.Worker = &Worker{WorkItemID: itemID, Attempt: attempt, SessionDir: sessionDir, StartedAt: startedAt}
 	if stopped, err := runner.checkpoint(); stopped || err != nil {
 		return err
 	}
 
-	handoff, err := runner.handoff(action, decision, attempt)
+	handoff, current, err := runner.handoff(action, decision, attempt)
 	if err != nil {
-		// Nothing was launched, and this path knows that for certain, so the
-		// worker record is withdrawn rather than left for recovery to puzzle over.
-		runner.record.Worker = nil
-		if saveErr := runner.save(); saveErr != nil {
+		if saveErr := runner.withdrawUnstartedWorker(); saveErr != nil {
 			return saveErr
 		}
 		return err
+	}
+	if !current {
+		return runner.withdrawUnstartedWorker()
 	}
 	// The session writes its own briefing and console log, so the room for them
 	// is claimed before it starts rather than discovered afterwards.
 	if err := storage.CheckRunCapacity(runner.options.Root, runner.record.RunID,
 		sessionReservation(len(handoff), runner.options.Limits.MaxWriteBytes), runner.options.Limits); err != nil {
-		runner.record.Worker = nil
-		if saveErr := runner.save(); saveErr != nil {
+		if saveErr := runner.withdrawUnstartedWorker(); saveErr != nil {
 			return saveErr
 		}
 		return runner.stopNow(StopCapacityExceeded, err.Error())
 	}
-	// The session is about to be given write access to the repository, and
-	// `.forgepilot/` lives inside it. This is what tells us afterwards whether
-	// the briefing's prohibition was honoured.
-	stateBefore, digestErr := storage.StateDigest(runner.options.Root)
-	if digestErr != nil {
-		return digestErr
-	}
-	runner.print("Step %d: %s %s (attempt %d/%d, new session)\n", runner.record.Steps, action.Kind, itemID, attempt, runner.options.Budget.MaxAttemptsPerWork)
+	runner.print("Step %d: %s %s (session %d, technical attempt %d/%d, new session)\n",
+		runner.record.Steps, action.Kind, itemID, attempt, technicalAttempt, runner.options.Budget.MaxAttemptsPerWork)
 	request := agent.Request{Workspace: runner.record.Workspace, ArtifactDir: sessionDir,
 		Handoff: handoff, MaxOutputBytes: runner.options.Limits.MaxWriteBytes}
 	// The real last gate. Everything between the earlier check and here —
@@ -835,16 +843,27 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 	// noticing at Wait. The worker record is withdrawn because this path knows
 	// for certain that nothing was launched.
 	if stopped, stopErr := runner.beforeAction(); stopped || stopErr != nil {
-		runner.record.Worker = nil
-		if saveErr := runner.save(); saveErr != nil {
+		if saveErr := runner.withdrawUnstartedWorker(); saveErr != nil {
 			return saveErr
 		}
 		return stopErr
 	}
+	// State may have changed while the handoff or capacity reservation was being
+	// prepared. Refuse to launch from that stale authorization snapshot; the next
+	// loop iteration will ask the typed query for the now-current action.
+	currentState, digestErr := storage.StateDigest(runner.options.Root)
+	if digestErr != nil {
+		if saveErr := runner.withdrawUnstartedWorker(); saveErr != nil {
+			return saveErr
+		}
+		return digestErr
+	}
+	if currentState != stateBefore {
+		return runner.withdrawUnstartedWorker()
+	}
 	session, err := agent.Start(runner.runtime, request, startedAt)
 	if err != nil {
-		runner.record.Worker = nil
-		if saveErr := runner.save(); saveErr != nil {
+		if saveErr := runner.withdrawUnstartedWorker(); saveErr != nil {
 			return saveErr
 		}
 		return runner.stopNow(StopAgentExecutionFailed, fmt.Sprintf("%s: %v", itemID, err))
@@ -942,6 +961,13 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 	return runner.afterSession(itemID, attempt, result, waitErr, execution.Cause())
 }
 
+// withdrawUnstartedWorker clears only process ownership. The attempt and step
+// remain charged because both were durably reserved before launch.
+func (runner *Runner) withdrawUnstartedWorker() error {
+	runner.record.Worker = nil
+	return runner.save()
+}
+
 func (runner *Runner) afterSession(itemID string, attempt int, result agent.Result, waitErr error, cause stopCause) error {
 	switch {
 	case errors.Is(waitErr, agent.ErrStopped):
@@ -958,7 +984,7 @@ func (runner *Runner) afterSession(itemID string, attempt int, result agent.Resu
 		if runner.record.Stop != nil {
 			return nil
 		}
-		if attempt >= runner.options.Budget.MaxAttemptsPerWork {
+		if runner.record.technicalAttemptsFor(itemID) >= runner.options.Budget.MaxAttemptsPerWork {
 			return runner.stopNow(StopRuntimeProtocol, fmt.Sprintf("%s: %v", itemID, waitErr))
 		}
 		runner.print("  attempt %d returned no usable result: %v\n", attempt, waitErr)
@@ -975,6 +1001,10 @@ func (runner *Runner) afterSession(itemID string, attempt int, result agent.Resu
 	}
 	switch result.Outcome {
 	case agent.NeedsHuman:
+		runner.record.recordHumanWait(itemID)
+		if stopped, err := runner.checkpoint(); stopped || err != nil {
+			return err
+		}
 		return runner.needsHuman(itemID, result)
 	case agent.ExecutionFailed:
 		// Credentials, tooling and environment failures are the agent's problem,

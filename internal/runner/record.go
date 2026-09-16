@@ -205,6 +205,7 @@ type Record struct {
 	UpdatedAt         time.Time              `json:"updated_at"`
 	Steps             int                    `json:"steps"`
 	Attempts          map[string]int         `json:"attempts"`
+	HumanWaits        map[string]int         `json:"human_waits,omitempty"`
 	Worker            *Worker                `json:"worker,omitempty"`
 	// Pending holds executions whose cleanup has not been confirmed. It is
 	// additive: a record written before this field existed simply has none, which
@@ -276,7 +277,39 @@ func LoadRecord(root, runID string) (Record, error) {
 	if record.Attempts == nil {
 		record.Attempts = map[string]int{}
 	}
+	if record.HumanWaits == nil {
+		record.HumanWaits = map[string]int{}
+	}
+	for workItemID, attempts := range record.Attempts {
+		if attempts < 0 {
+			return Record{}, fmt.Errorf("read run %s: %s has negative attempts", runID, workItemID)
+		}
+	}
+	for workItemID, waits := range record.HumanWaits {
+		attempts, known := record.Attempts[workItemID]
+		if waits < 0 || !known || waits > attempts {
+			return Record{}, fmt.Errorf("read run %s: %s has impossible human-wait accounting", runID, workItemID)
+		}
+	}
 	return record, nil
+}
+
+// technicalAttemptsFor reports the launched sessions that consumed technical
+// retry budget. Old records have no HumanWaits entry, so every historical
+// session remains charged rather than being reclassified from partial history.
+func (record *Record) technicalAttemptsFor(workItemID string) int {
+	attempts := record.Attempts[workItemID]
+	waits := record.HumanWaits[workItemID]
+	return attempts - waits
+}
+
+func (record *Record) recordHumanWait(workItemID string) {
+	if record.HumanWaits == nil {
+		record.HumanWaits = map[string]int{}
+	}
+	if record.HumanWaits[workItemID] < record.Attempts[workItemID] {
+		record.HumanWaits[workItemID]++
+	}
 }
 
 func (record *Record) journal(root string, limits storage.ArtifactLimits, entry Entry) error {

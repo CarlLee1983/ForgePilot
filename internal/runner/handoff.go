@@ -15,10 +15,14 @@ import (
 // is either read from state or named as a path: no environment is copied, no
 // token is passed, and nothing a previous session wrote is trusted beyond being
 // quoted as that session's claim.
-func (runner *Runner) handoff(action work.NextAction, decision app.Decision, attempt int) (string, error) {
+func (runner *Runner) handoff(action work.NextAction, decision app.Decision, attempt int) (string, bool, error) {
 	state, err := storage.Load(runner.options.Root)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	current := state.ActionableNextForGoal(runner.record.GoalID, decision.Repository)
+	if current.Kind != action.Kind || current.Item.ID != action.Item.ID {
+		return "", false, nil
 	}
 	item := action.Item
 	briefing := agent.Handoff{
@@ -30,6 +34,12 @@ func (runner *Runner) handoff(action work.NextAction, decision app.Decision, att
 		ActionReason: action.Reason,
 		Candidate:    candidateDescription(decision),
 		ProjectDocs:  runner.projectDocs(),
+	}
+	for _, gate := range resolvedGatesForHandoff(&state, item) {
+		briefing.ResolvedDecisions = append(briefing.ResolvedDecisions, agent.ResolvedDecision{
+			GateID: gate.ID, WorkItemID: gate.WorkItemID, Question: gate.Question,
+			Choice: gate.Choice, Note: gate.Note,
+		})
 	}
 	for _, dependencyID := range item.DependsOn {
 		dependency := work.Item{}
@@ -52,7 +62,39 @@ func (runner *Runner) handoff(action work.NextAction, decision app.Decision, att
 	if action.Kind == work.NextActionRepair {
 		briefing.FailureExcerpt, briefing.FailureLogPath = runner.lastFailure(&state, item.ID)
 	}
-	return briefing.Render(runner.options.Budget.MaxHandoffBytes), nil
+	rendered, err := briefing.Render(runner.options.Budget.MaxHandoffBytes)
+	return rendered, true, err
+}
+
+// resolvedGatesForHandoff projects authoritative decision context for one
+// session. Relevance follows the Work Item DAG backwards through every
+// prerequisite; Gate history itself stays in durable opening order.
+func resolvedGatesForHandoff(state *work.State, item work.Item) []work.Gate {
+	items := make(map[string]work.Item, len(state.WorkItems))
+	for _, candidate := range state.WorkItems {
+		items[candidate.ID] = candidate
+	}
+	relevant := map[string]bool{item.ID: true}
+	pending := append([]string(nil), item.DependsOn...)
+	for len(pending) > 0 {
+		last := len(pending) - 1
+		id := pending[last]
+		pending = pending[:last]
+		if relevant[id] {
+			continue
+		}
+		relevant[id] = true
+		if prerequisite, ok := items[id]; ok {
+			pending = append(pending, prerequisite.DependsOn...)
+		}
+	}
+	var gates []work.Gate
+	for _, gate := range state.Gates {
+		if relevant[gate.WorkItemID] && gate.Status == work.GateResolved {
+			gates = append(gates, gate)
+		}
+	}
+	return gates
 }
 
 func candidateDescription(decision app.Decision) string {

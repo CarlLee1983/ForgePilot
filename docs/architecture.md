@@ -363,7 +363,7 @@ Runner 能做的寫入只有四種既有 transition：start、Goal readiness rec
 
 結果是三選一的結構化 JSON：`implementation_finished`、`needs_human`、`execution_failed`。解碼是嚴格的（拒絕未知欄位、拒絕多餘值、檢查每個 outcome 的必要欄位），exit code 0 但沒有合法結果是 protocol error 而不是完成。`implementation_finished` 只表示這次實作結束——PASS 只能來自 Candidate checkout 上的 canonical check。`needs_human` 一律停止；當它列出至少兩個選項時，透過既有 Gate service 開一個 OPEN Gate，選項照原樣保存，ForgePilot 不代答也不自行解除。
 
-交接內容有位元組上限。必要段落（工作識別、Story 與其驗收要求、禁止事項、結果契約）先寫且不截斷；依賴摘要、前次 attempt 摘要與 verification 失敗摘錄排在後面並在超限時截斷，截斷一定留下明說的標記與檔案路徑。不放完整環境變數、token 或認證檔。
+交接內容有位元組上限。必要段落（工作識別、Story 與其驗收要求、目前工作及所有 transitive prerequisites 的 RESOLVED Gate decisions、禁止事項、結果契約）先寫且不截斷；必要段落本身放不下時拒絕建立 session，不把不完整 briefing 交給 worker。Gate decisions 每次都從 current state 投影，包含原問題、選定選項與 resolution note，不從前次 attempt summary 猜測；同一次讀取也重驗原 action 仍是 typed query 的目前答案，若 OPEN Gate 或其他 state change 已使它失效，就不啟動 session，而由下一輪重新判定。依賴摘要、前次 attempt 摘要與 verification 失敗摘錄排在後面並在超限時截斷，截斷一定留下明說的標記與檔案路徑。不放完整環境變數、token 或認證檔。OPEN／CANCELLED、sibling 與 downstream Gates 不構成可沿用的 decision；Runner 不做語意去重、不自動 resolve。見 [ADR-0026](adr/0026-resolved-gates-cross-agent-session-boundaries.md)。
 
 ### 執行保護
 
@@ -379,7 +379,7 @@ Workspace lock 涵蓋整段 Runner，鍵是 canonical path，因此 symlink 別�
 
 Agent session 拿到的是 workspace 寫入權限，而 `.forgepilot/` 在 workspace 裡。交接內容裡的禁令是對未受信任模型的請求，不是機制；session 前後會比對整份 `state.json` digest，不同即以 `AGENT_WROTE_FORGEPILOT_STATE` 停止，且不採信該次 attempt 的任何回報。canonical check 是第二個不受 Runner 控制的執行窗口；它比較完整 target Work Item（含 `current_run`）、owning Goal 的 repository／review policy 與完整 latest Verification Evidence，並在寫入結果的同一個 state transaction 再檢查一次。Goal lifecycle 的變化不在此 projection，讓已開始的 check 在 Goal 被 block/cancel 後仍能依既有規則保存 Evidence。這表示它**不保證**偵測 sibling Work Item、其他 Goal 或 Gate 的改寫，亦防不了 transaction 完成後或仍在進行的寫入；兩個機制都是事後偵測，不是 sandbox。限度與理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
 
-程序 ownership 以 pgid 加「啟動時由作業系統自己報回的 start time 與 command」比對判定。四種結果分別對應繼續、停止自己的程序群組、不得發送 signal、以及 recovery blocked，但「繼續」與「不得發送 signal」兩種都再問一次群組是否為空：leader 已死不等於群組已空，它分叉出來的子程序沿用同一個 pgid，而在識別對不上的情況下那個群組也不確定是不是我們的。群組仍有成員時維持 recovery blocked，不猜測、不送 signal。詳見 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。attempt 預算在程序啟動前先保存；程序啟動後立即補記 identity。
+程序 ownership 以 pgid 加「啟動時由作業系統自己報回的 start time 與 command」比對判定。四種結果分別對應繼續、停止自己的程序群組、不得發送 signal、以及 recovery blocked，但「繼續」與「不得發送 signal」兩種都再問一次群組是否為空：leader 已死不等於群組已空，它分叉出來的子程序沿用同一個 pgid，而在識別對不上的情況下那個群組也不確定是不是我們的。群組仍有成員時維持 recovery blocked，不猜測、不送 signal。詳見 [ADR-0020](adr/0020-worker-ownership-is-fail-closed.md)。attempt 預算在程序啟動前先保存；程序啟動後立即補記 identity。所有 session slots 保持單調 attempt 編號；合法且已 checkpoint 的 `needs_human` outcome 另計為 human wait，不消耗 technical `--max-attempts-per-work`，但仍消耗 step、duration 與 artifact budget。選項不足時不製造 Gate，但分類仍是 human wait；舊 run record 缺少 human-wait accounting 時保守視為沒有可扣除的 wait。見 [ADR-0026](adr/0026-resolved-gates-cross-agent-session-boundaries.md)。
 
 **這個判準只有一份實作。** `worker` 與 `pending` 問的是同一個問題——這個 workspace 可不可以開始寫——所以恢復對兩者呼叫同一個 `settleExecution`，而完整 identity 的情形直接交給 `internal/agent` 的 `TerminateOwned`：那裡本來就是 Gone／Ours／Unrelated／Unknown 四種結果的所在地。兩份規則各自演化的結果已經看過一次，`worker` 分支曾把「leader 不在了」直接讀成「可以了」，而 `pending` 分支同一時間要求群組為空。agent 啟動流程先存 `worker.identity`、只有在清理失敗時才寫 `pending`，所以兩者之間的 crash 留下的正是「有 worker、沒有 pending」——那不是只有舊紀錄才走得到的路徑。
 

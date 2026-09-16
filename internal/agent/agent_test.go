@@ -227,23 +227,34 @@ func TestHandoffKeepsRequirementsAndMarksWhatItTrimmed(t *testing.T) {
 	handoff := Handoff{
 		GoalID: "g", GoalTitle: "Ship it", WorkItemID: "WI-007", StoryRef: "specs/stories/seven.md",
 		Action: "START", ActionReason: "earliest READY work", Candidate: "SNAPSHOT abc123",
+		ResolvedDecisions: []ResolvedDecision{{GateID: "GATE-003", WorkItemID: "WI-006",
+			Question: "Which store?", Choice: "postgres", Note: "keep operations simple"}},
 		Dependencies:   []Dependency{{ID: "WI-006", Status: "VERIFIED", StoryRef: "specs/stories/six.md", Evidence: "EV-012"}},
 		Attempts:       []Attempt{{Number: 1, Outcome: "implementation_finished", Summary: strings.Repeat("prior context ", 400)}},
 		FailureExcerpt: strings.Repeat("FAIL line\n", 400), FailureLogPath: ".forgepilot/logs/WI-007.log",
 	}
 
-	full := handoff.Render(DefaultHandoffBytes)
-	for _, required := range []string{"WI-007", "specs/stories/seven.md", "must not", "implementation_finished", "AGENTS.md"} {
+	full, err := handoff.Render(DefaultHandoffBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"WI-007", "specs/stories/seven.md", "must not", "implementation_finished", "AGENTS.md", "GATE-003", "Which store?", "postgres", "keep operations simple"} {
 		if !strings.Contains(full, required) {
 			t.Fatalf("full handoff lost %q", required)
 		}
 	}
+	if decision, attempts := strings.Index(full, "## Resolved Human Decisions"), strings.Index(full, "## Earlier attempts"); decision < 0 || attempts < 0 || decision > attempts {
+		t.Fatalf("resolved decisions did not precede untrusted attempt summaries:\n%s", full)
+	}
 
-	bounded := handoff.Render(3000)
+	bounded, err := handoff.Render(3000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(bounded) > 3000 {
 		t.Fatalf("bounded handoff is %d bytes", len(bounded))
 	}
-	for _, required := range []string{"specs/stories/seven.md", "acceptance criteria are the requirements", "must not", "execution_failed"} {
+	for _, required := range []string{"specs/stories/seven.md", "acceptance criteria are the requirements", "must not", "execution_failed", "GATE-003", "Which store?", "postgres", "keep operations simple"} {
 		if !strings.Contains(bounded, required) {
 			t.Fatalf("bounded handoff lost %q", required)
 		}
@@ -253,6 +264,9 @@ func TestHandoffKeepsRequirementsAndMarksWhatItTrimmed(t *testing.T) {
 	}
 	if strings.Contains(bounded, ".forgepilot/logs/WI-007.log") && strings.Count(bounded, "FAIL line") > 100 {
 		t.Fatal("bounded handoff inlined the whole failure log")
+	}
+	if _, err := handoff.Render(100); err == nil {
+		t.Fatal("a handoff that could not fit required decisions and contracts was truncated instead of refused")
 	}
 }
 
