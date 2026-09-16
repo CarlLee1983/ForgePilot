@@ -213,6 +213,9 @@ type Runtime interface {
 	Executable() (string, error)
 	// Version reports the runtime's own version, for the run record.
 	Version() (string, error)
+	// SessionEnvironment describes the sandbox setting ForgePilot adds when it
+	// launches this runtime.
+	SessionEnvironment() SessionEnvironment
 	// Plan describes one new session. Every call is a new session: no runtime
 	// may continue an earlier conversation.
 	Plan(request Request) (Plan, error)

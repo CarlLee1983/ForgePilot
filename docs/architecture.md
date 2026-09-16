@@ -375,6 +375,10 @@ Runner 能做的寫入只有四種既有 transition：start、Goal readiness rec
 
 交接內容有位元組上限。必要段落（工作識別、Story 與其驗收要求、目前工作及所有 transitive prerequisites 的 RESOLVED Gate decisions、禁止事項、結果契約）先寫且不截斷；必要段落本身放不下時拒絕建立 session，不把不完整 briefing 交給 worker。Gate decisions 每次都從 current state 投影，包含原問題、選定選項與 resolution note，不從前次 attempt summary 猜測；同一次讀取也重驗原 action 仍是 typed query 的目前答案，若 OPEN Gate 或其他 state change 已使它失效，就不啟動 session，而由下一輪重新判定。依賴摘要、前次 attempt 摘要與 verification 失敗摘錄排在後面並在超限時截斷，截斷一定留下明說的標記與檔案路徑。不放完整環境變數、token 或認證檔。OPEN／CANCELLED、sibling 與 downstream Gates 不構成可沿用的 decision；Runner 不做語意去重、不自動 resolve。見 [ADR-0026](adr/0026-resolved-gates-cross-agent-session-boundaries.md)。
 
+每份 Runner handoff 另有不可截斷的 Agent Session Check Profile，固定排在 project rules 之後、prohibitions 與 result contract 之前。`RESUME` 是 implementation profile；`REPAIR` 是 repair profile，且後者必須帶最新正式 FAIL 的完整 Verification Log path，只有 failure excerpt 仍可截斷。profile 把三個 owner 分開：Agent Session 做與 Story／變更直接相關的 focused diagnostics；Runner 在 `implementation_finished` 後仍只經 `internal/app` 做正式 canonical Verification；project instructions 指定的 integration/final owner 在 Human final acceptance 前執行 canonical 之外的 broad／race gates。Story 的 repository-wide AC 因此只是轉交 owner，不是被免除。
+
+profile 是 instruction-only。worker command output、exit code 與 Agent Result 都不會因此變成 PASS 或 Evidence；sandbox denial 只表示該 session 沒有執行能力，不推論 code FAIL 或後續 formal environment 的能力。runtime adapter 只陳述 ForgePilot 自己實際配置的 sandbox：Codex 是 `workspace-write`，fake 則是 ForgePilot 沒有配置等價 sandbox，不宣稱 OS 或 executable unrestricted。這個選擇不新增 command manifest、第二套 check executor、state 或 Run Record 欄位；信任取捨與失效條件見 [ADR-0028](adr/0028-agent-session-checks-are-diagnostic.md)。
+
 ### 執行保護
 
 Workspace lock 涵蓋整段 Runner，鍵是 canonical path，因此 symlink 別名無法啟動第二個 Runner。它不是 per-work 的 verification lock，也不是 state 交易鎖——模型或 canonical check 執行期間 `status` 仍可回答。

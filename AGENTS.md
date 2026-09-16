@@ -84,6 +84,8 @@ Commit 格式 `<type>: [ <scope> ] <subject>`，scope 用 milestone 代號（`m4
 
 **開工前自己重跑一次。** 任何文件裡寫的「上次通過了」都是紀錄，不是現在的結果。
 
+**ForgePilot Runner 啟動的 Agent Session 是明列例外。** handoff 出現 Agent Session Check Profile 時，只跑 Story／變更直接相關的 focused checks；不要為了滿足 repository-wide Story AC 重跑 `make verify` 或 `go test -race -count=1 ./...`。這些 AC 是轉交、不是取消：Runner 在 `implementation_finished` 後負責正式 `make verify`，人所指揮的 primary integration/final workflow 在 `AWAITING_GOAL_REVIEW` 後、Human final acceptance 前負責 race gate，並在 final handoff 回報 command 與 exit result。Repair session 從 handoff 指定的正式 failure log 做最小重現；只有為診斷該 failure 所必需時才擴大檢查。離開 Runner Agent Session 後，前述兩個完整 gate 與開工前 baseline 規則照常適用。
+
 ## 這個 repo 的一個細節
 
 `graft/` 被 `.gitignore` 忽略但確實存在。根目錄的 `.ignore` 讓 ripgrep 仍能搜尋那棵樹——它不是殘留檔案，不要刪。

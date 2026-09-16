@@ -20,6 +20,9 @@ type refusingRuntime struct {
 func (*refusingRuntime) Name() string                { return "refusing" }
 func (*refusingRuntime) Executable() (string, error) { return "/never/launched", nil }
 func (*refusingRuntime) Version() (string, error)    { return "test", nil }
+func (*refusingRuntime) SessionEnvironment() agent.SessionEnvironment {
+	return agent.SessionEnvironment{Sandbox: agent.SandboxNotConfiguredByForgePilot}
+}
 func (runtime *refusingRuntime) Plan(agent.Request) (agent.Plan, error) {
 	runtime.plans++
 	return agent.Plan{}, nil
@@ -59,6 +62,28 @@ func TestTailQuotesAShortLogWhole(t *testing.T) {
 	}
 	if excerpt := tail(path, 4096); excerpt != "canonical check failed" {
 		t.Fatalf("excerpt = %q", excerpt)
+	}
+}
+
+func TestAgentProfileForActionUsesTypedActionAndRuntimeEnvironment(t *testing.T) {
+	environment := agent.SessionEnvironment{Sandbox: agent.SandboxWorkspaceWrite}
+	for _, test := range []struct {
+		action work.NextActionKind
+		want   agent.SessionCheckKind
+	}{
+		{action: work.NextActionResume, want: agent.SessionCheckImplementation},
+		{action: work.NextActionRepair, want: agent.SessionCheckRepair},
+	} {
+		profile, err := agentProfileForAction(test.action, environment)
+		if err != nil {
+			t.Fatalf("profile for %s: %v", test.action, err)
+		}
+		if profile.Kind != test.want || profile.Environment != environment {
+			t.Fatalf("profile for %s = %#v, want kind %s and environment %#v", test.action, profile, test.want, environment)
+		}
+	}
+	if _, err := agentProfileForAction(work.NextActionStart, environment); err == nil {
+		t.Fatal("profile accepted an action without a check-profile mapping")
 	}
 }
 

@@ -31,6 +31,7 @@
 | [0023](0023-verification-does-not-submit-for-review.md) | Verification 只記錄 Evidence；只有明確 `review request` 才送入 Human Review | accepted |
 | [0026](0026-resolved-gates-cross-agent-session-boundaries.md) | Resolved Gate 從 current state 投影到後續 session；合法 Human wait 不消耗 technical attempt budget | accepted |
 | [0027](0027-candidate-verification-pass-fans-out-by-run.md) | 同 Goal stale 工作共享一個 Candidate Verification Run；只有 PASS 原子 fan-out | accepted |
+| [0028](0028-agent-session-checks-are-diagnostic.md) | Agent Session 做 focused diagnostics；Runner canonical Verification 是唯一 PASS owner | accepted |
 
 ## 什麼時候該加一份
 

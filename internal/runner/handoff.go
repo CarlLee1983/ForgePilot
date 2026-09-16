@@ -27,6 +27,10 @@ func (runner *Runner) handoff(action work.NextAction, decision app.Decision, att
 		return "", false, nil
 	}
 	item := action.Item
+	profile, err := agentProfileForAction(action.Kind, runner.runtime.SessionEnvironment())
+	if err != nil {
+		return "", false, err
+	}
 	briefing := agent.Handoff{
 		GoalID:       runner.record.GoalID,
 		GoalTitle:    runner.record.GoalTitle,
@@ -36,6 +40,7 @@ func (runner *Runner) handoff(action work.NextAction, decision app.Decision, att
 		ActionReason: action.Reason,
 		Candidate:    candidateDescription(decision),
 		ProjectDocs:  runner.projectDocs(),
+		CheckProfile: profile,
 	}
 	for _, gate := range resolvedGatesForHandoff(&state, item) {
 		briefing.ResolvedDecisions = append(briefing.ResolvedDecisions, agent.ResolvedDecision{
@@ -69,6 +74,19 @@ func (runner *Runner) handoff(action work.NextAction, decision app.Decision, att
 	}
 	rendered, err := briefing.Render(runner.options.Budget.MaxHandoffBytes)
 	return rendered, true, err
+}
+
+func agentProfileForAction(action work.NextActionKind, environment agent.SessionEnvironment) (agent.SessionCheckProfile, error) {
+	profile := agent.SessionCheckProfile{Environment: environment}
+	switch action {
+	case work.NextActionResume:
+		profile.Kind = agent.SessionCheckImplementation
+	case work.NextActionRepair:
+		profile.Kind = agent.SessionCheckRepair
+	default:
+		return agent.SessionCheckProfile{}, fmt.Errorf("action %s has no agent session check profile", action)
+	}
+	return profile, nil
 }
 
 // resolvedGatesForHandoff projects authoritative decision context for one

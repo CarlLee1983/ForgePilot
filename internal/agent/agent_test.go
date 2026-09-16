@@ -227,6 +227,7 @@ func TestHandoffKeepsRequirementsAndMarksWhatItTrimmed(t *testing.T) {
 	handoff := Handoff{
 		GoalID: "g", GoalTitle: "Ship it", WorkItemID: "WI-007", StoryRef: "specs/stories/seven.md",
 		Action: "START", ActionReason: "earliest READY work", Candidate: "SNAPSHOT abc123",
+		CheckProfile: SessionCheckProfile{Kind: SessionCheckRepair, Environment: SessionEnvironment{Sandbox: SandboxWorkspaceWrite}},
 		ResolvedDecisions: []ResolvedDecision{{GateID: "GATE-003", WorkItemID: "WI-006",
 			Question: "Which store?", Choice: "postgres", Note: "keep operations simple"}},
 		Dependencies:   []Dependency{{ID: "WI-006", Status: "VERIFIED", StoryRef: "specs/stories/six.md", Evidence: "EV-012"}},
@@ -247,14 +248,14 @@ func TestHandoffKeepsRequirementsAndMarksWhatItTrimmed(t *testing.T) {
 		t.Fatalf("resolved decisions did not precede untrusted attempt summaries:\n%s", full)
 	}
 
-	bounded, err := handoff.Render(3000)
+	bounded, err := handoff.Render(4000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bounded) > 3000 {
+	if len(bounded) > 4000 {
 		t.Fatalf("bounded handoff is %d bytes", len(bounded))
 	}
-	for _, required := range []string{"specs/stories/seven.md", "acceptance criteria are the requirements", "must not", "execution_failed", "GATE-003", "Which store?", "postgres", "keep operations simple"} {
+	for _, required := range []string{"specs/stories/seven.md", "acceptance criteria are the requirements", "must not", "execution_failed", "GATE-003", "Which store?", "postgres", "keep operations simple", ".forgepilot/logs/WI-007.log"} {
 		if !strings.Contains(bounded, required) {
 			t.Fatalf("bounded handoff lost %q", required)
 		}
@@ -267,6 +268,100 @@ func TestHandoffKeepsRequirementsAndMarksWhatItTrimmed(t *testing.T) {
 	}
 	if _, err := handoff.Render(100); err == nil {
 		t.Fatal("a handoff that could not fit required decisions and contracts was truncated instead of refused")
+	}
+}
+
+func TestRuntimeSessionEnvironmentMatchesCodexPlanAndHandoff(t *testing.T) {
+	codex := Codex{Command: writeScript(t, "#!/bin/sh\nexit 0\n")}
+	environment := codex.SessionEnvironment()
+	if environment.Sandbox != SandboxWorkspaceWrite {
+		t.Fatalf("Codex environment = %#v", environment)
+	}
+	plan, err := codex.Plan(Request{Workspace: t.TempDir(), ArtifactDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for index := range plan.Args[:len(plan.Args)-1] {
+		if plan.Args[index] == "--sandbox" && plan.Args[index+1] == string(environment.Sandbox) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Codex plan does not use its session environment: %#v", plan.Args)
+	}
+	handoff, err := (Handoff{GoalID: "g", GoalTitle: "goal", WorkItemID: "WI-001", StoryRef: "story.md",
+		CheckProfile: SessionCheckProfile{Kind: SessionCheckImplementation, Environment: environment}}).Render(DefaultHandoffBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(handoff, "`workspace-write` sandbox") {
+		t.Fatalf("handoff does not describe the Codex plan setting:\n%s", handoff)
+	}
+	if (Fake{}).SessionEnvironment().Sandbox != SandboxNotConfiguredByForgePilot {
+		t.Fatalf("fake environment = %#v", (Fake{}).SessionEnvironment())
+	}
+}
+
+func TestHandoffRequiresAValidSessionCheckProfile(t *testing.T) {
+	base := Handoff{
+		GoalID: "g", GoalTitle: "Ship it", WorkItemID: "WI-007", StoryRef: "specs/stories/seven.md",
+		Action: "RESUME", ActionReason: "ready", ProjectDocs: []string{"AGENTS.md"},
+	}
+	if _, err := base.Render(DefaultHandoffBytes); err == nil {
+		t.Fatal("handoff without a check profile rendered")
+	}
+	unknownKind := base
+	unknownKind.CheckProfile = SessionCheckProfile{Kind: "unknown", Environment: SessionEnvironment{Sandbox: SandboxWorkspaceWrite}}
+	if _, err := unknownKind.Render(DefaultHandoffBytes); err == nil {
+		t.Fatal("handoff accepted an unknown check kind")
+	}
+	unknownSandbox := base
+	unknownSandbox.CheckProfile = SessionCheckProfile{Kind: SessionCheckImplementation, Environment: SessionEnvironment{Sandbox: "unknown"}}
+	if _, err := unknownSandbox.Render(DefaultHandoffBytes); err == nil {
+		t.Fatal("handoff accepted an unknown sandbox")
+	}
+
+	implementation := base
+	implementation.CheckProfile = SessionCheckProfile{Kind: SessionCheckImplementation,
+		Environment: SessionEnvironment{Sandbox: SandboxWorkspaceWrite}}
+	rendered, err := implementation.Render(DefaultHandoffBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## Agent Session Check Profile", "focused checks", "Runner later owns formal canonical", "integration/final owner", "workspace-write", "not run", "infer PASS", "code defect"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("implementation profile missing %q:\n%s", want, rendered)
+		}
+	}
+	projectRules := strings.Index(rendered, "## Project rules")
+	profile := strings.Index(rendered, "## Agent Session Check Profile")
+	prohibitions := strings.Index(rendered, "## What you must not do")
+	if projectRules < 0 || profile < 0 || prohibitions < 0 || projectRules > profile || profile > prohibitions {
+		t.Fatal("check profile was not between project rules and prohibitions")
+	}
+
+	implementation.FailureLogPath = ".forgepilot/logs/fail.log"
+	if _, err := implementation.Render(DefaultHandoffBytes); err == nil {
+		t.Fatal("implementation profile accepted formal failure context")
+	}
+
+	repair := base
+	repair.CheckProfile = SessionCheckProfile{Kind: SessionCheckRepair,
+		Environment: SessionEnvironment{Sandbox: SandboxNotConfiguredByForgePilot}}
+	if _, err := repair.Render(DefaultHandoffBytes); err == nil {
+		t.Fatal("repair profile accepted missing failure log path")
+	}
+	repair.FailureLogPath = ".forgepilot/logs/formal-failure.log"
+	repair.FailureExcerpt = "the focused failure"
+	rendered, err = repair.Render(DefaultHandoffBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"latest formal Verification Log", ".forgepilot/logs/formal-failure.log", "focused reproducer", "ForgePilot adds no equivalent sandbox"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("repair profile missing %q:\n%s", want, rendered)
+		}
 	}
 }
 

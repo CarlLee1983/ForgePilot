@@ -70,6 +70,9 @@ _Avoid_：daemon、排程器、第二套工作狀態機、自動核准者
 **Agent Session**：Runner 為一張 Work Item 的一次 attempt 所啟動的一個全新 coding CLI 程序。每次實作或修復都是新的 session，不延續前一次對話。
 _Avoid_：長對話、跨 Work Item 的脈絡、Verification Run
 
+**Agent Session Check Profile**：Runner handoff 對該次 Agent Session 的檢查責任說明；session 做 focused diagnostics，Runner 另行擁有正式 Candidate Verification，project instructions 指定的 integration/final owner 再負責 canonical 以外的 gates。它是 instruction-only，不是 Evidence 或另一套 Verification。
+_Avoid_：Worker Verification、PASS claim、check attestation、repository command manifest
+
 **Agent Result**：一次 Agent Session 交回的結構化結果，為 `implementation_finished`、`needs_human` 或 `execution_failed`。它是未受信任的模型輸出，只作為摘要與停止理由；`implementation_finished` 只表示這次實作結束。
 _Avoid_：PASS、Evidence、完成宣告、授權
 

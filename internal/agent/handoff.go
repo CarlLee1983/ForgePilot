@@ -11,6 +11,33 @@ import (
 // bounded excerpts below it are trimmed to fit.
 const DefaultHandoffBytes = 64 * 1024
 
+// SessionCheckKind identifies the focused engineering work a newly launched
+// Agent Session owns. It is deliberately separate from a Work Item action.
+type SessionCheckKind string
+
+const (
+	SessionCheckImplementation SessionCheckKind = "implementation"
+	SessionCheckRepair         SessionCheckKind = "repair"
+)
+
+// SessionSandbox describes only the sandbox ForgePilot configures for a
+// runtime. It makes no claim about other permissions the process may have.
+type SessionSandbox string
+
+const (
+	SandboxWorkspaceWrite            SessionSandbox = "workspace-write"
+	SandboxNotConfiguredByForgePilot SessionSandbox = "not_configured_by_forgepilot"
+)
+
+type SessionEnvironment struct {
+	Sandbox SessionSandbox
+}
+
+type SessionCheckProfile struct {
+	Kind        SessionCheckKind
+	Environment SessionEnvironment
+}
+
 // Dependency is what a session is told about one prerequisite: enough to know
 // the work it builds on exists and is verified, never a copy of its Story.
 type Dependency struct {
@@ -50,6 +77,7 @@ type Handoff struct {
 	Action       string
 	ActionReason string
 	Candidate    string
+	CheckProfile SessionCheckProfile
 	// ResolvedDecisions are required context. Unlike attempt summaries, they
 	// come from current ForgePilot state and are not untrusted session claims.
 	ResolvedDecisions []ResolvedDecision
@@ -70,6 +98,9 @@ type Handoff struct {
 // previous attempts and failure excerpts are trimmed from the end instead, and
 // a trim always says it happened and where the full text lives.
 func (handoff Handoff) Render(limit int) (string, error) {
+	if err := handoff.validateCheckProfile(); err != nil {
+		return "", err
+	}
 	if limit <= 0 {
 		limit = DefaultHandoffBytes
 	}
@@ -114,12 +145,52 @@ func (handoff Handoff) requiredSections() []string {
 			handoff.Action, handoff.ActionReason, orNone(handoff.Candidate)),
 		fmt.Sprintf("## Story\n\nThe engineering contract for this work item is `%s`.\nRead it in full. Its acceptance criteria are the requirements; this briefing does not restate them and does not relax them.", handoff.StoryRef),
 		handoff.projectSection(),
+		handoff.checkProfileSection(),
 	}
 	if len(handoff.ResolvedDecisions) > 0 {
 		sections = append(sections, handoff.resolvedDecisionSection())
 	}
 	sections = append(sections, prohibitionSection, resultContractSection)
 	return sections
+}
+
+func (handoff Handoff) validateCheckProfile() error {
+	switch handoff.CheckProfile.Kind {
+	case SessionCheckImplementation:
+		if handoff.FailureLogPath != "" || handoff.FailureExcerpt != "" {
+			return fmt.Errorf("implementation session check profile cannot carry formal failure context")
+		}
+	case SessionCheckRepair:
+		if strings.TrimSpace(handoff.FailureLogPath) == "" {
+			return fmt.Errorf("repair session check profile requires a formal failure log path")
+		}
+	default:
+		return fmt.Errorf("unknown session check kind %q", handoff.CheckProfile.Kind)
+	}
+	switch handoff.CheckProfile.Environment.Sandbox {
+	case SandboxWorkspaceWrite, SandboxNotConfiguredByForgePilot:
+		return nil
+	default:
+		return fmt.Errorf("unknown session sandbox %q", handoff.CheckProfile.Environment.Sandbox)
+	}
+}
+
+func (handoff Handoff) checkProfileSection() string {
+	sandbox := "ForgePilot adds no equivalent sandbox setting for this runtime. This does not claim the executable or operating system is unrestricted."
+	if handoff.CheckProfile.Environment.Sandbox == SandboxWorkspaceWrite {
+		sandbox = "ForgePilot launches this session with the `workspace-write` sandbox. It makes no promise that process inspection, caches, network, credentials, or system executables are available."
+	}
+	section := `## Agent Session Check Profile
+
+Run the smallest stable focused checks covering changed behavior and applicable acceptance criteria. Expand only for dependency, regression risk, or formal failure; report exact commands and outcomes.
+
+Do not run repository-wide gates merely to declare this Agent Session complete. Runner later owns formal canonical verification on the Candidate; only it can create PASS Evidence. Project-named supplemental broad/race gates belong to the integration/final owner before Human final acceptance: they are not waived or unfinished session implementation.
+
+` + sandbox + ` A denied command is "not run": report the diagnostic limitation. Do not escalate, infer PASS, or infer a code defect.`
+	if handoff.CheckProfile.Kind == SessionCheckRepair {
+		section += fmt.Sprintf("\n\nThe latest formal Verification Log is the primary source: `%s`. Reproduce with a focused reproducer at the narrowest seam, fix the owning cause, and run the focused regression. A repository-wide command may isolate failure, never serve as this session's PASS claim.", handoff.FailureLogPath)
+	}
+	return section
 }
 
 func (handoff Handoff) resolvedDecisionSection() string {
@@ -195,15 +266,10 @@ func (handoff Handoff) optionalSections() []string {
 		}
 		sections = append(sections, strings.TrimRight(builder.String(), "\n"))
 	}
-	if handoff.FailureExcerpt != "" || handoff.FailureLogPath != "" {
+	if handoff.FailureExcerpt != "" {
 		var builder strings.Builder
 		builder.WriteString("## Last verification failure\n")
-		if handoff.FailureLogPath != "" {
-			fmt.Fprintf(&builder, "\nFull log: `%s`\n", handoff.FailureLogPath)
-		}
-		if handoff.FailureExcerpt != "" {
-			fmt.Fprintf(&builder, "\n```\n%s\n```\n", handoff.FailureExcerpt)
-		}
+		fmt.Fprintf(&builder, "\n```\n%s\n```\n", handoff.FailureExcerpt)
 		sections = append(sections, strings.TrimRight(builder.String(), "\n"))
 	}
 	return sections

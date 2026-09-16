@@ -236,8 +236,10 @@ func TestExceedingTheArtifactBudgetStopsSafely(t *testing.T) {
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"}, []string{"specs/stories/b.md", "WI-001"})
 	agent := fixture.fakeAgent(t, implementsCleanly)
 
+	// Leave room for one profiled session and its Evidence, but not the next
+	// session reservation; the assertion is about preserving existing artifacts.
 	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot",
-		"--max-agent-output-bytes", "2048", "--max-run-bytes", "80000")
+		"--max-agent-output-bytes", "2048", "--max-run-bytes", "82000")
 	if code != 3 {
 		t.Fatalf("exit = %d\n%s", code, output)
 	}

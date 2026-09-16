@@ -15,6 +15,10 @@ type Codex struct{ Command string }
 
 func (codex Codex) Name() string { return "codex" }
 
+func (codex Codex) SessionEnvironment() SessionEnvironment {
+	return SessionEnvironment{Sandbox: SandboxWorkspaceWrite}
+}
+
 // Executable resolves the CLI without installing or configuring anything. A
 // missing Codex is a stop condition, not something to fix automatically.
 func (codex Codex) Executable() (string, error) {
@@ -76,7 +80,7 @@ func (codex Codex) Plan(request Request) (Plan, error) {
 		Args: []string{
 			"exec",
 			"--cd", request.Workspace,
-			"--sandbox", "workspace-write",
+			"--sandbox", string(codex.SessionEnvironment().Sandbox),
 			"--skip-git-repo-check",
 			"--output-schema", schemaPath,
 			"--output-last-message", resultPath,

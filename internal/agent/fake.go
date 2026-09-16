@@ -25,6 +25,10 @@ type Fake struct{ Command string }
 
 func (fake Fake) Name() string { return "fake" }
 
+func (fake Fake) SessionEnvironment() SessionEnvironment {
+	return SessionEnvironment{Sandbox: SandboxNotConfiguredByForgePilot}
+}
+
 func (fake Fake) Executable() (string, error) {
 	command := fake.Command
 	if command == "" {
