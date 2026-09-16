@@ -17,7 +17,7 @@
 | [0009](0009-reclaim-before-refusing.md) | `verify` 先無條件回收孤兒，再判斷能不能開始新的執行 | accepted |
 | [0010](0010-no-outbound-network-requests.md) | 不主動發出網路請求——不自行 HTTP，也不 spawn `gh` | accepted（由 0018 加註例外） |
 | [0011](0011-pr-identity-does-not-gate-completion.md) | PR identity 不參與完成判定與 stale 判定 | accepted |
-| [0012](0012-verification-log-outside-state.md) | Verification 輸出串流到 state 之外的 log，以 run 為鍵；Evidence 上不加欄位 | accepted |
+| [0012](0012-verification-log-outside-state.md) | Verification 輸出串流到 state 之外的 log；Evidence 不保存 path（run-ID lookup 由 0027 修正） | accepted（由 0027 修正 lookup） |
 | [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 是否自我套用 ForgeFlowV2——尚未回答的開放問題 | proposed |
 | [0014](0014-working-tree-snapshot-is-a-candidate.md) | Working tree snapshot 是保留在 ForgePilot ref 下的 Candidate，不是 branch、stash 或 Work Item target | accepted |
 | [0015](0015-runtime-contract-belongs-to-candidate.md) | Runtime Contract 從 Candidate checkout 解析；只固定該次 subprocess environment，actual versions 隨 run 進 Evidence | accepted |
@@ -30,6 +30,7 @@
 | [0022](0022-pending-cleanup-outlives-the-process.md) | 未確認的清理持久化為 workspace 層級的恢復阻擋，與「上一次為什麼停」分開 | accepted |
 | [0023](0023-verification-does-not-submit-for-review.md) | Verification 只記錄 Evidence；只有明確 `review request` 才送入 Human Review | accepted |
 | [0026](0026-resolved-gates-cross-agent-session-boundaries.md) | Resolved Gate 從 current state 投影到後續 session；合法 Human wait 不消耗 technical attempt budget | accepted |
+| [0027](0027-candidate-verification-pass-fans-out-by-run.md) | 同 Goal stale 工作共享一個 Candidate Verification Run；只有 PASS 原子 fan-out | accepted |
 
 ## 什麼時候該加一份
 

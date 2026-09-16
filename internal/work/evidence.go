@@ -61,9 +61,10 @@ type Evidence struct {
 	// deciding whether work completes or whether Evidence has gone stale
 	// (ADR-0011), and it is never checked against GitHub (ADR-0010). Optional,
 	// and forbidden on Verification Evidence.
-	PR        string            `json:"pr"`
-	Runtime   map[string]string `json:"runtime,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
+	PR                string            `json:"pr"`
+	Runtime           map[string]string `json:"runtime,omitempty"`
+	VerificationRunID string            `json:"verification_run_id"`
+	CreatedAt         time.Time         `json:"created_at"`
 }
 
 func (evidence Evidence) Candidate() Candidate {
@@ -158,20 +159,21 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 		return Evidence{}, fmt.Errorf("verification candidate: %w", err)
 	}
 	evidence := Evidence{
-		ID:              s.takeEvidenceID(),
-		Type:            VerificationEvidence,
-		Repository:      goal.Repository,
-		WorkItemID:      item.ID,
-		StoryRef:        item.StoryRef,
-		Revision:        revision,
-		CandidateKind:   candidate.Kind,
-		BaseRevision:    candidate.BaseRevision,
-		CandidateDigest: candidate.Digest,
-		Command:         command,
-		ExitCode:        exitCode,
-		Result:          result,
-		Runtime:         copyRuntime(item.CurrentRun.Runtime),
-		CreatedAt:       now,
+		ID:                s.takeEvidenceID(),
+		Type:              VerificationEvidence,
+		Repository:        goal.Repository,
+		WorkItemID:        item.ID,
+		StoryRef:          item.StoryRef,
+		Revision:          revision,
+		CandidateKind:     candidate.Kind,
+		BaseRevision:      candidate.BaseRevision,
+		CandidateDigest:   candidate.Digest,
+		Command:           command,
+		ExitCode:          exitCode,
+		Result:            result,
+		Runtime:           copyRuntime(item.CurrentRun.Runtime),
+		VerificationRunID: item.CurrentRun.VerificationRunID,
+		CreatedAt:         now,
 	}
 	s.Evidence = append(s.Evidence, evidence)
 	item.CurrentRun = nil
@@ -279,6 +281,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 		}
 		switch record.Type {
 		case VerificationEvidence:
+			if _, _, ok := parseVerificationRunID(record.VerificationRunID); !ok {
+				return fmt.Errorf("evidence %q has invalid verification run ID %q", record.ID, record.VerificationRunID)
+			}
 			switch record.Result {
 			case Pass, Fail, Interrupted:
 			default:
@@ -294,6 +299,9 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 				return fmt.Errorf("evidence %q has invalid runtime: %w", record.ID, err)
 			}
 		case ReviewEvidence:
+			if record.VerificationRunID != "" {
+				return fmt.Errorf("evidence %q is a review but carries a verification run ID", record.ID)
+			}
 			switch record.Result {
 			case Approved, Rejected:
 			default:
@@ -341,6 +349,82 @@ func parseEvidenceID(id string) (int, bool) {
 	return n, err == nil && n > 0 && fmt.Sprintf("EV-%03d", n) == id
 }
 
+func parseVerificationRunID(id string) (legacy bool, n int, ok bool) {
+	prefix := "VR-"
+	if strings.HasPrefix(id, "LVR-") {
+		legacy, prefix = true, "LVR-"
+	}
+	if !strings.HasPrefix(id, prefix) {
+		return false, 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(id, prefix))
+	return legacy, n, err == nil && n > 0 && fmt.Sprintf(prefix+"%03d", n) == id
+}
+
+// NextVerificationRun returns the ID an app may use to exclusive-create its log.
+func (s *State) NextVerificationRun() string {
+	return fmt.Sprintf("VR-%03d", max(1, s.NextVerificationRunID))
+}
+
+func equalRuntime(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func validateVerificationRuns(s State) error {
+	active, settled := map[string]bool{}, map[string]Evidence{}
+	maxCanonical := 0
+	for _, item := range s.WorkItems {
+		if item.CurrentRun != nil {
+			id := item.CurrentRun.VerificationRunID
+			if active[id] {
+				return fmt.Errorf("verification run ID %q is active more than once", id)
+			}
+			active[id] = true
+			legacy, n, _ := parseVerificationRunID(id)
+			if !legacy && n > maxCanonical {
+				maxCanonical = n
+			}
+		}
+	}
+	for _, e := range s.Evidence {
+		if e.Type != VerificationEvidence {
+			continue
+		}
+		legacy, n, _ := parseVerificationRunID(e.VerificationRunID)
+		if active[e.VerificationRunID] {
+			return fmt.Errorf("verification run ID %q is both active and settled", e.VerificationRunID)
+		}
+		if prior, ok := settled[e.VerificationRunID]; ok {
+			if legacy {
+				return fmt.Errorf("legacy verification run ID %q is reused", e.VerificationRunID)
+			}
+			if prior.WorkItemID == e.WorkItemID {
+				return fmt.Errorf("verification run ID %q repeats work item %q", e.VerificationRunID, e.WorkItemID)
+			}
+			if prior.Candidate() != e.Candidate() || !equalRuntime(prior.Runtime, e.Runtime) || prior.Command != e.Command || prior.Result != e.Result || !prior.CreatedAt.Equal(e.CreatedAt) {
+				return fmt.Errorf("verification run ID %q has mixed provenance", e.VerificationRunID)
+			}
+		} else {
+			settled[e.VerificationRunID] = e
+		}
+		if !legacy && n > maxCanonical {
+			maxCanonical = n
+		}
+	}
+	if s.NextVerificationRunID <= maxCanonical {
+		return errors.New("next_verification_run_id would reuse an ID")
+	}
+	return nil
+}
+
 // BeginVerification records that a Verification Run is in flight. The revision is
 // stored so that an interrupted run can still be attributed to the exact commit
 // it was testing. logPath is recorded the same way as worktreePath: so that
@@ -361,6 +445,14 @@ func (s *State) BeginCandidateVerification(id string, candidate Candidate, workt
 // runtime metadata observed when the canonical check starts. The map is copied
 // so a caller cannot mutate persisted run metadata after this transition.
 func (s *State) BeginCandidateVerificationWithRuntime(id string, candidate Candidate, worktreePath, logPath string, runtime map[string]string, now time.Time) error {
+	return s.BeginCandidateVerificationWithRuntimeAndRunID(id, candidate, worktreePath, logPath, runtime, s.NextVerificationRun(), now)
+}
+
+// BeginCandidateVerificationWithRuntimeAndRunID atomically consumes expectedRunID.
+func (s *State) BeginCandidateVerificationWithRuntimeAndRunID(id string, candidate Candidate, worktreePath, logPath string, runtime map[string]string, expectedRunID string, now time.Time) error {
+	if expectedRunID != s.NextVerificationRun() {
+		return errors.New("verification run ID changed; retry")
+	}
 	if err := s.Verifiable(id); err != nil {
 		return err
 	}
@@ -375,9 +467,10 @@ func (s *State) BeginCandidateVerificationWithRuntime(id string, candidate Candi
 	}
 	item := s.item(id)
 	item.Status = Verifying
-	item.CurrentRun = &Run{Revision: candidate.Revision, CandidateKind: candidate.Kind, BaseRevision: candidate.BaseRevision,
+	item.CurrentRun = &Run{VerificationRunID: expectedRunID, Revision: candidate.Revision, CandidateKind: candidate.Kind, BaseRevision: candidate.BaseRevision,
 		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, Runtime: copyRuntime(runtime), StartedAt: now}
 	item.UpdatedAt = now
+	s.NextVerificationRunID++
 	s.refreshDependents(id, nil, now)
 	return nil
 }

@@ -13,6 +13,11 @@ import (
 // Work Item's Verification Run.
 var ErrVerificationInFlight = errors.New("a verification of this work item is already running")
 
+// ErrCanonicalVerificationInFlight reports that another verification already
+// owns the repository-wide canonical execution slot. Unlike ErrVerificationInFlight,
+// this is deliberately shared by all Work Items in one repository.
+var ErrCanonicalVerificationInFlight = errors.New("a canonical verification is already running in this repository")
+
 // WithVerifyLock runs an operation while holding the Work Item's verification
 // lock. The lock is per Work Item, so unrelated work verifies concurrently, and
 // the operating system releases it when the process dies — which is what makes a
@@ -50,6 +55,36 @@ func WithVerifyLock(root, workID string, operation func() error) error {
 	}
 	if lockErr != nil {
 		return fmt.Errorf("%w: %s", ErrVerificationInFlight, workID)
+	}
+	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	return operation()
+}
+
+// WithCanonicalVerificationLock runs an operation while holding this
+// repository's canonical-verification lock. It is non-blocking: a caller that
+// loses must refuse before it creates a run, Candidate artifact, log, or
+// subprocess. Callers that need both locks acquire WithVerifyLock first, then
+// this lock, so a per-Work-Item orphan can be reclaimed before this broader
+// refusal is returned.
+func WithCanonicalVerificationLock(root string, operation func() error) error {
+	root, err := canonicalRoot(root)
+	if err != nil {
+		return err
+	}
+	directory := filepath.Join(root, stateDirectory, "locks")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(filepath.Join(directory, "canonical-verification.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("%w: %s", ErrCanonicalVerificationInFlight, root)
+		}
+		return fmt.Errorf("lock canonical verification: %w", err)
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 	return operation()

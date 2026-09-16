@@ -22,6 +22,19 @@ import (
 // owns what it means; ForgePilot never accepts an arbitrary command template.
 const CanonicalCommand = "make verify"
 
+// ErrVerificationLogCollision reports that a proposed log path already
+// belongs to another attempt. Callers must choose a new attempt suffix rather
+// than overwrite it.
+var ErrVerificationLogCollision = errors.New("verification log path already exists")
+
+// ErrVerificationLogNotFound reports that no durable log belongs to a
+// Verification Run ID.
+var ErrVerificationLogNotFound = errors.New("verification log not found")
+
+// ErrVerificationLogAmbiguous reports that more than one durable log claims a
+// Verification Run ID. Recovery must fail closed rather than guess.
+var ErrVerificationLogAmbiguous = errors.New("verification log lookup is ambiguous")
+
 // Snapshot is an immutable view of a repository's current working contents.
 // BaseRevision identifies the committed history it was taken from. Revision and
 // Ref are populated only by CaptureSnapshot, whose snapshot commit is retained
@@ -346,19 +359,54 @@ func unconfirmedGroup(err error) bool {
 	return unsettled
 }
 
-// OpenLog creates the file a Verification Run's output will stream into,
-// creating its directory if needed. It is called before anything about the run
-// is recorded, so a log that cannot be created aborts the command before any
-// state is written or Evidence appended.
-func OpenLog(path string) (*os.File, error) {
+// OpenExclusiveLog creates a Verification Run log without ever truncating an
+// existing file. The caller owns selection of a unique attempt suffix; an
+// existing path is reported as a typed collision so it can retry safely.
+func OpenExclusiveLog(path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("create log file: %w", err)
+		if errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("%w: %w", ErrVerificationLogCollision, os.ErrExist)
+		}
+		return nil, fmt.Errorf("create exclusive log file: %w", err)
 	}
 	return file, nil
+}
+
+// FindVerificationLog returns the sole log whose filename begins with the
+// complete Verification Run ID token. The hyphen boundary prevents VR-100 from
+// matching VR-1000. It intentionally has no legacy Work Item/revision policy:
+// callers must select that legacy lookup explicitly.
+func FindVerificationLog(root, verificationRunID string) (string, error) {
+	if verificationRunID == "" || verificationRunID != filepath.Base(verificationRunID) || verificationRunID == "." || verificationRunID == ".." {
+		return "", fmt.Errorf("invalid verification run ID %q", verificationRunID)
+	}
+	directory := filepath.Join(root, ".forgepilot", "logs")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: %s", ErrVerificationLogNotFound, verificationRunID)
+		}
+		return "", fmt.Errorf("read verification logs: %w", err)
+	}
+	prefix := verificationRunID + "-"
+	match := ""
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		if match != "" {
+			return "", fmt.Errorf("%w: %s", ErrVerificationLogAmbiguous, verificationRunID)
+		}
+		match = entry.Name()
+	}
+	if match == "" {
+		return "", fmt.Errorf("%w: %s", ErrVerificationLogNotFound, verificationRunID)
+	}
+	return filepath.Join(directory, match), nil
 }
 
 func mergedEnvironment(overrides []string) []string {

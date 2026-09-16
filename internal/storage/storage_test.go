@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,7 +63,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":9,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":10,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -375,7 +376,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 8`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 9`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -767,6 +768,86 @@ func TestMigrateUpgradesV7GoalsToPerWorkItemReviewPolicy(t *testing.T) {
 	}
 }
 
+func TestUpgradeV8AssignsDistinctLegacyRunIDs(t *testing.T) {
+	state, err := upgrade([]byte(v8VerificationState()), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Evidence[0].VerificationRunID; got != "LVR-001" {
+		t.Fatalf("legacy Evidence run ID = %q, want LVR-001", got)
+	}
+	if got := state.WorkItems[0].CurrentRun.VerificationRunID; got != "LVR-002" {
+		t.Fatalf("legacy CurrentRun ID = %q, want LVR-002", got)
+	}
+	if state.NextVerificationRunID != 1 {
+		t.Fatalf("next canonical run ID = %d, want 1", state.NextVerificationRunID)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatalf("upgraded state is invalid: %v", err)
+	}
+}
+
+func TestUpgradeV8RefusesPreexistingRunIdentity(t *testing.T) {
+	cases := map[string]func(*work.State){
+		"malformed evidence ID": func(state *work.State) {
+			state.Evidence[0].VerificationRunID = "not-a-run"
+		},
+		"reused active and settled ID": func(state *work.State) {
+			state.Evidence[0].VerificationRunID = "VR-001"
+			state.WorkItems[0].CurrentRun.VerificationRunID = "VR-001"
+		},
+		"mixed shared provenance": func(state *work.State) {
+			state.Evidence[0].VerificationRunID = "VR-001"
+			other := state.Evidence[0]
+			other.ID, other.Revision, other.Result = "EV-002", "cccccccccccccccccccccccccccccccccccccccc", work.Fail
+			state.Evidence = append(state.Evidence, other)
+			state.NextEvidenceID = 3
+		},
+		"in-flight run ID": func(state *work.State) {
+			state.WorkItems[0].CurrentRun.VerificationRunID = "VR-001"
+		},
+		"run counter": func(state *work.State) {
+			state.NextVerificationRunID = 2
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			var state work.State
+			if err := json.Unmarshal([]byte(v8VerificationState()), &state); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&state)
+			contents, err := json.Marshal(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := upgrade([]byte(contents), 8); err == nil || !strings.Contains(err.Error(), "already carries") {
+				t.Fatalf("upgrade error = %v, want pre-v9 identity refusal", err)
+			}
+		})
+	}
+}
+
+func v8VerificationState() string {
+	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	zero := 0
+	state := work.State{
+		SchemaVersion: 8, NextWorkID: 2, NextEvidenceID: 2, NextGateID: 1,
+		Goals: []work.Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: work.GoalActive, ReviewPolicy: work.ReviewPerWorkItem, CreatedAt: now, UpdatedAt: now}},
+		WorkItems: []work.Item{{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: work.Verifying, CurrentRun: &work.Run{
+			Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CandidateKind: work.CommitCandidate,
+			WorktreePath: "/tmp/worktree", LogPath: "/tmp/log", StartedAt: now,
+		}, CreatedAt: now, UpdatedAt: now}},
+		Evidence: []work.Evidence{{
+			ID: "EV-001", Type: work.VerificationEvidence, Repository: "/repo", WorkItemID: "WI-001", StoryRef: "specs/stories/a",
+			Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: work.CommitCandidate,
+			Command: "make verify", ExitCode: &zero, Result: work.Pass, CreatedAt: now,
+		}},
+	}
+	encoded, _ := json.Marshal(state)
+	return string(encoded)
+}
+
 func TestMigrateRefusesV7HeaderThatUnderstatesReviewPolicy(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
@@ -784,7 +865,7 @@ func TestMigrateRefusesV7HeaderThatUnderstatesReviewPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 8`, `"schema_version": 7`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 9`, `"schema_version": 7`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}

@@ -483,7 +483,7 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 
 `next` 新增 `RECONCILE` action，並改為以下順序：合法 RUNNING 的 RESUME／REPAIR；WORK_ITEM 模式既有 stale REVIEW 的 REVERIFY；可合法前進的工作（已 READY 為 START，PENDING 但 readiness 可恢復為 RECONCILE，兩者共用同一個 created-at／numeric-ID 排序）；GOAL-policy stale VERIFIED 的 REVERIFY；最後才是既有的等待原因與 WAIT_GOAL_REVIEW。`next` 與 `reconcile` 共用同一個 `advanceable` 判準，因此不會出現「推薦 reconcile 但 reconcile 一直 unchanged」的空轉；`next` 仍是純查詢，不自行執行 reconciliation。本輪只調整合法動作之間的排序，不改變合法性的標準：READY 不足以推薦 START，prerequisite 的 Gate 與 freshness 仍須成立，且 Goal final review boundary 維持既有完整 freshness 要求，中途延後的重驗必須在總審前補完。
 
-驗收：readiness 由 Gate 與 Candidate 移動退回 PENDING、條件恢復後經 `reconcile` 復原的完整 CLI／Git 流程，且復原過程不新增 Verification Evidence；stale prerequisite、未解除的 prerequisite Gate、工作自身的 Gate、BLOCKED／CANCELLED／COMPLETED Goal、未知 Goal 與 facts 取得失敗都 fail closed 且不留部分更新；reconcile Goal A 不改動 Goal B；三張連續任務各自產生新 commit 時 action sequence 為 START／VERIFY 交錯後才 REVERIFY，總計恰好 5 次 Verification Run；SNAPSHOT 以持續演進的 digest 重做同一流程；多 prerequisite 任一不符即不能 START；WORK_ITEM policy 的 REVIEW → Human Approval → DONE 與 stale REVIEW 導航不變；`next` 不寫 state、HEAD、real index 或持久化 refs，重複執行結果穩定，`reconcile` 第二次無 domain 變更。
+驗收：readiness 由 Gate 與 Candidate 移動退回 PENDING、條件恢復後經 `reconcile` 復原的完整 CLI／Git 流程，且復原過程不新增 Verification Evidence；stale prerequisite、未解除的 prerequisite Gate、工作自身的 Gate、BLOCKED／CANCELLED／COMPLETED Goal、未知 Goal 與 facts 取得失敗都 fail closed 且不留部分更新；reconcile Goal A 不改動 Goal B；三張連續任務各自產生新 commit 時 action sequence 為 START／VERIFY 交錯，原始 P1-005 實作在邊界逐張 REVERIFY、總計 5 次 Verification Run；schema v9 的 accepted fan-out 後改為 3 次 execution，第二與第三次 PASS 分別刷新當時 eligible 的 stale peers；SNAPSHOT 以持續演進的 digest 重做同一流程；多 prerequisite 任一不符即不能 START，但同一 shared PASS 可同時刷新多個已 VERIFIED stale prerequisites；WORK_ITEM policy 的 REVIEW → Human Approval → DONE 與 stale REVIEW 導航不變；`next` 不寫 state、HEAD、real index 或持久化 refs，重複執行結果穩定，`reconcile` 第二次無 domain 變更。
 
 ## Long-running Runner MVP
 
@@ -650,3 +650,11 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 - [x] 取消到得了執行中的 Git 子程序、終止與等待都有上限、清理未確認時跨 run／resume／重啟持續阻擋（[07-recovery-hardening](specs/runner-mvp/issues/07-recovery-hardening.md)）：決定記在 [ADR-0022](adr/0022-pending-cleanup-outlives-the-process.md)。
 - [x] 恢復判準只有一份實作、清理錯誤不被吞掉、清理預算從清理開始才計時、步驟間 Git 查詢被取消時保存正確的停止原因（[08-recovery-closure](specs/runner-mvp/issues/08-recovery-closure.md)）：沒有新的架構決定，ADR-0019／0020／0021／0022 的實作在這一輪才在所有呼叫路徑上成立。
 - [x] ADR-0019／architecture 已明列兩個 state-write 偵測窗口與信任模型：agent session 比對整份 state，canonical check 只保護正在驗證的 Work Item，並明說這不是全域 state 完整性或 sandbox 保證。
+
+### Candidate-level canonical verification fan-out（完成）
+
+CLI 契約不變：`forgepilot verify <work-id> [--snapshot]` 的 Work Item 是 anchor，caller 不傳 cohort。`internal/app` 在 per-anchor orphan reclaim 後取得 repository-wide canonical lock，解析一個 Candidate／Resolved Runtime、建立一個 exclusive run-keyed log、執行一次 `make verify`。PASS 由 `internal/work` 在單一 state transaction 內為 anchor 與仍符合 begin-time plan 的 same-Goal stale REVIEW／VERIFIED recipients 建立 distinct Evidence；FAIL／INTERRUPTED 維持 anchor-only。Runner 將回傳的完整 Evidence ID set 寫入 execution history，下一輪仍重新查詢 typed action，不保存 cohort lifecycle。
+
+Schema 升至 v9：root 新增 `next_verification_run_id`，active Run 與 Verification Evidence 新增必填 `verification_run_id`。新 execution 只配發 `VR-*`；v8 migration 對歷史 Verification Evidence 與 orphan Run 配發 distinct `LVR-*`，Review Evidence 保持空值。新 log 以 run ID 為 filename token 並 exclusive-create；Runner 對 `VR-*` 要求 token-bounded unique lookup，遺失或多筆時 fail closed，`LVR-*` 才沿用 Work Item／revision lookup。決定與 rollback 見 [ADR-0027](adr/0027-candidate-verification-pass-fans-out-by-run.md)，完整 acceptance matrix 見 [candidate-verification-fanout spec](specs/candidate-verification-fanout/spec.md)。
+
+驗收涵蓋：一次 PASS fan-out 多筆 shared-run Evidence、FAIL anchor-only、begin/completion eligibility 與 recursive prerequisite closure、optional concurrent change 的 transitive skip、repository lock 在新 artifacts 前拒絕、exclusive log collision 與 `VR-100`／`VR-1000` lookup boundary、Runner 全 Evidence IDs 與 repair excerpt、v8→v9 migration／malformed provenance refusal，以及 canonical `make verify` 與 race suite。

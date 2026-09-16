@@ -155,6 +155,35 @@ func upgrade(contents []byte, from int) (work.State, error) {
 			state.Goals[i].ReviewPolicy = work.ReviewPerWorkItem
 		}
 	}
+	if from < 9 {
+		if state.NextVerificationRunID != 0 {
+			return work.State{}, fmt.Errorf("state declares schema version %d but already carries a verification run counter; refusing to migrate over it", from)
+		}
+		for _, evidence := range state.Evidence {
+			if evidence.VerificationRunID != "" {
+				return work.State{}, fmt.Errorf("state declares schema version %d but evidence %q already carries verification run identity; refusing to migrate over it", from, evidence.ID)
+			}
+		}
+		for _, item := range state.WorkItems {
+			if item.CurrentRun != nil && item.CurrentRun.VerificationRunID != "" {
+				return work.State{}, fmt.Errorf("state declares schema version %d but work item %q already carries verification run identity; refusing to migrate over it", from, item.ID)
+			}
+		}
+		legacy := 1
+		for i := range state.Evidence {
+			if state.Evidence[i].Type == work.VerificationEvidence {
+				state.Evidence[i].VerificationRunID = fmt.Sprintf("LVR-%03d", legacy)
+				legacy++
+			}
+		}
+		for i := range state.WorkItems {
+			if run := state.WorkItems[i].CurrentRun; run != nil {
+				run.VerificationRunID = fmt.Sprintf("LVR-%03d", legacy)
+				legacy++
+			}
+		}
+		state.NextVerificationRunID = 1
+	}
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

@@ -57,7 +57,7 @@ func TestQueueRules(t *testing.T) {
 
 func TestRefreshAndValidation(t *testing.T) {
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	state := State{SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 1, NextGateID: 1, Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}}, WorkItems: []Item{
+	state := State{SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}}, WorkItems: []Item{
 		{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Done},
 		{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Pending, DependsOn: []string{"WI-001"}},
 	}}
@@ -101,8 +101,8 @@ func TestSelectionUsesTimestampThenID(t *testing.T) {
 }
 
 func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
-	if SchemaVersion != 8 {
-		t.Fatalf("SchemaVersion = %d, want 8", SchemaVersion)
+	if SchemaVersion != 9 {
+		t.Fatalf("SchemaVersion = %d, want 9", SchemaVersion)
 	}
 	fresh := NewState()
 	if fresh.NextEvidenceID != 1 || fresh.NextGateID != 1 {
@@ -121,7 +121,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 		t.Fatalf("older-version error %q does not tell the user to migrate", err)
 	}
 	newer := fresh
-	newer.SchemaVersion = 9
+	newer.SchemaVersion = 10
 	err = newer.Validate()
 	if err == nil {
 		t.Fatal("accepted a newer schema version")

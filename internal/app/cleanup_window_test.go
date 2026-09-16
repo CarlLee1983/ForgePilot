@@ -149,6 +149,30 @@ func TestReclaimingAnOrphanDoesNotSpendTheLaterTidyingUpsWindow(t *testing.T) {
 	}
 }
 
+func TestCancelledInvocationStillReclaimsAnExistingOrphan(t *testing.T) {
+	fixture := newVerifyFixture(t, "verify:\n\t@true\n")
+	abandoned := leaveAbandonedRun(t, fixture)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := Verify(ctx, fixture.root, fixture.id, io.Discard, VerifyOptions{Now: func() time.Time { return time.Now().UTC() }})
+	if !errors.Is(err, ErrVerificationInterrupted) {
+		t.Fatalf("Verify error = %v, want interruption after reclaim", err)
+	}
+	if result.Reclaimed == nil || result.Reclaimed.Result != work.Interrupted {
+		t.Fatalf("reclaimed = %#v, want anchor INTERRUPTED Evidence", result.Reclaimed)
+	}
+	state, loadErr := storage.Load(fixture.root)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if state.WorkItemStatus(fixture.id) != work.Running {
+		t.Fatalf("orphan status = %s, want RUNNING", state.WorkItemStatus(fixture.id))
+	}
+	if _, statErr := os.Stat(abandoned); !os.IsNotExist(statErr) {
+		t.Fatalf("abandoned checkout remains: %v", statErr)
+	}
+}
+
 // leaveAbandonedRun marks a Verification Run in flight against a checkout that
 // really exists, which is what reclaimOrphan finds and clears on the way in.
 func leaveAbandonedRun(t *testing.T, fixture verifyFixture) string {

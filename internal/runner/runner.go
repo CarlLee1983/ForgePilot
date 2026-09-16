@@ -634,7 +634,6 @@ func (runner *Runner) finish() error {
 		// closed: never report readiness the projection does not currently assert.
 		return runner.stopNow(StopStalled, fmt.Sprintf("goal %s is %s, not awaiting final review", runner.options.GoalID, summary.Completion))
 	}
-	runner.record.EvidenceIDs = summary.VerificationEvidenceIDs
 	runner.print("Goal %s is awaiting final review. Evidence: %s\n", runner.options.GoalID, strings.Join(summary.VerificationEvidenceIDs, ", "))
 	runner.print("This is not completion: a person still has to review and accept the goal.\n")
 	return runner.stopNow(StopAwaitingGoalReview,
@@ -679,12 +678,7 @@ func (runner *Runner) verify(itemID, label string) error {
 	// honouring min().
 	result, err := app.Verify(execution.ctx, runner.options.Root, itemID, runner.options.Output,
 		app.VerifyOptions{Snapshot: runner.options.Snapshot, Now: runner.now})
-	if result.Reclaimed != nil {
-		runner.record.EvidenceIDs = append(runner.record.EvidenceIDs, result.Reclaimed.ID)
-	}
-	if result.HasEvidence {
-		runner.record.EvidenceIDs = append(runner.record.EvidenceIDs, result.Evidence.ID)
-	}
+	runner.record.EvidenceIDs = append(runner.record.EvidenceIDs, verificationEvidenceIDs(result)...)
 	// Checked before the engineering outcome is acted on, and deliberately not
 	// turned into one: Evidence this call earned is already saved and stands,
 	// but a group that cannot be confirmed empty means the next step could
@@ -759,9 +753,35 @@ func (runner *Runner) verify(itemID, label string) error {
 	}
 	detail := "no evidence"
 	if result.HasEvidence {
-		detail = fmt.Sprintf("%s %s", result.Evidence.ID, result.Evidence.Result)
+		ids := make([]string, 0, len(result.EvidenceSet))
+		for _, evidence := range result.EvidenceSet {
+			ids = append(ids, evidence.ID)
+		}
+		if len(ids) == 0 {
+			ids = append(ids, result.Evidence.ID)
+		}
+		detail = fmt.Sprintf("%s %s", strings.Join(ids, ","), result.Evidence.Result)
 	}
 	return runner.journal(label, itemID, detail)
+}
+
+func verificationEvidenceIDs(result app.VerifyResult) []string {
+	ids := []string{}
+	if len(result.ReclaimedSet) > 0 {
+		for _, evidence := range result.ReclaimedSet {
+			ids = append(ids, evidence.ID)
+		}
+	} else if result.Reclaimed != nil {
+		ids = append(ids, result.Reclaimed.ID)
+	}
+	if len(result.EvidenceSet) > 0 {
+		for _, evidence := range result.EvidenceSet {
+			ids = append(ids, evidence.ID)
+		}
+	} else if result.HasEvidence {
+		ids = append(ids, result.Evidence.ID)
+	}
+	return ids
 }
 
 // implement launches one new agent session. Budget is charged and persisted

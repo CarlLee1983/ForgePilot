@@ -1,12 +1,14 @@
 package runner
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/app"
+	"github.com/CarlLee1983/ForgePilot/internal/repository"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
@@ -60,7 +62,10 @@ func (runner *Runner) handoff(action work.NextAction, decision app.Decision, att
 			Number: previous.Number, Outcome: previous.Outcome, Summary: previous.Summary})
 	}
 	if action.Kind == work.NextActionRepair {
-		briefing.FailureExcerpt, briefing.FailureLogPath = runner.lastFailure(&state, item.ID)
+		briefing.FailureExcerpt, briefing.FailureLogPath, err = runner.lastFailure(&state, item.ID)
+		if err != nil {
+			return "", false, err
+		}
 	}
 	rendered, err := briefing.Render(runner.options.Budget.MaxHandoffBytes)
 	return rendered, true, err
@@ -125,42 +130,59 @@ func (runner *Runner) projectDocs() []string {
 // lastFailure quotes the tail of the log the latest failing run wrote. The path
 // is always given; the excerpt is bounded, because the cause of a failure is
 // near the end and the whole log belongs in the file, not in the briefing.
-func (runner *Runner) lastFailure(state *work.State, itemID string) (string, string) {
+func (runner *Runner) lastFailure(state *work.State, itemID string) (string, string, error) {
 	verification, ok := state.LatestVerification(itemID)
 	if !ok || verification.Result != work.Fail {
-		return "", ""
+		return "", "", nil
 	}
-	path := runner.findLog(itemID, verification.Revision)
-	if path == "" {
-		return "", ""
+	path, err := runner.findLog(verification)
+	if err != nil {
+		return "", "", err
 	}
 	limit := runner.options.Excerpt
 	if limit <= 0 {
 		limit = DefaultExcerpt
 	}
-	return tail(path, limit), path
+	return tail(path, limit), path, nil
 }
 
-// findLog locates the log a run against this revision wrote. Logs are keyed by
-// run rather than by Evidence (ADR-0012), so the match is by Work Item and
-// revision prefix, which is exactly how a person would find it by hand.
-func (runner *Runner) findLog(itemID, revision string) string {
+// findLog locates the log for one settled Verification Run. New VR records use
+// their durable execution identity; migrated LVR records retain the old
+// Work-Item/revision lookup because no run-keyed filename existed for them.
+func (runner *Runner) findLog(verification work.Evidence) (string, error) {
+	if strings.HasPrefix(verification.VerificationRunID, "VR-") {
+		path, err := repository.FindVerificationLog(runner.record.Workspace, verification.VerificationRunID)
+		if err != nil {
+			return "", fmt.Errorf("find log for verification run %s: %w", verification.VerificationRunID, err)
+		}
+		return path, nil
+	}
+	if !strings.HasPrefix(verification.VerificationRunID, "LVR-") {
+		return "", fmt.Errorf("verification %s has unsupported run ID %q", verification.ID, verification.VerificationRunID)
+	}
 	directory := runner.record.Workspace + string(os.PathSeparator) + ".forgepilot" + string(os.PathSeparator) + "logs"
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return ""
-	}
-	prefix := itemID + "-" + shortRevision(revision)
-	latest := ""
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasPrefix(entry.Name(), prefix) && entry.Name() > latest {
-			latest = entry.Name()
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("%w: %s", repository.ErrVerificationLogNotFound, verification.VerificationRunID)
 		}
+		return "", err
 	}
-	if latest == "" {
-		return ""
+	prefix := verification.WorkItemID + "-" + shortRevision(verification.Revision)
+	match := ""
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		if match != "" {
+			return "", fmt.Errorf("%w: %s", repository.ErrVerificationLogAmbiguous, verification.VerificationRunID)
+		}
+		match = entry.Name()
 	}
-	return directory + string(os.PathSeparator) + latest
+	if match == "" {
+		return "", fmt.Errorf("%w: %s", repository.ErrVerificationLogNotFound, verification.VerificationRunID)
+	}
+	return directory + string(os.PathSeparator) + match, nil
 }
 
 // tail reads the last limit bytes of a file. A canonical check's log is

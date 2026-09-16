@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -66,6 +68,8 @@ type VerifyOptions struct {
 	Now      func() time.Time
 }
 
+type FanoutSkip = work.FanoutSkip
+
 func (options VerifyOptions) now() time.Time {
 	if options.Now != nil {
 		return options.Now().UTC()
@@ -78,13 +82,17 @@ func (options VerifyOptions) now() time.Time {
 // present exactly when a run produced one; Reclaimed describes an earlier
 // abandoned run this call closed out on the way in.
 type VerifyResult struct {
-	Reclaimed      *work.Evidence
-	Evidence       work.Evidence
-	HasEvidence    bool
-	Status         work.Status
-	Candidate      work.Candidate
-	LogPath        string
-	RuntimeSummary string
+	Reclaimed         *work.Evidence
+	ReclaimedSet      []work.Evidence
+	Evidence          work.Evidence
+	EvidenceSet       []work.Evidence
+	HasEvidence       bool
+	VerificationRunID string
+	Skipped           []FanoutSkip
+	Status            work.Status
+	Candidate         work.Candidate
+	LogPath           string
+	RuntimeSummary    string
 	// RefreshWarning records that Evidence was preserved but dependency
 	// readiness could not be refreshed from repository facts afterwards.
 	RefreshWarning error
@@ -204,13 +212,6 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// Every external process below is preceded by this. A step that has already
-	// been told to stop must not be the one that starts something new, and the
-	// preflight — snapshot capture, worktree checkout, runtime probes,
-	// `make -n verify` — is where a cancellation path used to go blind.
-	if err := ctx.Err(); err != nil {
-		return result, fmt.Errorf("%w before it began: %w", ErrVerificationInterrupted, err)
-	}
 	// Two allowances, not one. Closing out an abandoned run and tidying up after
 	// this one are different cleanup stages separated by the whole of the work in
 	// between, and a single window would have the second stage drawing on a
@@ -229,12 +230,34 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		return result, err
 	}
 	result.Reclaimed = reclaimed
+	if reclaimed != nil {
+		result.ReclaimedSet = []work.Evidence{*reclaimed}
+	}
 	// Reclaiming runs external Git. A removal that could not confirm what it
 	// stopped is the same refusal here as anywhere else below: nothing new may
 	// start, and the fact travels to the caller rather than into a warning.
 	if result.Cleanup != nil {
 		return result, fmt.Errorf("the abandoned run's checkout could not be cleared safely: %w", result.Cleanup)
 	}
+	// Reclaim is unconditional: a stop prevents new work, but cannot erase an
+	// abandoned run that already happened. Only after reclaim may cancellation
+	// refuse the new Candidate, checkout, log, and subprocess.
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("%w before it began: %w", ErrVerificationInterrupted, err)
+	}
+	var operationErr error
+	lockErr := storage.WithCanonicalVerificationLock(root, func() error {
+		result, operationErr = runVerificationLocked(ctx, root, id, output, options, result, cleanup)
+		return operationErr
+	})
+	if errors.Is(lockErr, storage.ErrCanonicalVerificationInFlight) {
+		return result, refuse(lockErr)
+	}
+	return result, lockErr
+}
+
+func runVerificationLocked(ctx context.Context, root, id string, output io.Writer, options VerifyOptions, initial VerifyResult, cleanup *cleanupWindow) (result VerifyResult, returnErr error) {
+	result = initial
 	// From here nothing else is written until every refusal has been passed.
 	state, err := storage.Load(root)
 	if err != nil {
@@ -243,6 +266,7 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	if err := state.CanBeginVerification(id); err != nil {
 		return result, refuse(err)
 	}
+	verificationRunID := state.NextVerificationRun()
 	startedAt := options.now()
 	candidate := work.Candidate{Kind: work.CommitCandidate}
 	if options.Snapshot {
@@ -360,12 +384,18 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	// The log is opened, and its path printed, before anything about the run is
 	// recorded: a log that cannot be created must abort the command before any
 	// state is written or Evidence appended, not degrade into a run with no log.
-	logFile := LogPath(root, id, candidate.Revision, startedAt)
-	log, err := repository.OpenLog(logFile)
+	log, logFile, err := openVerificationLog(root, verificationRunID, candidate.Revision, startedAt)
 	if err != nil {
 		return result, err
 	}
-	defer log.Close()
+	keepLog := false
+	defer func() {
+		if !keepLog {
+			returnErr = errors.Join(returnErr, log.Close(), os.Remove(logFile))
+			return
+		}
+		_ = log.Close()
+	}()
 	result.LogPath = logFile
 	result.RuntimeSummary = runtime.Summary()
 	if options.Snapshot {
@@ -382,9 +412,12 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		return result, err
 	}
 
-	if err := beginRun(id, root, candidate, worktree, logFile, runtime.Versions(), startedAt); err != nil {
+	plan, err := beginRun(id, root, candidate, worktree, logFile, runtime.Versions(), verificationRunID, startedAt)
+	if err != nil {
 		return result, err
 	}
+	keepLog = true
+	result.VerificationRunID = verificationRunID
 	// Taken after beginRun, this command's own last write before the check
 	// starts, so only what happens while the check runs is in the window.
 	verdictBefore, err := verdictFingerprint(root, id)
@@ -416,6 +449,7 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 			return result, reclaimErr
 		}
 		result.Interrupted, result.Evidence, result.HasEvidence = true, interrupted, true
+		result.EvidenceSet = []work.Evidence{interrupted}
 		result.Status = statusOf(root, id)
 		if _, err := fmt.Fprintf(output, "%s %s at %s\n%s %s\n", interrupted.ID, interrupted.Result, interrupted.Revision, id, result.Status); err != nil {
 			return result, err
@@ -427,6 +461,8 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	}
 
 	var evidence work.Evidence
+	var evidenceSet []work.Evidence
+	var skipped []work.FanoutSkip
 	var status work.Status
 	var factsErr error
 	updateErr := storage.Update(root, func(state *work.State) error {
@@ -435,11 +471,23 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		}
 		var recordErr error
 		repositoryState, err := CandidateFacts(ctx, state, root)
-		if err != nil {
-			factsErr = err
+		factsErr = err
+		if exitCode == 0 {
+			if err != nil {
+				evidenceSet, skipped, recordErr = state.RecordVerificationFanoutPass(plan, repository.CanonicalCommand, nil, options.now())
+			} else {
+				evidenceSet, skipped, recordErr = state.RecordVerificationFanoutPass(plan, repository.CanonicalCommand, &repositoryState, options.now())
+			}
+			if recordErr == nil {
+				evidence = evidenceSet[0]
+			}
+		} else if err != nil {
 			evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, options.now())
 		} else {
 			evidence, recordErr = state.RecordVerificationWithRepository(id, candidate.Revision, repository.CanonicalCommand, exitCode, repositoryState, options.now())
+		}
+		if exitCode != 0 && recordErr == nil {
+			evidenceSet = []work.Evidence{evidence}
 		}
 		if recordErr == nil {
 			status = state.WorkItemStatus(id)
@@ -469,7 +517,7 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		// so the checkout is kept rather than tidied away.
 		return result, updateErr
 	}
-	result.Evidence, result.HasEvidence, result.Status = evidence, true, status
+	result.Evidence, result.EvidenceSet, result.Skipped, result.HasEvidence, result.Status = evidence, evidenceSet, skipped, true, status
 	// Failing to refresh dependency readiness is a warning: the Evidence stands
 	// and a rerun repairs it. Failing to confirm a process group started while
 	// reading those facts is not — the next step must not begin, whatever the
@@ -479,6 +527,16 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 	// where it lives now. See docs/adr/0012-verification-log-outside-state.md.
 	if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\n", evidence.ID, evidence.Result, evidence.Revision, id, status); err != nil {
 		return result, err
+	}
+	for _, peer := range evidenceSet[1:] {
+		if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s (shared %s)\n", peer.ID, peer.Result, peer.Revision, peer.WorkItemID, statusOf(root, peer.WorkItemID), verificationRunID); err != nil {
+			return result, err
+		}
+	}
+	for _, skip := range skipped {
+		if _, err = fmt.Fprintf(output, "%s skipped from %s: %s\n", skip.WorkItemID, verificationRunID, skip.Reason); err != nil {
+			return result, err
+		}
 	}
 	if factsErr != nil {
 		_, err = fmt.Fprintf(output, "warning: dependency readiness was not refreshed: %v; Evidence was preserved; repair repository access and rerun %s\n", factsErr, VerificationRetryCommand(id, candidate))
@@ -694,10 +752,14 @@ func reclaimRun(id, root string, now time.Time, expectedVerdict string) (work.Ev
 // beginRun marks a new Verification Run in flight. Any abandoned run has already
 // been closed out by reclaimOrphan, so a Work Item is never left with neither an
 // outcome for its old run nor a record of its new one.
-func beginRun(id, root string, candidate work.Candidate, worktree, logFile string, runtime map[string]string, startedAt time.Time) error {
-	return storage.Update(root, func(state *work.State) error {
-		return state.BeginCandidateVerificationWithRuntime(id, candidate, worktree, logFile, runtime, startedAt)
+func beginRun(id, root string, candidate work.Candidate, worktree, logFile string, runtime map[string]string, verificationRunID string, startedAt time.Time) (work.FanoutPlan, error) {
+	var plan work.FanoutPlan
+	err := storage.Update(root, func(state *work.State) error {
+		var err error
+		plan, err = state.BeginVerificationFanout(id, candidate, worktree, logFile, runtime, verificationRunID, startedAt)
+		return err
 	})
+	return plan, err
 }
 
 // WorktreePath names the isolated checkout one Verification Run uses.
@@ -705,13 +767,29 @@ func WorktreePath(root, id, revision string) string {
 	return filepath.Join(root, ".forgepilot", "worktrees", fmt.Sprintf("%s-%s", id, shortRevision(revision)))
 }
 
-// LogPath names a Verification Run's output file by the run itself, not by the
+// logPath names a Verification Run's output file by the run itself, not by the
 // Evidence it will eventually produce: the Evidence ID is only assigned in the
 // transaction that closes the run out, so it does not exist yet when the log
-// must be opened. started-at only keeps repeated runs against the same
-// revision from overwriting each other. See docs/adr/0012-verification-log-outside-state.md.
-func LogPath(root, id, revision string, startedAt time.Time) string {
-	return filepath.Join(root, ".forgepilot", "logs", fmt.Sprintf("%s-%s-%s.log", id, shortRevision(revision), startedAt.Format("20060102T150405.000000000Z")))
+// must be opened. The unpredictable attempt token plus exclusive creation keeps
+// collisions from truncating another execution's output. See ADR-0027.
+func logPath(root, verificationRunID, revision string, startedAt time.Time, attempt string) string {
+	return filepath.Join(root, ".forgepilot", "logs", fmt.Sprintf("%s-%s-%s-%s.log", verificationRunID, shortRevision(revision), startedAt.Format("20060102T150405.000000000Z"), attempt))
+}
+
+func openVerificationLog(root, verificationRunID, revision string, startedAt time.Time) (*os.File, string, error) {
+	for attempt := 0; attempt < 1000; attempt++ {
+		var token [8]byte
+		if _, err := rand.Read(token[:]); err != nil {
+			return nil, "", fmt.Errorf("generate verification log suffix: %w", err)
+		}
+		path := logPath(root, verificationRunID, revision, startedAt, fmt.Sprintf("%x", token[:]))
+		log, err := repository.OpenExclusiveLog(path)
+		if errors.Is(err, repository.ErrVerificationLogCollision) {
+			continue
+		}
+		return log, path, err
+	}
+	return nil, "", fmt.Errorf("could not allocate a unique log for %s", verificationRunID)
 }
 
 // gitStage classifies a failed Git stage in the one order this command must

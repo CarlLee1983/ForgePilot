@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 8
+const SchemaVersion = 9
 
 type GoalStatus string
 
@@ -73,11 +73,12 @@ type Item struct {
 // the run produces Evidence, so a non-nil value after the runner has exited marks
 // an orphan awaiting reclamation.
 type Run struct {
-	Revision        string        `json:"revision"`
-	CandidateKind   CandidateKind `json:"candidate_kind"`
-	BaseRevision    string        `json:"base_revision"`
-	CandidateDigest string        `json:"candidate_digest"`
-	WorktreePath    string        `json:"worktree_path"`
+	VerificationRunID string        `json:"verification_run_id"`
+	Revision          string        `json:"revision"`
+	CandidateKind     CandidateKind `json:"candidate_kind"`
+	BaseRevision      string        `json:"base_revision"`
+	CandidateDigest   string        `json:"candidate_digest"`
+	WorktreePath      string        `json:"worktree_path"`
 	// LogPath records where this run's verification output is being streamed, so
 	// that reclaiming an orphan points at where it actually wrote rather than a
 	// path re-derived from today's naming scheme. It is written when the run
@@ -93,18 +94,19 @@ func (run Run) Candidate() Candidate {
 }
 
 type State struct {
-	SchemaVersion  int        `json:"schema_version"`
-	NextWorkID     int        `json:"next_work_id"`
-	NextEvidenceID int        `json:"next_evidence_id"`
-	NextGateID     int        `json:"next_gate_id"`
-	Goals          []Goal     `json:"goals"`
-	WorkItems      []Item     `json:"work_items"`
-	Evidence       []Evidence `json:"evidence"`
-	Gates          []Gate     `json:"gates"`
+	SchemaVersion         int        `json:"schema_version"`
+	NextWorkID            int        `json:"next_work_id"`
+	NextEvidenceID        int        `json:"next_evidence_id"`
+	NextGateID            int        `json:"next_gate_id"`
+	NextVerificationRunID int        `json:"next_verification_run_id"`
+	Goals                 []Goal     `json:"goals"`
+	WorkItems             []Item     `json:"work_items"`
+	Evidence              []Evidence `json:"evidence"`
+	Gates                 []Gate     `json:"gates"`
 }
 
 func NewState() State {
-	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1, NextGateID: 1}
+	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1}
 }
 
 func (s *State) AddGoal(id, title, description, repository string, now time.Time) error {
@@ -307,6 +309,9 @@ func (s State) Validate() error {
 	if s.NextGateID < 1 {
 		return errors.New("next_gate_id must be positive")
 	}
+	if s.NextVerificationRunID < 1 {
+		return errors.New("next_verification_run_id must be positive")
+	}
 	goals := map[string]Goal{}
 	for _, goal := range s.Goals {
 		if goal.ID == "" || goal.Title == "" || goal.Repository == "" {
@@ -367,6 +372,9 @@ func (s State) Validate() error {
 			return fmt.Errorf("work item %q is %s but carries a current run", item.ID, item.Status)
 		}
 		if item.CurrentRun != nil {
+			if _, _, ok := parseVerificationRunID(item.CurrentRun.VerificationRunID); !ok {
+				return fmt.Errorf("work item %q has invalid verification run ID %q", item.ID, item.CurrentRun.VerificationRunID)
+			}
 			if err := item.CurrentRun.Candidate().validate(); err != nil {
 				return fmt.Errorf("work item %q has an invalid current run candidate: %w", item.ID, err)
 			}
@@ -405,6 +413,19 @@ func (s State) Validate() error {
 		}
 	}
 	if err := validateEvidence(s.Evidence, s.NextEvidenceID, items); err != nil {
+		return err
+	}
+	for _, evidence := range s.Evidence {
+		item := items[evidence.WorkItemID]
+		goal := goals[item.GoalID]
+		if evidence.Repository != goal.Repository {
+			return fmt.Errorf("evidence %q repository does not match work item %q", evidence.ID, item.ID)
+		}
+		if evidence.StoryRef != item.StoryRef {
+			return fmt.Errorf("evidence %q story reference does not match work item %q", evidence.ID, item.ID)
+		}
+	}
+	if err := validateVerificationRuns(s); err != nil {
 		return err
 	}
 	for _, item := range s.WorkItems {

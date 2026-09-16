@@ -47,10 +47,10 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/Forg
 |---|---|---|
 | Goal | `id`, `title`, `description`, `repository`, `status`, `review_policy`, `created_at`, `updated_at` | M1；`review_policy` 於 Goal-level Review Policy 加入 |
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
-| Work Item run | `current_run`（Candidate identity、worktree path、started_at、log path、resolved runtime；閒置時為 null） | M2；`log path` 於 M5、Candidate kind／base／digest 於 P0-001、runtime 於 P1-004 加入 |
+| Work Item run | `current_run`（Verification Run ID、Candidate identity、worktree path、started_at、log path、resolved runtime；閒置時為 null） | M2；`log path` 於 M5、Candidate kind／base／digest 於 P0-001、runtime 於 P1-004、run ID 於 schema v9 加入 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
 | Gate | `id`（`GATE-001`）、`work_item_id`、`question`、`rationale`（開啟時的說明）、`options`（至少兩個）、`status`、`opened_at`，以及關閉時的 `choice`／`note`（resolve）或 `reason`（cancel）、`decided_by`、`decided_at` | M3 |
-| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 Candidate identity、`result`、timestamp；verification 另有 `command`、`exit_code` 與選填 actual `runtime`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起；Candidate kind／base／digest 於 P0-001、runtime 於 P1-004 加入 |
+| Evidence | `id`（`EV-001`）、`type`、repository、Work Item、Story、完整 Candidate identity、`result`、timestamp；verification 另有 Verification Run ID、`command`、`exit_code` 與選填 actual `runtime`，review 另有 `reviewer`、`note` 與 M4 起的選填 `pr` | M2 起；Candidate kind／base／digest 於 P0-001、runtime 於 P1-004、run ID 於 schema v9 加入 |
 
 Goal statuses：`ACTIVE`, `BLOCKED`, `COMPLETED`, `CANCELLED`。M1 僅建立 ACTIVE Goal，不提供其他 Goal lifecycle 操作。
 
@@ -118,6 +118,16 @@ Goal 的 `review_policy` 是持久化 enum：`WORK_ITEM` 為預設且完整保�
 Goal final readiness 是 fail-closed 的純 projection，不是 Goal status、transition 或自動完成：只在 ACTIVE、非空的 `GOAL` Goal 中，所有 Work Item 都為 VERIFIED、其 latest Verification 都是 PASS 且仍匹配目前 COMMIT／SNAPSHOT Candidate、並且沒有 OPEN Gate 時成立。它保留構成 target 的 Verification Evidence IDs，供將來建立精確 aggregate Evidence。`status` 呈現 policy 與此 readiness；`next` 在沒有合法 agent action 時回報等待 Goal final review，stale VERIFIED 則仍優先建議 reverify。
 
 此切片尚未提供 goal-level `review approve`／`reject`、Goal Evidence 或 Runner；因此 `goal complete` 對 `GOAL` policy 一律拒絕。這刻意分開「可安全推進工程」和「Human final acceptance」，避免 machine PASS 被誤當作完成。未來只能在這個 projection 上加入接受精確 Evidence ID 集合的 Goal Evidence 與 Runner，而不能回頭將 VERIFIED 解釋為 DONE。Schema v8 對 Goal 新增必填 `review_policy`；migration 將 v7 與更舊 state 明確填為 `WORK_ITEM`，先備份 `state.json.v<n>.bak`。rollback 是手動還原該備份，沒有 downgrade。
+
+### Candidate Verification fan-out 與 schema v9
+
+`internal/app.Verify` 仍由一張 anchor Work Item 觸發，但 repository canonical check 對 immutable Candidate 與 Resolved Runtime 只執行一次。PASS 時，`internal/work` 在單一 transaction 內為 anchor 與同 Goal、已有 stale PASS、狀態為 REVIEW／VERIFIED、沒有 OPEN Gate、且 prerequisite closure 仍成立的 recipients 各建立一筆 Evidence。這些 Evidence 的 ID 與 Story association 各自獨立，卻共享 Verification Run ID、Candidate、runtime、command、result、timestamp 與 log。FAIL／INTERRUPTED 仍只記 anchor；optional recipients 不進 VERIFYING，crash reclaim 也維持 anchor-only。
+
+begin transaction 產生只存在記憶體的 `FanoutPlan`，凍結 optional item、Goal、Gate、latest Verification 與遞迴 prerequisite facts；completion 重新比對並反覆重算 closure，任何改變都明確列為 skipped，不抹去 anchor 誠實取得的 PASS。全部 Evidence 與 status 先落到 final value，才以 transaction 內解析的 live repository facts refresh readiness 一次；facts 失敗時整組 Evidence 保留，promotion fail closed。
+
+Schema v9 新增根層 `next_verification_run_id`，並要求 active Run 與 Verification Evidence 保存 run ID。新 execution 使用 `VR-*`；v8 migration 對每筆歷史 Verification Evidence 與 orphan Run 配發 distinct `LVR-*`，Review Evidence 不得帶 run ID。共享 ID 的 Verification Evidence 必須有相同 Candidate、runtime、command、result 與 timestamp，且不可重複 Work Item、不可同時 active 與 settled；repository 與 Story association 仍逐筆對 owning Work Item 驗證。
+
+per-Work-Item flock 仍先保證 anchor liveness 與 orphan reclaim；之後另持有 repository-wide non-blocking canonical lock，固定順序為 anchor lock → repository lock，並涵蓋 Candidate capture 到 cleanup。競爭失敗在新 state、checkout、log 或 subprocess 之前拒絕。新 log 以 `VR-<n>-<short-sha>-<started-at>-<random>.log` exclusive-create；Runner 對 `VR-*` 用完整 `runID + "-"` token 唯一查找，`LVR-*` 才沿用舊 Work Item／revision lookup。這修正 ADR-0012 的舊 lookup 契約；Evidence 仍不保存 filesystem path。詳見 [ADR-0027](adr/0027-candidate-verification-pass-fans-out-by-run.md)。
 
 ## Durable local storage
 
@@ -254,7 +264,7 @@ HEAD 改變後舊 PASS／APPROVED 保留為歷史，但不可套用到新 revisi
 
 Revision 只存在於 Evidence 與 `current_run`，Work Item 本身不保存 `target_revision`；該欄位的刪除見 [ADR-0003](adr/0003-no-work-item-target-revision.md)。
 
-M5 起，canonical 檢查的輸出邊執行邊串流寫進 state 之外的 `.forgepilot/logs/`，以那次執行為鍵命名；`current_run` 對應多出的 `log path`，一如既有的 `WorktreePath`。Evidence 不新增任何指向這份輸出的欄位。輸出是診斷材料，不是結論——結論仍只在 Evidence。理由與備選見 [ADR-0012](adr/0012-verification-log-outside-state.md)。
+M5 起，canonical 檢查的輸出邊執行邊串流寫進 state 之外的 `.forgepilot/logs/`，以那次執行為鍵命名；`current_run` 對應多出的 `log path`，一如既有的 `WorktreePath`。輸出是診斷材料，不是結論——結論仍只在 Evidence。M5 當時的 Evidence 沒有輸出 lookup 欄位；schema v9 由 ADR-0027 加入非 path 的 Verification Run ID，供 shared execution provenance 與新 log 唯一查找。理由與備選見 [ADR-0012](adr/0012-verification-log-outside-state.md) 與 [ADR-0027](adr/0027-candidate-verification-pass-fans-out-by-run.md)。
 
 ### M5 開工前定案（已完成）
 

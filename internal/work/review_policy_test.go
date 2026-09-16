@@ -105,18 +105,20 @@ func TestValidateRequiresVerifiedWorkToHaveLatestPassEvidence(t *testing.T) {
 	exitCode := 0
 	state.Evidence = []Evidence{{
 		ID: "EV-001", Type: VerificationEvidence, Repository: "/repo", WorkItemID: item.ID, StoryRef: item.StoryRef,
-		Revision: revision, CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &exitCode, Result: Pass, CreatedAt: now,
+		Revision: revision, CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &exitCode, Result: Pass, VerificationRunID: "VR-001", CreatedAt: now,
 	}}
 	state.NextEvidenceID = 2
+	state.NextVerificationRunID = 2
 	if err := state.Validate(); err != nil {
 		t.Fatalf("valid VERIFIED state: %v", err)
 	}
 	failCode := 1
 	state.Evidence = append(state.Evidence, Evidence{
 		ID: "EV-002", Type: VerificationEvidence, Repository: "/repo", WorkItemID: item.ID, StoryRef: item.StoryRef,
-		Revision: revision, CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &failCode, Result: Fail, CreatedAt: now,
+		Revision: revision, CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &failCode, Result: Fail, VerificationRunID: "VR-002", CreatedAt: now,
 	})
 	state.NextEvidenceID = 3
+	state.NextVerificationRunID = 3
 	if err := state.Validate(); err == nil {
 		t.Fatal("validated VERIFIED work whose latest Verification is FAIL")
 	}

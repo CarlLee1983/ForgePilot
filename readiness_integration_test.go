@@ -407,37 +407,27 @@ func TestConsecutiveGoalWorkDefersHistoricReverificationToTheBoundary(t *testing
 		t.Fatal("WI-002 and WI-003 landed on the same revision")
 	}
 
-	// Nothing can advance now, so the deferred work is what is left — oldest first.
-	if got := nextAction(); got != "forgepilot verify WI-001" {
-		t.Fatalf("after WI-003 PASS: %q", got)
-	}
-	actions = append(actions, "REVERIFY WI-001")
-	mustRun(t, binary, root, "verify", "WI-001")
-	if got := nextAction(); got != "forgepilot verify WI-002" {
-		t.Fatalf("after WI-001 reverify: %q", got)
-	}
-	actions = append(actions, "REVERIFY WI-002")
-	mustRun(t, binary, root, "verify", "WI-002")
+	// WI-003's repository-wide PASS also refreshes both stale VERIFIED peers in
+	// one shared run, so the Goal reaches its review boundary immediately.
 	if got := nextAction(); got != "WAIT_GOAL_REVIEW" {
-		t.Fatalf("at the Goal boundary: %q", got)
+		t.Fatalf("after WI-003 PASS: %q", got)
 	}
 	actions = append(actions, "WAIT_GOAL_REVIEW")
 
 	want := []string{"VERIFY WI-001", "START WI-002", "VERIFY WI-002", "START WI-003",
-		"VERIFY WI-003", "REVERIFY WI-001", "REVERIFY WI-002", "WAIT_GOAL_REVIEW"}
+		"VERIFY WI-003", "WAIT_GOAL_REVIEW"}
 	if !reflect.DeepEqual(actions, want) {
 		t.Fatalf("action sequence = %v, want %v", actions, want)
 	}
 
-	// Five Verification Runs: one per Work Item at its own revision, then the two
-	// owed re-verifications at C. Counted from the logs each run opened and from
-	// the Evidence each run produced, not from a comment.
-	if runs := verificationRuns(t, root); runs != 5 {
-		t.Fatalf("verification runs = %d, want 5", runs)
+	// Three Verification Runs produced six Work Item-specific Evidence records:
+	// the second refreshed one stale peer and the last refreshed both.
+	if runs := verificationRuns(t, root); runs != 3 {
+		t.Fatalf("verification runs = %d, want 3", runs)
 	}
 	records := verificationEvidence(t, root)
-	if len(records) != 5 {
-		t.Fatalf("verification evidence = %d, want 5", len(records))
+	if len(records) != 6 {
+		t.Fatalf("verification evidence = %d, want 6", len(records))
 	}
 	atC := 0
 	for _, record := range records {
@@ -448,8 +438,8 @@ func TestConsecutiveGoalWorkDefersHistoricReverificationToTheBoundary(t *testing
 			atC++
 		}
 	}
-	// The boundary demands a current PASS for every Work Item: three of the five
-	// runs name C, and none of the earlier Evidence was rewritten to claim it.
+	// The boundary demands a current PASS for every Work Item: three of the six
+	// Evidence records name C, and none of the earlier Evidence was rewritten.
 	if atC != 3 {
 		t.Fatalf("%d evidence records name the final revision, want 3", atC)
 	}
@@ -511,25 +501,17 @@ func TestConsecutiveSnapshotWorkDefersReverificationWithEvolvingDigests(t *testi
 		t.Fatalf("after WI-002: %q", got)
 	}
 	step("WI-003", "third\n")
-	if got := nextAction(); got != "forgepilot verify WI-001 --snapshot" {
+	if got := nextAction(); got != "WAIT_GOAL_REVIEW" {
 		t.Fatalf("after WI-003: %q", got)
 	}
-	mustRun(t, binary, root, "verify", "WI-001", "--snapshot")
-	if got := nextAction(); got != "forgepilot verify WI-002 --snapshot" {
-		t.Fatalf("after WI-001 reverify: %q", got)
-	}
-	mustRun(t, binary, root, "verify", "WI-002", "--snapshot")
-	if got := nextAction(); got != "WAIT_GOAL_REVIEW" {
-		t.Fatalf("at the boundary: %q", got)
-	}
 	// Three distinct workspaces, one per Work Item: no step re-verified the
-	// snapshot a previous step had already checked. The two owed re-verifications
-	// deliberately share the current digest — that is what makes them current.
+	// snapshot a previous step had already checked. The final run fans its current
+	// digest out to the two stale peers.
 	if len(digests) != 3 {
 		t.Fatalf("distinct snapshot digests = %d, want 3", len(digests))
 	}
-	if runs := verificationRuns(t, root); runs != 5 {
-		t.Fatalf("verification runs = %d, want 5", runs)
+	if runs := verificationRuns(t, root); runs != 3 {
+		t.Fatalf("verification runs = %d, want 3", runs)
 	}
 }
 
@@ -585,17 +567,20 @@ func TestMultiplePrerequisitesEachHaveToHold(t *testing.T) {
 	if output, err := command(binary, root, "reconcile", "--goal", "queue"); err != nil || !strings.Contains(output, "WI-003 READY -> PENDING") {
 		t.Fatalf("reconcile behind stale prerequisites = %q, %v", output, err)
 	}
-	// One prerequisite back on the current Candidate is not enough.
+	// One explicit verification is enough here because the other prerequisite is
+	// an eligible stale VERIFIED peer and receives the same canonical PASS.
 	mustRun(t, binary, root, "verify", "WI-001")
-	if got := workStatus(t, root, "WI-003"); got != work.Pending {
-		t.Fatalf("WI-003 with one stale prerequisite = %s, want PENDING", got)
-	}
-	if output, err := command(binary, root, "reconcile", "--goal", "queue"); err != nil || !strings.Contains(output, "readiness unchanged") {
-		t.Fatalf("reconcile with one stale prerequisite = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "verify", "WI-002")
 	if got := workStatus(t, root, "WI-003"); got != work.Ready {
-		t.Fatalf("WI-003 with both prerequisites fresh = %s, want READY", got)
+		t.Fatalf("WI-003 after shared prerequisite verification = %s, want READY", got)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, firstOK := state.LatestVerification("WI-001")
+	second, secondOK := state.LatestVerification("WI-002")
+	if !firstOK || !secondOK || first.VerificationRunID != second.VerificationRunID {
+		t.Fatalf("prerequisite runs = %#v, %#v; want one shared run", first, second)
 	}
 }
 

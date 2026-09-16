@@ -34,7 +34,7 @@ _Avoid_：Agent 自我測試、臨時指定的 shell command
 **Verification Log**：一次 Verification Run 的原始輸出，以該次執行為鍵保存在 state 之外。它是事後診斷用的材料，不是結論——結論只在 Evidence 裡。
 _Avoid_：Evidence、驗證結果、完成宣告
 
-**Verification Run**：一次進行中的 Verification。它是短暫的，可能因中斷而結束並且不留下成功或失敗的結論。
+**Verification Run**：一次 canonical Verification execution。它以 durable run ID 識別；PASS 可以在同一個 Goal 中為多張符合資格的 Work Item 各留下 Evidence，但 FAIL／INTERRUPTED 只屬於觸發執行的 anchor。進行中的 run 仍是短暫狀態，可能因中斷而不留下成功或失敗的結論。
 _Avoid_：Evidence、VERIFYING 狀態本身
 
 **Runtime Contract**：Candidate 自己透過版本檔或 ecosystem manifest 宣告的 runtime／toolchain 要求；ForgePilot 只解析並選用本機已安裝的符合版本，不安裝或改動使用者全域環境。

@@ -1206,7 +1206,7 @@ func TestSnapshotVerificationStaysSerializedAndReclaimsInterruptedCandidate(t *t
 	}
 }
 
-func TestVerifyIsVisibleConcurrentAndRecoversFromInterruption(t *testing.T) {
+func TestVerifyIsVisibleSerializedAndRecoversFromInterruption(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
 	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
@@ -1232,20 +1232,25 @@ func TestVerifyIsVisibleConcurrentAndRecoversFromInterruption(t *testing.T) {
 	if output, err := command(binary, root, "verify", "WI-001"); err == nil {
 		t.Fatalf("verified WI-001 twice concurrently: %s", output)
 	}
-	// A different Work Item can be: reaching VERIFYING while WI-001 is still in
-	// flight is the claim; the lock is per Work Item, not global.
-	second := startVerify(t, binary, root, "WI-002")
-	if err := second.Process.Kill(); err != nil {
+	// The canonical command is repository-global, so a different anchor is also
+	// refused before it enters VERIFYING or creates execution artifacts.
+	if output, err := command(binary, root, "verify", "WI-002"); err == nil || !strings.Contains(output, "canonical verification is already running") {
+		t.Fatalf("concurrent repository verification = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_ = second.Wait()
+	if state.WorkItems[1].Status != work.Running || state.WorkItems[1].CurrentRun != nil {
+		t.Fatalf("refused second anchor changed state: %#v", state.WorkItems[1])
+	}
 
 	// Interrupt the first run: the OS releases its lock, leaving an orphan.
 	if err := running.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
 	_ = running.Wait()
-	state, err := storage.Load(root)
+	state, err = storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}

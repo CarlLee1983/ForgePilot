@@ -74,6 +74,20 @@ func TestRunnerDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 	if len(stop["evidence_ids"].([]any)) != 3 {
 		t.Fatalf("evidence_ids = %v", stop["evidence_ids"])
 	}
+	// Execution history retains every Evidence produced by each shared run; the
+	// stop record above separately names only the three latest final-review IDs.
+	history := record["evidence_ids"].([]any)
+	if len(history) != 6 {
+		t.Fatalf("run Evidence history = %v, want all six Evidence records from three executions", history)
+	}
+	seen := map[string]bool{}
+	for _, raw := range history {
+		id := raw.(string)
+		if seen[id] {
+			t.Fatalf("run Evidence history repeats %s: %v", id, history)
+		}
+		seen[id] = true
+	}
 }
 
 func TestRunRefusesWithoutSnapshotAndNeverCommits(t *testing.T) {

@@ -15,7 +15,7 @@ func TestV3EvidenceCarriesEmptyReviewFields(t *testing.T) {
 	zero := 0
 	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
 		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
-		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
+		Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-001", CreatedAt: time.Now().UTC()}
 	encoded, err := json.Marshal(verification)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestRuntimeValidationAllowsLegacyVerificationButRejectsReviewOrBlankMetadat
 	zero := 0
 	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
 		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
-		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
+		Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-001", CreatedAt: time.Now().UTC()}
 	items := map[string]Item{"WI-001": {ID: "WI-001"}}
 	if err := validateEvidence([]Evidence{verification}, 2, items); err != nil {
 		t.Fatalf("legacy verification without runtime = %v", err)
@@ -71,6 +71,111 @@ func TestRuntimeValidationAllowsLegacyVerificationButRejectsReviewOrBlankMetadat
 		Reviewer: "carl@example.com", Runtime: map[string]string{"go": "1.25.5"}, CreatedAt: time.Now().UTC()}
 	if err := validateEvidence([]Evidence{review}, 2, items); err == nil {
 		t.Fatal("accepted review evidence carrying runtime")
+	}
+}
+
+func TestStateValidationRejectsFalseEvidenceRepositoryOrStoryAssociation(t *testing.T) {
+	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	state := NewState()
+	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+		t.Fatal(err)
+	}
+	item, err := state.AddWork("g", "specs/stories/a", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(item.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", "/tmp/log", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordVerification(item.ID, revision, "make verify", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	state.Evidence[0].Repository = "/other"
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "repository") {
+		t.Fatalf("repository mismatch validation = %v", err)
+	}
+	state.Evidence[0].Repository = "/repo"
+	state.Evidence[0].StoryRef = "specs/stories/other"
+	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "story reference") {
+		t.Fatalf("story mismatch validation = %v", err)
+	}
+}
+
+func TestVerificationRunProvenanceValidationFailsClosed(t *testing.T) {
+	base := sharedRunValidationState()
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid shared run = %v", err)
+	}
+	provenance := map[string]func(*State){
+		"candidate": func(state *State) { state.Evidence[1].Revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+		"runtime":   func(state *State) { state.Evidence[1].Runtime = map[string]string{"go": "1.25.6"} },
+		"command":   func(state *State) { state.Evidence[1].Command = "other" },
+		"result":    func(state *State) { state.Evidence[1].Result = Fail },
+		"timestamp": func(state *State) { state.Evidence[1].CreatedAt = state.Evidence[1].CreatedAt.Add(time.Second) },
+	}
+	for name, mutate := range provenance {
+		t.Run(name, func(t *testing.T) {
+			state := sharedRunValidationState()
+			mutate(&state)
+			if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "mixed provenance") {
+				t.Fatalf("validation = %v, want mixed provenance", err)
+			}
+		})
+	}
+	t.Run("duplicate work item", func(t *testing.T) {
+		state := sharedRunValidationState()
+		state.Evidence[1].WorkItemID = "WI-001"
+		state.Evidence[1].StoryRef = "specs/stories/a"
+		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "repeats work item") {
+			t.Fatalf("validation = %v, want duplicate work item refusal", err)
+		}
+	})
+	t.Run("reused legacy run", func(t *testing.T) {
+		state := sharedRunValidationState()
+		state.Evidence[0].VerificationRunID = "LVR-001"
+		state.Evidence[1].VerificationRunID = "LVR-001"
+		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "legacy verification run ID") {
+			t.Fatalf("validation = %v, want reused legacy run refusal", err)
+		}
+	})
+	t.Run("active and settled", func(t *testing.T) {
+		state := sharedRunValidationState()
+		state.WorkItems[0].Status = Verifying
+		state.WorkItems[0].CurrentRun = &Run{VerificationRunID: "VR-001", Revision: state.Evidence[0].Revision, CandidateKind: CommitCandidate}
+		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "both active and settled") {
+			t.Fatalf("validation = %v, want active/settled refusal", err)
+		}
+	})
+	t.Run("counter reuse", func(t *testing.T) {
+		state := sharedRunValidationState()
+		state.NextVerificationRunID = 1
+		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "would reuse") {
+			t.Fatalf("validation = %v, want counter refusal", err)
+		}
+	})
+}
+
+func sharedRunValidationState() State {
+	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	zero := 0
+	return State{
+		SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 3, NextGateID: 1, NextVerificationRunID: 2,
+		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerGoal}},
+		WorkItems: []Item{
+			{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Verified},
+			{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Verified},
+		},
+		Evidence: []Evidence{
+			{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo", WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &zero, Result: Pass, Runtime: map[string]string{"go": "1.25.5"}, VerificationRunID: "VR-001", CreatedAt: now},
+			{ID: "EV-002", Type: VerificationEvidence, Repository: "/repo", WorkItemID: "WI-002", StoryRef: "specs/stories/b", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &zero, Result: Pass, Runtime: map[string]string{"go": "1.25.5"}, VerificationRunID: "VR-001", CreatedAt: now},
+		},
 	}
 }
 
@@ -455,7 +560,7 @@ func TestV4EvidenceCarriesEmptyPRReference(t *testing.T) {
 	zero := 0
 	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
 		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
-		Command: "make verify", ExitCode: &zero, Result: Pass, CreatedAt: time.Now().UTC()}
+		Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-001", CreatedAt: time.Now().UTC()}
 	encoded, err := json.Marshal(verification)
 	if err != nil {
 		t.Fatal(err)
