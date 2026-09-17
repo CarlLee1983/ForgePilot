@@ -18,7 +18,7 @@
 | [0010](0010-no-outbound-network-requests.md) | 不主動發出網路請求——不自行 HTTP，也不 spawn `gh` | accepted（由 0018 加註例外） |
 | [0011](0011-pr-identity-does-not-gate-completion.md) | PR identity 不參與完成判定與 stale 判定 | accepted |
 | [0012](0012-verification-log-outside-state.md) | Verification 輸出串流到 state 之外的 log；Evidence 不保存 path（run-ID lookup 由 0027 修正） | accepted（由 0027 修正 lookup） |
-| [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 是否自我套用 ForgeFlowV2——尚未回答的開放問題 | proposed |
+| [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 借用 ForgeFlowV2／PraxisBound 的 Story 目錄格式，不執行 bootstrap、不交出治理所有權 | accepted |
 | [0014](0014-working-tree-snapshot-is-a-candidate.md) | Working tree snapshot 是保留在 ForgePilot ref 下的 Candidate，不是 branch、stash 或 Work Item target | accepted |
 | [0015](0015-runtime-contract-belongs-to-candidate.md) | Runtime Contract 從 Candidate checkout 解析；只固定該次 subprocess environment，actual versions 隨 run 進 Evidence | accepted |
 | [0016](0016-goal-level-review-is-policy.md) | Goal-level review 是持久化 policy，不是略過 Human review 的捷徑 | accepted |
@@ -32,6 +32,7 @@
 | [0026](0026-resolved-gates-cross-agent-session-boundaries.md) | Resolved Gate 從 current state 投影到後續 session；合法 Human wait 不消耗 technical attempt budget | accepted |
 | [0027](0027-candidate-verification-pass-fans-out-by-run.md) | 同 Goal stale 工作共享一個 Candidate Verification Run；只有 PASS 原子 fan-out | accepted |
 | [0028](0028-agent-session-checks-are-diagnostic.md) | Agent Session 做 focused diagnostics；Runner canonical Verification 是唯一 PASS owner | accepted |
+| [0029](0029-story-readiness-contract-is-upstream-owned.md) | Whole-DAG Story readiness 使用 PraxisBound-owned sidecar 與 source digest；ForgePilot 只讀取並在 Runner preflight 檢查 | accepted |
 
 ## 什麼時候該加一份
 
