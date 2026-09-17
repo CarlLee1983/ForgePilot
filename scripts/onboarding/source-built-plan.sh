@@ -53,16 +53,24 @@ esac
 stage="$stage_root/$commit"
 git -C "$target" rev-parse --show-toplevel >/dev/null 2>&1 || fail 'target must be a Git repository'
 case "$candidate_kind" in
-	COMMIT) git -C "$target" show "$candidate:Makefile" 2>/dev/null | grep -Eq '^verify:' || fail 'Candidate does not contain a make verify target' ;;
+	COMMIT)
+		candidate_commit=$(git -C "$target" rev-parse --verify "$candidate^{commit}" 2>/dev/null) || fail 'COMMIT Candidate must name a commit'
+		candidate_head=$(git -C "$target" rev-parse --verify HEAD 2>/dev/null) || fail 'target has no HEAD commit'
+		[ "$candidate_commit" = "$candidate_head" ] || fail 'COMMIT Candidate must match target HEAD; re-plan after HEAD changes'
+		git -C "$target" show "$candidate_commit:Makefile" 2>/dev/null | grep -Eq '^verify:' || fail 'Candidate does not contain a make verify target'
+		candidate_display="COMMIT $candidate_commit"
+		;;
 	SNAPSHOT)
 		[ -f "$target/Makefile" ] || fail 'SNAPSHOT Candidate does not contain a Makefile'
 		if git -C "$target" check-ignore -q Makefile && ! git -C "$target" ls-files --error-unmatch Makefile >/dev/null 2>&1; then fail 'ignored untracked Makefile is absent from SNAPSHOT Candidate'; fi
 		grep -Eq '^verify:' "$target/Makefile" || fail 'SNAPSHOT Candidate does not contain a make verify target'
+		candidate_display='SNAPSHOT current target workspace (identity captured before verification)'
 		;;
 	*) fail '--candidate-kind must be COMMIT or SNAPSHOT' ;;
 esac
 printf '%s\n' 'INSPECTION ONLY — no fetch, build, verify, entrypoint, or repository write'
 printf 'target repository: %s\nsource repository: %s\nsource commit: %s\n' "$target" "$source" "$commit"
+printf 'target Candidate: %s\n' "$candidate_display"
 printf '%s\n' 'Inspect the target Candidate and its Makefile before any write.'
 printf '%s\n' 'FIRST EXPLICIT APPROVAL REQUIRED'
 printf 'source fetch: git clone --no-checkout %s %s/source\n' "$source" "$stage"

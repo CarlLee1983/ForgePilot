@@ -10,8 +10,11 @@ Before a source fetch, build, `make verify`, entrypoint change, or repository
 write, inspect only. Confirm the target directory is a Git repository and ask
 whether later verification uses a COMMIT Candidate or a SNAPSHOT Candidate.
 
-For a COMMIT Candidate, inspect that commit's `Makefile`; a Makefile visible
-only in the current working tree does not pass. For a SNAPSHOT Candidate, an
+For a COMMIT Candidate, resolve and display its full SHA, require it to match
+the target's current `HEAD`, and inspect that commit's `Makefile`; a Makefile
+visible only in the current working tree does not pass.
+Re-run the plan if HEAD changes before normal verification.
+For a SNAPSHOT Candidate, an
 ignored, untracked Makefile is not included, so stop rather than assume it has
 `make verify`. If Candidate content cannot be determined, stop and say why.
 
@@ -57,5 +60,7 @@ implementation remains uncommitted, later verification is `forgepilot verify <wo
 For a COMMIT Candidate, the developer must commit the intended change and keep the worktree clean before normal verification; this procedure does not commit it.
 
 This procedure never commits on the developer’s behalf, migrates state,
-approves a review, resolves a Gate, or publishes. It does not fetch source or
-run repository commands until the relevant explicit approval.
+approves a review, resolves a Gate, or publishes. Before the relevant explicit
+approval, it does not fetch source, invoke a repository-defined target, or
+write to the target repository; the inspection-only Git queries above are the
+sole exception.

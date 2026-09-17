@@ -43,16 +43,21 @@ candidate=$(git -C "$fixture/target" rev-parse HEAD)
 [ "$(git -C "$fixture/source" rev-parse HEAD)" = "$source_head_before" ] || fail 'plan changed source commit'
 [ -z "$(git -C "$fixture/source" status --porcelain)" ] || fail 'plan changed source worktree'
 
-for bad_commit in '' "${source_commit%?}" main latest branch 0123456789abcdef0123456789abcdef0123456g; do
-	if "$plan" --source "$fixture/source" --commit "$bad_commit" --stage-root "$fixture/stage" --entrypoint "$fixture/bin/forgepilot" --target "$fixture/target" >/dev/null 2>&1; then
+for bad_commit in "${source_commit%?}" main latest branch 0123456789abcdef0123456789abcdef0123456g; do
+	if invalid_output=$("$plan" --source "$fixture/source" --commit "$bad_commit" --stage-root "$fixture/stage" --entrypoint "$fixture/bin/forgepilot" --target "$fixture/target" --candidate-kind COMMIT --candidate "$candidate" --goal-id ONBOARD-1 --goal-title onboarding --story specs/stories/ONBOARD-1 2>&1); then
 		fail "plan accepted invalid commit: ${bad_commit:-missing}"
 	fi
+	case "$invalid_output" in
+		*'--commit must be a full lowercase 40-character SHA') ;;
+		*) fail "plan rejected invalid commit for the wrong reason: ${bad_commit:-missing}" ;;
+	esac
 done
 
 # The plan has two observable authorization boundaries. The first names all
 # source-side writes; the second names only target-repository writes.
 assert_contains "$fixture/plan.txt" 'INSPECTION ONLY — no fetch, build, verify, entrypoint, or repository write'
 assert_contains "$fixture/plan.txt" "source commit: $source_commit"
+assert_contains "$fixture/plan.txt" "target Candidate: COMMIT $candidate"
 assert_contains "$fixture/plan.txt" 'FIRST EXPLICIT APPROVAL REQUIRED'
 assert_contains "$fixture/plan.txt" 'git clone --no-checkout'
 assert_contains "$fixture/plan.txt" 'go install ./cmd/forgepilot'
@@ -70,6 +75,13 @@ assert_contains "$fixture/plan.txt" 'reads the resulting state'
 assert_not_contains "$fixture/plan.txt" 'curl '
 assert_not_contains "$fixture/plan.txt" 'brew '
 
+# A COMMIT plan is tied to the current immutable HEAD. A later HEAD cannot
+# inherit this preflight or its approval disclosure.
+git -C "$fixture/target" commit --allow-empty -qm later
+if "$plan" --source "$fixture/source" --commit "$source_commit" --stage-root "$fixture/stage" --entrypoint "$fixture/bin/forgepilot" --target "$fixture/target" --candidate-kind COMMIT --candidate "$candidate" --goal-id ONBOARD-1 --goal-title onboarding --story specs/stories/ONBOARD-1 >/dev/null 2>&1; then
+	fail 'plan accepted a COMMIT Candidate that no longer matches HEAD'
+fi
+
 # A SNAPSHOT includes tracked files but excludes ignored, untracked files.
 "$plan" --source "$fixture/source" --commit "$source_commit" --stage-root "$fixture/stage" --entrypoint "$fixture/bin/forgepilot" --target "$fixture/target" --candidate-kind SNAPSHOT --candidate current --goal-id ONBOARD-1 --goal-title onboarding --story specs/stories/ONBOARD-1 >/dev/null
 mkdir -p "$fixture/ignored"
@@ -83,6 +95,7 @@ if "$plan" --source "$fixture/source" --commit "$source_commit" --stage-root "$f
 assert_contains "$document" 'inspection-only'
 assert_contains "$document" 'COMMIT Candidate'
 assert_contains "$document" 'SNAPSHOT Candidate'
+assert_contains "$document" 'Re-run the plan if HEAD changes'
 assert_contains "$document" 'ignored, untracked Makefile'
 assert_contains "$document" 'full 40-character commit SHA'
 assert_contains "$document" 'FIRST EXPLICIT APPROVAL'
