@@ -37,6 +37,10 @@ git -C "$fixture/target" config user.name test
 git -C "$fixture/target" add Makefile && git -C "$fixture/target" commit -qm target
 candidate=$(git -C "$fixture/target" rev-parse HEAD)
 
+mkdir -p "$fixture/target/specs/stories/ONBOARD-1"
+printf '# Story\n' >"$fixture/target/specs/stories/ONBOARD-1/story.md"
+printf 'Run make verify\n' >"$fixture/target/specs/stories/ONBOARD-1/acceptance.md"
+
 "$plan" --source "$fixture/source" --commit "$source_commit" \
 	--stage-root "$fixture/stage" --entrypoint "$fixture/bin/forgepilot" \
 	--target "$fixture/target" --candidate-kind COMMIT --candidate "$candidate" --goal-id ONBOARD-1 --goal-title 'onboarding goal' --story 'specs/stories/ONBOARD-1' >"$fixture/plan.txt"

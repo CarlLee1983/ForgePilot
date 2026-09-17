@@ -20,7 +20,9 @@ ignored, untracked Makefile is not included, so stop rather than assume it has
 
 Use `scripts/onboarding/source-built-plan.sh` to print the exact commands,
 absolute paths, source repository, and full 40-character commit SHA that will
-be used. Printing this plan is inspection-only; it must not perform an action.
+be used. A local source repository must be an absolute path; URL and scp-style
+repository references are also accepted. Printing this plan is inspection-only;
+it must not perform an action.
 
 ## FIRST EXPLICIT APPROVAL: obtain and verify ForgePilot
 
@@ -64,3 +66,62 @@ approves a review, resolves a Gate, or publishes. Before the relevant explicit
 approval, it does not fetch source, invoke a repository-defined target, or
 write to the target repository; the inspection-only Git queries above are the
 sole exception.
+
+## Action-plan format and offline acceptance
+
+The same plan can be consumed without evaluating shell text:
+append `--format actions` to the documented planner arguments. The stream starts
+with `forgepilot-onboarding-plan-v1` followed by NUL. Every record then contains
+NUL-terminated approval phase, action ID, working directory, effect, decimal
+argument count, and that many argv elements. Environment overrides are explicit
+`env` argv elements. Consumers must reject unknown versions, truncated records,
+unexpected commands or paths, and duplicate IDs before executing anything.
+The default human-readable plan and this stream share one action list. Neither
+format executes the printed actions or grants approval.
+
+The phases are `source`, `story`, and `repository`. The `review-story` record is
+a human checkpoint: its sole argument is the Story path, not an executable.
+Missing Story directories produce this checkpoint and no repository commands.
+Authorize draft writes separately, review the draft, then re-run the plan.
+Existing state follows the same Story check before the read-only `status` plan.
+Story directories and the two leaf files must not be symlinks; leaves must be
+regular files. Source staging and the entrypoint parent must be outside the
+target repository so the first approval cannot perform second-phase writes.
+Derived staging directories and the staged executable cannot be symlinks, the
+temporary entrypoint must be absent, and the entrypoint cannot be a directory.
+Target commands use the approved entrypoint's absolute path.
+
+After source installation has already succeeded in the current walkthrough,
+replanning for Story review resumes only the `story` and `repository` phases.
+Retain the successful source actions and their exact source/commit/staging/
+entrypoint identity; do not repeat them or infer success from a directory merely
+existing. If that identity or the installed entrypoint changes, stop and obtain
+a fresh source plan and approval. Existing staging directories are readable by
+the planner so this resume is possible; repeating a full source install into an
+occupied checkout stops at clone without replacing the current entrypoint.
+
+Candidate inspection is conservative and static. COMMIT accepts only a literal
+full SHA matching HEAD. SNAPSHOT checks HEAD tracking and current files without
+using the real index. An uncertain transformation (attributes, filters, line
+normalization, sparse checkout) requires human Candidate inspection; the planner
+never runs a clean filter or Makefile to guess its result. It does not fetch
+missing objects. This advisory inspection does not replace ForgePilot's canonical
+check in the eventual detached Candidate checkout. Re-plan if inspected files,
+HEAD, paths, or Story change before execution.
+
+`onboarding_acceptance_test.go` installs both actual adapters under temporary
+homes and consumes these actions with fake source tools and a built ForgePilot
+CLI. It covers both approvals, failure stops, Story review, existing state, and
+final status. The fake agent is deterministic; it does not establish that a
+real model follows the prose correctly.
+
+`TestOnboardingCodexAcceptance` and `TestOnboardingClaudeAcceptance` are guarded
+by `FORGEPILOT_ONBOARDING_CODEX_ACCEPTANCE=1` and
+`FORGEPILOT_ONBOARDING_CLAUDE_ACCEPTANCE=1`, respectively. Even when enabled,
+FP-35 stops at a generated executable spy. It never launches a real model or
+imports login credentials; actual first-use model acceptance belongs to #39.
+Only after exact opt-in may `FORGEPILOT_SMOKE_ARTIFACT_DIR` select an existing,
+absolute directory outside the temporary fixture. Reports omit raw agent output
+and all environment values, refuse to overwrite existing files, and explicitly
+record that no ForgePilot verification ran. Export configuration alone enables
+nothing. The existing Runner `FORGEPILOT_CODEX_SMOKE` contract is unchanged.
