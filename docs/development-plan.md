@@ -6,6 +6,15 @@ M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 A
 
 開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
+Dogfood Goal FP-28 的導入方向改為 prompt-first、fixed-source-version 本機建置：Agent 先以
+inspection-only commands 檢查與展示，逐條顯示完整 commit SHA、commands、路徑與效果；使用者
+授權後才能取得 source、安裝／建置、執行 `make verify` 或切換 entrypoint。既有 Go 是正式前提，
+source-built CLI 通過啟動檢查後才進入 Story 人工檢閱；預設 `WORK_ITEM` Goal／Work Item 建立前
+必須另取 repository write 的明確授權。unsigned binary 只可作 maintainer trial，不宣稱正式導入
+或 macOS execution trust。Apple signing、notarization 與 no-Go prebuilt release 留作未來獨立工作；
+具體邊界見 [architecture.md](architecture.md#distribution-and-onboarding-boundary)、ADR-0024、ADR-0025
+與 ADR-0030。
+
 ## Milestones
 
 | 階段 | 範圍 | Exit criteria |

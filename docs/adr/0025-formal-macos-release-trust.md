@@ -1,5 +1,9 @@
 # 正式 macOS Release 先建立簽署與可驗證的發佈鏈
 
+**Status relation:** [ADR-0030](0030-source-built-onboarding-without-apple-developer.md) 改定目前
+supported onboarding 為 source-built，因為維護者不使用 Apple Developer Program。本 ADR 保留為未來
+若要重新提供 signed prebuilt macOS binary 時不可放寬的信任門檻，不再是目前導入的前提。
+
 預編譯 binary 解除了 Go 的安裝前提，也使開發者與 agent 必須判斷下載到的是不是預期版本。未簽署資產加上 checksum 可以較快試用，但 checksum 無法單獨證明發佈者身分，macOS 也可能阻擋首次執行。因此正式的「貼 prompt 導入」承諾只適用於 Developer ID 簽署、與預先固定的 ForgePilot 簽署者 Team ID／明確簽署要求相符、且 notarized 的 macOS 15+ Release，分別提供 Intel `amd64` 與 Apple Silicon `arm64` 資產；未簽署試用流程不得稱為正式導入。[Apple 的 code-signing requirements 說明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)可用於定義與查驗預期簽署者。
 
 兩種資產須來自同一個已檢閱的 commit，於兩種原生 Mac 環境測試新安裝、首次啟動與 `init → goal create → work add → status`，測試使用者環境不預裝 Go。正式發佈前驗證下載後的簽章、預期簽署者與 notarization acceptance，公布每個資產的 SHA-256 與 [GitHub asset digest](https://docs.github.com/en/rest/releases/assets)，並讓使用者能以 macOS 內建的 `shasum` 核對，無需先裝 `gh`。Installer 必須在 digest、簽章、簽署者或查驗失敗時保留既有可用版本。依 [Apple notarization 指引](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)，獨立 CLI／ZIP 無法直接 staple ticket，故第一次線上查驗屬於本期承諾；離線首次啟動需要另一種包裝與驗收。

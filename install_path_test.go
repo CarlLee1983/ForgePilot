@@ -6,20 +6,18 @@ import (
 	"testing"
 )
 
-// The documented `go install` target must be the module path itself. When the
-// two drift the command fails against a repository that does not exist, and
-// nothing in the build catches it: imports keep resolving locally.
-func TestDocumentedInstallCommandUsesModulePath(t *testing.T) {
-	module := modulePath(t)
-
+// Formal onboarding must not resolve a moving source revision. A reviewed
+// full commit SHA is supplied by the onboarding procedure once its native-Mac
+// acceptance is complete; until then the public README must not invent any
+// go-install shortcut with a branch, tag, or floating version.
+func TestReadmeDoesNotAdvertiseGoInstallBeforeOnboardingAcceptance(t *testing.T) {
 	readme, err := os.ReadFile("README.md")
 	if err != nil {
 		t.Fatalf("read README.md: %v", err)
 	}
 
-	want := "go install " + module + "/cmd/forgepilot@latest"
-	if !strings.Contains(string(readme), want) {
-		t.Fatalf("README.md does not document %q", want)
+	if strings.Contains(string(readme), "go install "+modulePath(t)+"/cmd/forgepilot@") {
+		t.Fatal("README.md advertises an unpublished go-install onboarding command")
 	}
 }
 

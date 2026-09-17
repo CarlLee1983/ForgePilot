@@ -35,6 +35,7 @@
 | [0027](0027-candidate-verification-pass-fans-out-by-run.md) | 同 Goal stale 工作共享一個 Candidate Verification Run；只有 PASS 原子 fan-out | accepted |
 | [0028](0028-agent-session-checks-are-diagnostic.md) | Agent Session 做 focused diagnostics；Runner canonical Verification 是唯一 PASS owner | accepted |
 | [0029](0029-story-readiness-contract-is-upstream-owned.md) | Whole-DAG Story readiness 使用 PraxisBound-owned sidecar 與 source digest；ForgePilot 只讀取並在 Runner preflight 檢查 | accepted |
+| [0030](0030-source-built-onboarding-without-apple-developer.md) | 正式導入從固定 source version 本機建置；unsigned binary 只作 maintainer trial | accepted（部分取代 0025 的現行前提） |
 
 ## 什麼時候該加一份
 

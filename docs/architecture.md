@@ -22,6 +22,22 @@ Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不�
 
 Breaking change、architecture trade-off、security-sensitive decision、production operation、destructive action、scope expansion、ambiguous requirement、merge／release authorization 都需要明確 Human Decision。M3 起這些決策以 Gate 表示並保存；merge／release authorization 仍不在產品範圍內，Gate resolution 不授予該權限。
 
+### Distribution and onboarding boundary
+
+Onboarding procedure、可選 Codex／Claude adapters 與任何安裝 helper 都是 repository 內的分發
+表面，不是 ForgePilot 核心治理命令。完成乾淨 Intel 與 Apple Silicon 的同一 source commit 驗收前，
+不得宣稱正式支援；預定的 supported path 是使用者明確授權的 fixed-source-version 本機建置：先以
+inspection-only commands 確認目標 Candidate 與 `make verify` 是否存在，不執行
+repository-defined target；再逐條展示 immutable commit SHA、預計 commands、作用路徑與效果，等待
+授權後才以已安裝的 Go 建置、驗證並原子切換使用者目錄的 entrypoint。它不下載 ForgePilot binary、
+不持有憑證、也不把 agent output 當作 Verification Evidence；缺少 Go 或需使用 package manager 時，
+agent 只能展示行動並等待另一份授權。Story 人工檢閱後的 repository writes 需要獨立的明確授權。
+
+未簽署 prebuilt binary 僅可作 maintainer trial，不是一般使用者或 agent 的預設入口；不教使用者
+移除 quarantine 或繞過 Gatekeeper。Developer ID 簽署、notarization 與 immutable publication
+是未來 signed-prebuilt path 的受保護分發工作，不影響核心 CLI 的離線邊界。完整取捨見 ADR-0030；
+未來 signed binary 的門檻仍由 ADR-0025 保存。
+
 ## Implementation boundaries
 
 M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/ForgePilot`。CLI 只負責參數、呈現與錯誤映射；domain rules 集中管理，不直接呼叫 filesystem、Git 或 subprocess。

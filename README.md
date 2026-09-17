@@ -72,11 +72,8 @@ Runner MVP 這一期的交付邊界、證據對照與已知限制記在 [docs/sp
 
 需要 Go 1.25.5 或以上。ForgePilot 只用標準函式庫，沒有外部相依。
 
-```bash
-go install github.com/CarlLee1983/ForgePilot/cmd/forgepilot@latest
-```
-
-或從原始碼建置：
+正式的 prompt-first onboarding 正在以固定完整 commit SHA 的 source-built 流程驗收；在完成兩種
+原生 Mac 驗收前，不提供浮動版本或一鍵安裝指令。開發者若要在 checkout 中工作，可自行從原始碼建置：
 
 ```bash
 git clone https://github.com/CarlLee1983/ForgePilot.git
