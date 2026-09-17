@@ -5,4 +5,6 @@ verify:
 	go vet ./...
 	go test ./...
 	sh scripts/onboarding/onboarding_test.sh
+	sh scripts/skills/check_adapters_test.sh
+	sh scripts/skills/short_prompt_regression_test.sh
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; go build -o "$$tmp/forgepilot" ./cmd/forgepilot
