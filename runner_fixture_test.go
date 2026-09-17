@@ -1,6 +1,8 @@
 package forgepilot_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,14 +29,37 @@ func newRunnerFixture(t *testing.T, stories ...string) runnerFixture {
 	}
 	for _, name := range stories {
 		path := filepath.Join(root, "specs", "stories", name)
-		if err := os.WriteFile(path, []byte("# story "+name+"\n"), 0644); err != nil {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+		story, acceptance := []byte("# story "+name+"\n"), []byte("# acceptance "+name+"\n")
+		writeReadinessStory(t, root, name, story, acceptance)
 	}
 	write(t, filepath.Join(root, "Makefile"), "verify:\n\t@sh verify.sh\n")
 	write(t, filepath.Join(root, "verify.sh"), canonicalCheck)
 	commitAll(t, root, "seed")
 	return runnerFixture{root: root, binary: binary, control: t.TempDir()}
+}
+
+func writeReadinessStory(t *testing.T, root, name string, story, acceptance []byte) {
+	t.Helper()
+	path := filepath.Join(root, "specs", "stories", name)
+	for file, contents := range map[string][]byte{
+		"story.md": story, "acceptance.md": acceptance,
+		"readiness.json": []byte(fmt.Sprintf(`{"schema_version":1,"story_ref":"specs/stories/%s","story_md_digest":"%s","acceptance_md_digest":"%s","criteria":[],"inputs":[],"outputs":[],"decision_follow_ups":[]}`, name, digest(story), digest(acceptance))),
+	} {
+		if err := os.WriteFile(filepath.Join(path, file), contents, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func digest(contents []byte) string {
+	sum := sha256.Sum256(contents)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // canonicalCheck is the managed project's own verification. It fails when any

@@ -237,7 +237,7 @@ func TestSmokeEvidenceOutlivesTheFixtureItCameFrom(t *testing.T) {
 	required := []string{
 		"environment.json",
 		"runner-output.txt",
-		"inputs/specs/stories/a.md",
+		"inputs/specs/stories/a.md/story.md",
 		"forgepilot/state.json",
 		"forgepilot/runs/" + round.RunID + "/run.json",
 		"forgepilot/runs/" + round.RunID + "/wi-001-attempt-1/result.json",

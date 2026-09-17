@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
+	"github.com/CarlLee1983/ForgePilot/internal/readiness"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
@@ -162,13 +164,42 @@ func GoalScope(state *work.State, goalID string) []string {
 	return scope
 }
 
-// CurrentGoalScope reads the fingerprint from durable state.
+// CurrentGoalScope reads the fingerprint from durable state and the accepted
+// upstream Story contracts. A caller must not keep running when the sidecar or
+// either source file no longer matches the bytes that passed preflight.
 func CurrentGoalScope(root, goalID string) ([]string, error) {
 	state, err := storage.Load(root)
 	if err != nil {
 		return nil, err
 	}
-	return GoalScope(&state, goalID), nil
+	input, err := readinessInput(root, &state, goalID)
+	if err != nil {
+		return nil, err
+	}
+	report := readiness.Review(input)
+	if len(report.Defects) > 0 {
+		return nil, errors.New(report.String())
+	}
+	scope := append(GoalScope(&state, goalID), readiness.ScopeBindings(input)...)
+	sort.Strings(scope)
+	return scope, nil
+}
+
+// GoalWorkItemCount is the presentation-safe count of Work Items in one Goal.
+// Scope bindings intentionally include source identities as well as Work Items,
+// so their length is not a Work Item count.
+func GoalWorkItemCount(root, goalID string) (int, error) {
+	state, err := storage.Load(root)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, item := range state.WorkItems {
+		if item.GoalID == goalID {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // Gate content limits bound what an untrusted agent session can write into

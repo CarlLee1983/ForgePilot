@@ -148,7 +148,7 @@ func printPlan(options runner.Options, output io.Writer) error {
 			"Budget: %d steps, %d attempts per work item, %s duration, %s agent timeout, %s verify timeout\n"+
 			"Candidate mode: SNAPSHOT\nFirst action: %s %s\nReason: %s\n"+
 			"Nothing was started, reconciled, verified or recorded.\n",
-		plan.Goal.ID, plan.Goal.Title, plan.Goal.ReviewPolicy, len(plan.Scope),
+		plan.Goal.ID, plan.Goal.Title, plan.Goal.ReviewPolicy, plan.WorkItemCount,
 		plan.RuntimeName, plan.RuntimeVersion, plan.RuntimeExecutable,
 		plan.Budget.MaxSteps, plan.Budget.MaxAttemptsPerWork, plan.Budget.MaxDuration,
 		plan.Budget.AgentTimeout, plan.Budget.VerifyTimeout,

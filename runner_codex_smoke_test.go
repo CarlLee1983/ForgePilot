@@ -214,7 +214,7 @@ func writeCodexSmokeRepository(t *testing.T, root string) {
 	write(t, filepath.Join(root, "go.mod"), "module example.com/forgepilot-runner-smoke\n\ngo 1.25.5\n")
 	write(t, filepath.Join(root, "Makefile"), "verify:\n\tgo test ./...\n")
 	write(t, filepath.Join(root, "AGENTS.md"), "# Smoke fixture\n\nUse the Go standard library only. Do not commit.\n")
-	write(t, filepath.Join(root, "specs", "stories", "01-normalize.md"), `# Normalize function
+	writeReadinessStory(t, root, "01-normalize.md", []byte(`# Normalize function
 
 Implement package `+"`transform`"+` with `+"`Normalize(input string) (string, error)`"+`.
 
@@ -224,8 +224,8 @@ Acceptance criteria:
 - It rejects input that is empty after trimming.
 - Add table-driven tests for normal, mixed-whitespace, and blank input.
 - `+"`make verify`"+` must pass.
-`)
-	write(t, filepath.Join(root, "specs", "stories", "02-cli.md"), `# Normalize CLI
+`), []byte("# acceptance 01-normalize.md\n"))
+	writeReadinessStory(t, root, "02-cli.md", []byte(`# Normalize CLI
 
 Add `+"`cmd/normalize`"+` as a command-line interface over `+"`transform.Normalize`"+`.
 
@@ -234,8 +234,8 @@ Acceptance criteria:
 - Keep command behavior testable without spawning a subprocess.
 - Add tests for a successful normalization through the command path.
 - `+"`make verify`"+` must pass.
-`)
-	write(t, filepath.Join(root, "specs", "stories", "03-errors.md"), `# CLI error handling
+`), []byte("# acceptance 02-cli.md\n"))
+	writeReadinessStory(t, root, "03-errors.md", []byte(`# CLI error handling
 
 Finish the normalize command's error behavior.
 
@@ -245,7 +245,7 @@ Acceptance criteria:
 - Add tests that cover both errors through the command's testable path.
 - Preserve the successful behavior from the preceding Story.
 - `+"`make verify`"+` must pass.
-`)
+`), []byte("# acceptance 03-errors.md\n"))
 	commitAll(t, root, "seed three-work-item Codex smoke fixture")
 }
 

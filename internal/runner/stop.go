@@ -20,6 +20,7 @@ const (
 	StopVerificationRefused  StopReason = "VERIFICATION_REFUSED"
 	StopVerificationInFlight StopReason = "VERIFICATION_IN_FLIGHT"
 	StopScopeChanged         StopReason = "SCOPE_CHANGED"
+	StopReadinessPreflight   StopReason = "READINESS_PREFLIGHT"
 	StopStateTampered        StopReason = "AGENT_WROTE_FORGEPILOT_STATE"
 	StopRecoveryBlocked      StopReason = "RECOVERY_BLOCKED"
 	StopStalled              StopReason = "STALLED"
@@ -61,7 +62,7 @@ func (reason StopReason) ExitCode() int {
 		return ExitAwaitingReview
 	case StopWaitGate, StopWaitGoal, StopWaitHumanReview, StopNeedsHuman,
 		StopAgentExecutionFailed, StopVerificationRefused, StopVerificationInFlight,
-		StopScopeChanged, StopStateTampered, StopRecoveryBlocked, StopStalled:
+		StopScopeChanged, StopReadinessPreflight, StopStateTampered, StopRecoveryBlocked, StopStalled:
 		return ExitNeedsHuman
 	case StopMaxSteps, StopMaxAttempts, StopMaxDuration, StopAgentTimeout,
 		StopVerifyTimeout, StopNoProgress, StopCapacityExceeded:

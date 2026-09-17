@@ -89,6 +89,7 @@ func (runner *Runner) print(format string, arguments ...any) {
 // Plan is what --dry-run reports: everything checked, nothing done.
 type Plan struct {
 	Goal              work.Goal
+	WorkItemCount     int
 	RuntimeName       string
 	RuntimeExecutable string
 	RuntimeVersion    string
@@ -115,6 +116,11 @@ func DryRun(options Options) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	if report, err := app.ReviewGoalStoryReadiness(context.Background(), options.Root, options.GoalID); err != nil {
+		return Plan{}, err
+	} else if len(report.Defects) > 0 {
+		return Plan{}, errors.New(report.String())
+	}
 	runtime, err := agent.Resolve(options.RuntimeName, options.RuntimeCommand)
 	if err != nil {
 		return Plan{}, err
@@ -135,8 +141,12 @@ func DryRun(options Options) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	workItemCount, err := app.GoalWorkItemCount(options.Root, options.GoalID)
+	if err != nil {
+		return Plan{}, err
+	}
 	return Plan{Goal: goal, RuntimeName: runtime.Name(), RuntimeExecutable: executable,
-		RuntimeVersion: version, Budget: options.Budget, Decision: decision, Scope: scope}, nil
+		RuntimeVersion: version, WorkItemCount: workItemCount, Budget: options.Budget, Decision: decision, Scope: scope}, nil
 }
 
 var errSnapshotRequired = errors.New("--snapshot is required: this version verifies a working-tree snapshot and never commits for you")
@@ -168,6 +178,11 @@ func Start(options Options) (Record, error) {
 		if blocked != nil {
 			record = *blocked
 			return nil
+		}
+		if report, err := app.ReviewGoalStoryReadiness(context.Background(), options.Root, options.GoalID); err != nil {
+			return err
+		} else if len(report.Defects) > 0 {
+			return errors.New(report.String())
 		}
 		runner, err := newRunner(options)
 		if err != nil {
@@ -283,16 +298,19 @@ func Resume(options Options, runID string) (Record, error) {
 			return nil
 		}
 		runner := &Runner{options: resumeOptions(options, existing), record: &existing}
-		runner.runtime, err = agent.Resolve(existing.RuntimeName, existing.RuntimeCommand)
-		if err != nil {
-			return err
-		}
 		defer func() { record = *runner.record }()
 		// The previous stop is cleared before anything else: the loop treats a
 		// recorded stop as terminal, so carrying one into a resume would report
 		// the old reason again without doing any work.
 		runner.record.Stop = nil
 		if blocked, err := runner.recover(); blocked || err != nil {
+			return err
+		}
+		if stopped, err := runner.checkReadiness(); stopped || err != nil {
+			return err
+		}
+		runner.runtime, err = agent.Resolve(existing.RuntimeName, existing.RuntimeCommand)
+		if err != nil {
 			return err
 		}
 		return runner.loop()
@@ -402,6 +420,9 @@ func (runner *Runner) loop() error {
 		if stopped, err := runner.checkLimits(); stopped || err != nil {
 			return err
 		}
+		if stopped, err := runner.checkReadiness(); stopped || err != nil {
+			return err
+		}
 		if stopped, err := runner.checkScope(); stopped || err != nil {
 			return err
 		}
@@ -433,6 +454,19 @@ func (runner *Runner) loop() error {
 			return err
 		}
 	}
+}
+
+// checkReadiness keeps readiness preflight outside lifecycle ownership while
+// giving an already-recorded run a durable operational stop.
+func (runner *Runner) checkReadiness() (bool, error) {
+	report, err := app.ReviewGoalStoryReadiness(context.Background(), runner.options.Root, runner.options.GoalID)
+	if err != nil {
+		return true, err
+	}
+	if len(report.Defects) == 0 {
+		return false, nil
+	}
+	return true, runner.stopNow(StopReadinessPreflight, report.String())
 }
 
 func (runner *Runner) checkLimits() (bool, error) {

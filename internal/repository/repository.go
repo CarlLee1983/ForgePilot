@@ -15,6 +15,93 @@ import (
 // instead of leaking which internal check happened to catch it.
 const storyLocationRule = "story reference must be located under specs/stories"
 
+// StoryReadinessFiles are raw, contained bytes. The repository package does
+// not decode the sidecar or interpret either Markdown source.
+type StoryReadinessFiles struct {
+	Sidecar           []byte
+	StoryMD           []byte
+	AcceptanceMD      []byte
+	StoryMDError      error
+	AcceptanceMDError error
+}
+
+// StoryReadinessFileError identifies the fixed input that could not be read.
+// The app maps this transport fact to its typed readiness report; repository
+// deliberately makes no semantic classification itself.
+type StoryReadinessFileError struct {
+	Name string
+	Err  error
+}
+
+func (err *StoryReadinessFileError) Error() string {
+	return fmt.Sprintf("read %s: %v", err.Name, err.Err)
+}
+func (err *StoryReadinessFileError) Unwrap() error { return err.Err }
+
+// ReadStoryReadinessFiles reads the fixed v1 readiness inputs from one Story
+// directory. A sidecar or source must be a regular file directly in that
+// directory; accepting a symlink would make the contract's named-file binding
+// depend on an indirection the caller did not authorize.
+func ReadStoryReadinessFiles(root, reference string) (StoryReadinessFiles, error) {
+	normalized, err := ValidateStory(root, reference)
+	if err != nil {
+		return StoryReadinessFiles{}, err
+	}
+	storyDirectory := filepath.Join(root, normalized)
+	info, err := os.Stat(storyDirectory)
+	if err != nil {
+		return StoryReadinessFiles{}, fmt.Errorf("read Story readiness directory: %w", err)
+	}
+	if !info.IsDir() {
+		return StoryReadinessFiles{}, &StoryReadinessFileError{Name: "readiness.json", Err: errors.New("Story readiness contract requires a Story directory")}
+	}
+	read := func(name string) ([]byte, error) {
+		path := filepath.Join(storyDirectory, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("read %s: not a regular contained file", name)
+		}
+		return os.ReadFile(path)
+	}
+	sidecar, err := read("readiness.json")
+	if err != nil {
+		return StoryReadinessFiles{}, &StoryReadinessFileError{Name: "readiness.json", Err: err}
+	}
+	story, storyErr := read("story.md")
+	acceptance, acceptanceErr := read("acceptance.md")
+	files := StoryReadinessFiles{Sidecar: sidecar, StoryMD: story, AcceptanceMD: acceptance}
+	if storyErr != nil {
+		files.StoryMDError = storyErr
+	}
+	if acceptanceErr != nil {
+		files.AcceptanceMDError = acceptanceErr
+	}
+	return files, nil
+}
+
+// ContainedRegularFile reports whether path names a regular, non-symlink file
+// under root. It is a filesystem fact for app orchestration, not a readiness
+// decision.
+func ContainedRegularFile(root, path string) bool {
+	if path == "" || filepath.IsAbs(path) || strings.Contains(filepath.ToSlash(path), "../") {
+		return false
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	candidate := filepath.Join(resolvedRoot, path)
+	info, err := os.Lstat(candidate)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	return err == nil && within(resolvedRoot, resolved)
+}
+
 func ValidateStory(root, reference string) (string, error) {
 	if reference == "" || filepath.IsAbs(reference) {
 		return "", fmt.Errorf("%s: reference must be repository-relative, got %q", storyLocationRule, reference)

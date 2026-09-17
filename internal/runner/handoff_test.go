@@ -9,6 +9,7 @@ import (
 
 	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/app"
+	"github.com/CarlLee1983/ForgePilot/internal/readiness"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
@@ -102,12 +103,13 @@ func TestAnOpenGateInvalidatesAStaleResumeBeforeRuntimeLaunch(t *testing.T) {
 	if err := storage.Init(root); err != nil {
 		t.Fatal(err)
 	}
+	writeReadyStory(t, root, "a")
 	now := time.Date(2026, 9, 16, 1, 2, 3, 0, time.UTC)
 	if err := storage.Update(root, func(state *work.State) error {
 		if err := state.AddGoalWithReviewPolicy("g", "Goal", "", root, work.ReviewPerGoal, now); err != nil {
 			return err
 		}
-		item, err := state.AddWork("g", "specs/stories/a.md", nil, now)
+		item, err := state.AddWork("g", "specs/stories/a", nil, now)
 		if err != nil {
 			return err
 		}
@@ -128,6 +130,10 @@ func TestAnOpenGateInvalidatesAStaleResumeBeforeRuntimeLaunch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	scope, err := app.CurrentGoalScope(root, "g")
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtime := &refusingRuntime{}
 	runID := "run-20260916t000000-abcdef"
 	budget := Budget{MaxSteps: 10, MaxAttemptsPerWork: 3, MaxDuration: time.Hour,
@@ -136,7 +142,7 @@ func TestAnOpenGateInvalidatesAStaleResumeBeforeRuntimeLaunch(t *testing.T) {
 		options: Options{Root: root, GoalID: "g", Now: func() time.Time { return now }, Budget: budget},
 		runtime: runtime,
 		record: &Record{RunID: runID, GoalID: "g", GoalTitle: "Goal", Workspace: root,
-			Scope: app.GoalScope(mustLoadState(t, root), "g"), Budget: budget, Deadline: now.Add(time.Hour),
+			Scope: scope, Budget: budget, Deadline: now.Add(time.Hour),
 			Attempts: map[string]int{}, HumanWaits: map[string]int{}},
 	}
 	if err := runner.implement(stale.Action, stale); err != nil {
@@ -163,6 +169,21 @@ func TestAnOpenGateInvalidatesAStaleResumeBeforeRuntimeLaunch(t *testing.T) {
 	}
 	if runtime.plans != 0 {
 		t.Fatalf("runtime planned %d sessions while the Gate was open", runtime.plans)
+	}
+}
+
+func writeReadyStory(t *testing.T, root, name string) {
+	t.Helper()
+	directory := filepath.Join(root, "specs", "stories", name)
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	story, acceptance := []byte("# Story\n"), []byte("# Acceptance\n")
+	sidecar := `{"schema_version":1,"story_ref":"specs/stories/` + name + `","story_md_digest":"` + readiness.Digest(story) + `","acceptance_md_digest":"` + readiness.Digest(acceptance) + `"}`
+	for file, contents := range map[string][]byte{"readiness.json": []byte(sidecar), "story.md": story, "acceptance.md": acceptance} {
+		if err := os.WriteFile(filepath.Join(directory, file), contents, 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -48,3 +48,47 @@ func TestValidateStory(t *testing.T) {
 		t.Fatal("accepted symlinked story directory outside repository")
 	}
 }
+
+func TestReadStoryReadinessFilesReadsOnlyContainedRegularFiles(t *testing.T) {
+	root := t.TempDir()
+	storyDir := filepath.Join(root, "specs", "stories", "FP-99")
+	if err := os.MkdirAll(storyDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"readiness.json": "{\"schema_version\":1}\n",
+		"story.md":       "# Story\n",
+		"acceptance.md":  "# Acceptance\n",
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(storyDir, name), []byte(contents), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := ReadStoryReadinessFiles(root, "specs/stories/FP-99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Sidecar) != files["readiness.json"] || string(got.StoryMD) != files["story.md"] || string(got.AcceptanceMD) != files["acceptance.md"] {
+		t.Fatalf("files = %#v", got)
+	}
+
+	outside := filepath.Join(root, "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(storyDir, "acceptance.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(storyDir, "acceptance.md")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ReadStoryReadinessFiles(root, "specs/stories/FP-99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AcceptanceMDError == nil {
+		t.Fatal("accepted source symlink escape")
+	}
+}
