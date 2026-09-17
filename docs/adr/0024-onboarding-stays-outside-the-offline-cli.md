@@ -1,0 +1,13 @@
+# 安裝與 Agent 導入留在離線治理 CLI 之外
+
+ForgePilot 原先只提供 `go install` 與原始碼建置，讓沒有 Go 的開發者難以在自己的 repository 開始使用。[ADR-0010](0010-no-outbound-network-requests.md) 與 [ADR-0018](0018-runner-may-launch-a-local-coding-cli.md) 已把產品的網路邊界定在核心治理命令之外。正式導入因此採用一份與 Go CLI 分離、固定版本且可先檢閱的 shell installer，而不是讓核心命令下載自己、在第一版另發 npm／`npx` wrapper，或把 agent 指引做成產品內的 plugin framework。本 ADR 定義後續 installer、onboarding source／renderer、薄 skill adapters 與離線 acceptance harness 的責任邊界；它不宣稱這些分發表面、簽署資產、release workflow 或 immutable publication 現已交付。既有的 `go install` 保留為開發者安裝路徑。
+
+Installer 只辨識 macOS 架構、下載對應的正式 Release 資產、驗證 digest、Developer ID 簽章、預期的 ForgePilot 簽署者 Team ID／明確簽署要求與 notarization acceptance，然後安裝到使用者自己的版本化目錄。預期簽署者必須先於正式發佈固定在該版本的 installer 驗收契約內；只接受「某個」有效的 Developer ID 簽章不足以判定來源。驗證全數通過後才切換使用者擁有的 `forgepilot` 入口；失敗不得取代可用的舊版。它不使用 `sudo` 或 `curl | sh`，不修改 shell profile、受管理 repository、`.forgepilot/` state，不執行 `migrate`，也不讀取或處理 agent 登入憑證。網路請求只屬於使用者明確啟動的分發程序，既有治理命令仍完全離線。PATH 不可用時，導入文件顯示設定方式，當次操作可使用 binary 的絕對路徑。
+
+第一次使用以可貼上的短 prompt 讀取固定 commit 的版本化導入文件為入口；Codex 與 Claude Code 可選擇在使用者目錄安裝各自可發現的 skill，兩者引用同一份程序。兩者的 skill 目錄依各自的[Codex 官方文件](https://learn.chatgpt.com/docs/customization/overview#skills)與[Claude Code 官方文件](https://code.claude.com/docs/en/skills)適配，而不是假定一個安裝位置兩邊都會載入。文件讀不到時停止並提供人工下載路徑，不從記憶猜指令。Agent 先檢查 Git repository，並按預計使用的 COMMIT／SNAPSHOT Candidate 確認固定的 `make verify` target 會進入該 Candidate；只在主工作樹看到 target 不足以承諾可以驗證，ignored 且未追蹤的 Makefile 不會進入 snapshot。缺少前提時，在寫入前說明缺口；真正的 canonical precheck 仍由 ForgePilot 在 detached Candidate checkout 執行。安裝或改寫 repository 前，先展示具體動作並取得開發者授權。沒有既有 ForgeFlow Story 時，agent 可依開發者描述草擬 `specs/stories/` 下的文件，寫清意圖、範圍、可觀察的驗收條件、repository 的 canonical check、待確認的假設與既有工程指引；人檢閱後才執行 `work add`。該指令只驗 Story 路徑，不取得 Story 內容 schema 的所有權；ADR-0029 的 upstream-owned readiness contract 是 Runner preflight 的獨立 read-only input，不構成 Story schema 或核准狀態。
+
+首次驗收是以預設 `WORK_ITEM` policy 明確執行 `init → goal create → work add → status`，在自己的 repository 看見第一個 Goal 與 Work Item。未提交的 Story 之後要驗證時，文件明確教 `verify --snapshot`；普通 commit-mode `verify` 仍需人自行提交並保持工作樹乾淨，prompt 不替人 commit。Claude Code 的第一版驗收是逐步操作 CLI；`forgepilot run` 仍只啟動既有的本機 Codex runtime。Binary 升級不自動遷移 state，`migrate` 仍由開發者明確執行。
+
+**Consequences:** 分發程序需要網路及獨立的版本、驗證與兩種 Mac 架構測試；核心 CLI 的 Go 標準函式庫與離線邊界不變。首次啟動以線上導入為承諾，不承諾下載後可完全離線通過 macOS 的首次查驗。Installer、prompt 與 skill 的安裝或 repository 寫入各自受開發者當下的授權約束。
+
+**Falsified if:** `internal/cli/`、`internal/app/` 或 `internal/repository/` 開始為安裝 ForgePilot 發出網路請求；分發程序自行執行 `internal/storage/migrate.go` 對應的 state 遷移或修改受管理 repository；導入程序只看主工作樹就宣稱 `internal/repository/verification.go` 固定的 `make verify` 能在 Candidate 執行；或 Story 草稿被當成 `internal/work/` 已核准的需求狀態。任一項發生，分發與治理的責任邊界已改變。

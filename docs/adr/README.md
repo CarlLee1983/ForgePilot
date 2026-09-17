@@ -29,6 +29,8 @@
 | [0021](0021-execution-limits-are-bounded-and-named.md) | 停止原因在觸發當下寫定；單次期限與總期限取小；清理寬限是另一個量，且必須確認 | accepted |
 | [0022](0022-pending-cleanup-outlives-the-process.md) | 未確認的清理持久化為 workspace 層級的恢復阻擋，與「上一次為什麼停」分開 | accepted |
 | [0023](0023-verification-does-not-submit-for-review.md) | Verification 只記錄 Evidence；只有明確 `review request` 才送入 Human Review | accepted |
+| [0024](0024-onboarding-stays-outside-the-offline-cli.md) | 安裝與 Agent 導入是分發程序，不讓核心治理 CLI 下載自己或接管 Story 內容 | accepted |
+| [0025](0025-formal-macos-release-trust.md) | 正式 macOS binary 導入須先完成簽署、原生驗收與經核准的 immutable Release | accepted |
 | [0026](0026-resolved-gates-cross-agent-session-boundaries.md) | Resolved Gate 從 current state 投影到後續 session；合法 Human wait 不消耗 technical attempt budget | accepted |
 | [0027](0027-candidate-verification-pass-fans-out-by-run.md) | 同 Goal stale 工作共享一個 Candidate Verification Run；只有 PASS 原子 fan-out | accepted |
 | [0028](0028-agent-session-checks-are-diagnostic.md) | Agent Session 做 focused diagnostics；Runner canonical Verification 是唯一 PASS owner | accepted |
