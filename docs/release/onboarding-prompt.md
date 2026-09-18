@@ -8,8 +8,11 @@ Introduce ForgePilot to this repository from source repository <repository> at
 full 40-character commit SHA <sha> on an Apple Silicon Mac. First follow the inspection-only section of
 the source-built onboarding procedure. Print the exact source fetch, build,
 make verify, entrypoint, and repository-write plan; wait for my first explicit approval before source work and my second explicit approval before repository
-writes. If Go is missing, stop and explain options. Do not install Go, commit,
-migrate, approve a review, resolve a Gate, or publish for me.
+writes. If Go is missing or incompatible, stop at the Go prerequisite and
+explain options. Do not install Go, commit,
+migrate, approve a review, resolve a Gate, or publish for me. On failure, keep
+the old entrypoint and report only a sanitized action/exit summary; do not
+retain raw command output or environment values.
 ```
 
 Do not replace the SHA with a branch, tag alias, `main`, or `latest`. If the

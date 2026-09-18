@@ -37,13 +37,29 @@ EXPLICIT APPROVAL before any one of those actions.
 
 Use only an already-installed compatible Go toolchain. If Go is missing or does
 not satisfy the project, stop and explain the prerequisite or installation
-options; do not install Go, a package manager, or alter a shell profile.
+options; do not install Go, a package manager, or alter a shell profile. Compare
+the reported toolchain with the `go` directive at the exact reviewed ForgePilot
+`source_commit`; do not read it from ambient worktree content.
+Disable Git lazy fetch and replacement objects for that exact-commit read.
+An incompatible version stops at `go-prerequisite`, before staging.
 
 Build the exact source commit with `GOBIN` set to a user-owned versioned staging
 directory and `go install ./cmd/forgepilot`, run the disclosed `make verify`
 there, and confirm the staged CLI starts. Only then
 perform the displayed atomic entrypoint switch. A failure leaves the existing
 entrypoint unchanged.
+
+On any source-action failure, stop before later actions. A durable or shared
+diagnostic uses only the safe fields `source_commit`, `failed_action`, `cause`,
+`exit_status`, `entrypoint_preserved`, `target_state_preserved`, and
+`temporary_entrypoint_present`, plus the fixed `raw_command_output=omitted`
+marker. Omit raw stdout/stderr, environment values, credential-bearing source
+URLs, absolute local paths, and shell state. Local command output may be used
+transiently for diagnosis, but redact it before retaining or sharing the
+result. If `entrypoint-link` succeeded and `entrypoint-switch` failed, the old entrypoint
+remains authoritative; report the leftover `.new` path only through
+`temporary_entrypoint_present` and require explicitly reviewed cleanup before
+replanning.
 
 ## Reuse state, review Story, then ask again
 

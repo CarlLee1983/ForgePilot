@@ -81,18 +81,19 @@
 * R11: The public plan is advisory. It statically inspects the Candidate and emits exact actions/effects; it never fetches, builds, verifies, changes the entrypoint, writes the target, invokes `make -n`, or executes Git filters during inspection.
 * R12: A COMMIT Candidate is a lowercase full 40-character SHA that equals current target `HEAD`; a stale or symbolic value fails. SNAPSHOT follows the private-index/HEAD composition rules, including ignored/untracked Makefile behavior, and rejects transformations that need execution to inspect.
 * R13: The harness must install and validate each real #34 adapter under its temporary Codex or Claude home, then consume #33's action records. It must not replace the artifacts with an adapter enum or a duplicate command list.
-* R14: First explicit approval precedes every source action. The declared sequence is Go prerequisite → staging → clone → exact fetch/detached checkout → local build → `make verify` → startup → entrypoint switch. Missing Git, missing Go, or a failed source step leaves the entrypoint and target state untouched.
+* R14: First explicit approval precedes every source action. The declared sequence is Go prerequisite → staging → clone → exact fetch/detached checkout → local build → `make verify` → startup → entrypoint switch. Go compatibility is evaluated against the exact source commit with lazy fetch and replacement objects disabled, never ambient worktree content. Missing Git, missing or incompatible Go, or a failed source step leaves an existing entrypoint and target state untouched.
 * R15: A valid existing Story is reused. A missing or unsafe Story causes a draft/review stop before target writes, including when `.forgepilot/` state already exists. Story components and leaf files must be contained non-symlinks; leaves must be regular files.
 * R16: Second explicit approval precedes `forgepilot init`, `goal create`, and `work add`. The plan and harness never install Go or edit a shell profile.
 * R17: Each opt-in is enabled only when its test-only variable is exactly `1`. All other values, including unset, skip before fixture creation, login access, agent-output parsing, artifact export, or spy execution.
 * R18: When enabled, #35 reaches only a generated fixture-local spy with a scrubbed environment. It must neither resolve nor execute an ambient Codex/Claude binary. This does not satisfy #39's real-model compliance acceptance.
 * R19: Exported test reports omit raw agent output and credentials and set `verification_run:false`.
+* R20: Source-action failure diagnostics retain only source commit, action ID, safe cause, exit result, entrypoint/target preservation booleans, temporary-entrypoint presence, and an output-omitted marker. They omit raw command output, environment values, credential-bearing source URLs, absolute local paths, and shell state; this source-install diagnostic contract is distinct from agent-output evidence export.
 
 ## Expected Errors
 
 * Any opt-in value other than exact `1` skips without side effects.
 * A non-Git target, missing Git, unknown Candidate kind, non-HEAD COMMIT, unsafe/indeterminate SNAPSHOT, missing static `verify` target, or unsafe Story fails closed before target writes.
-* Missing Go, a failed build/verification, declined first approval, declined second approval, or declined Story-draft authorization stops at that boundary.
+* Missing or incompatible Go, a failed build/verification/entrypoint switch, declined first approval, declined second approval, or declined Story-draft authorization stops at that boundary without replacing an existing entrypoint.
 * Invalid or fixture-contained export paths, duplicate export reports, or non-sanitized reports fail without overwriting a prior report.
 
 ## Dependencies

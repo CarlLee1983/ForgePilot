@@ -43,6 +43,8 @@
 * [x] AC-027: Candidate inspection 保持靜態且 advisory：approval 前不執行 `make -n`、`git add`、Git filters、repository recipe 或任何 Candidate-derived executable mechanism。
 * [x] AC-028: First explicit approval 前不得開始 source fetch/build/verify/entrypoint change；Git／Go 缺失、build 失敗或 `make verify` 失敗都在 target 寫入前停止。Second explicit approval 前不得執行 target-repository writes。
 * [x] AC-029: Story missing 或不安全時（包括 symlink/partial leaf）必須在 `work add` 前 draft/review stop；既有 state 亦不可略過此停點。
+* [x] AC-030: 缺少或不相容的 Go、`make verify` 失敗，以及 entrypoint switch 失敗都在 target state 寫入前停止，並 byte-for-byte 保留既有 target state 與 entrypoint；Go 相容性綁定 exact source commit 的 `go.mod`，停用 lazy fetch 與 replacement objects，不相容時在 staging 前的 prerequisite boundary 停止。
+* [x] AC-031: Source-action failure diagnostic 只保留 source commit、action ID、safe cause、exit result、preservation/residue booleans 與 output-omitted marker；raw stdout/stderr、環境值、絕對路徑及合成 credential 不進入 retained diagnostic。
 
 ## Acceptance Evidence
 
@@ -52,6 +54,7 @@
 | `AC-002` | test | root onboarding tests' `t.TempDir` fixtures | one temporary repository per case | repository and its state are removed by test cleanup |
 | `AC-010`–`AC-014`, `AC-016`–`AC-017`, `AC-021` | subprocess test | `onboarding_opt_in_test.go: TestOnboardingOptInSubprocessOrdering, TestOnboardingEvidenceContainmentAndClaimSeparation` | scrubbed environment and generated executable spy | exact `1` reaches only the spy; all rejected/unset values cause no side effects; export is sanitized and cannot claim verification |
 | `AC-018`–`AC-019`, `AC-025`–`AC-027`, `AC-029` | test | `onboarding_plan_test.go`; `TestOnboardingRejectsMutatedPlanBeforeAnyExecution` | target Candidate and public `--format actions` plan | preflight, protocol, static inspection, Candidate binding, and containment fail closed |
+| `AC-030`–`AC-031` | test | `onboarding_acceptance_test.go: TestOnboardingSourceFailureDiagnosticsAreSanitized` | existing state bytes and entrypoint sentinel plus generated missing/incompatible Go, verification-failure, and switch-failure executables | each failure stops at its exact boundary, preserves state and entrypoint, records switch residue as a boolean, and emits only the safe diagnostic schema without the synthetic credential |
 | `AC-023` | command | `make verify` | repository checkout | exit 0 (2026-09-17 final integration run) |
 | `AC-024` | command | `go test -race -count=1 ./...` | repository checkout | exit 0; existing smoke skip behavior unchanged (2026-09-17 final integration run) |
 
@@ -105,3 +108,20 @@ No commit, push, publish, migration, or issue closure was performed. Unrelated
 working-tree changes, including the ADR-0013 Story-directory regression, remain
 preserved. Superseded test-only production onboarding code was removed; no
 product state or schema changed.
+
+## AC4 failure-path follow-up evidence
+
+2026-09-18, after the Apple Silicon native acceptance closure audit found the
+missing failure-path evidence:
+
+| Command / review | Exit result |
+| --- | --- |
+| `go test -run '^(TestOnboardingSourceFailureDiagnosticsAreSanitized|TestOnboardingGoCompatibilityIgnoresReplacementObjects)$' -count=1` | 0; missing/incompatible Go, verification failure, switch failure, safe diagnostic schema, state/entrypoint preservation, and replacement-object isolation passed |
+| `sh scripts/onboarding/onboarding_test.sh` | 0 |
+| `make verify` | 0; root Go suite 485.319s, all shell checks and CLI build passed |
+| `go test -race -count=1 ./...` | 0; root suite 447.988s, all packages passed |
+| independent Sol/high delta review | clean; no remaining material finding after exact-commit, sanitization, preservation, and replacement-object repairs |
+
+The source-action diagnostic is test-only evidence about the shared onboarding
+procedure. It remains separate from ForgePilot Verification Evidence and never
+retains raw command output, environment values, credentials, or local paths.
