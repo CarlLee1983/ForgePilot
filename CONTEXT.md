@@ -43,6 +43,15 @@ _Avoid_：Work Item requirement、ForgePilot-owned Story schema、Story Markdown
 **Story Source Digest**：Story Readiness Contract 對其命名的 `story.md` 或 `acceptance.md` 原始 bytes 所宣告的 SHA-256 identity。PraxisBound 產生它；ForgePilot 只重算 bytes 並比對，不解析 Markdown。
 _Avoid_：Markdown semantic hash、ForgePilot-owned criterion coverage、可由 prose 推論的宣告
 
+**Goal Plan Manifest**（[已定案，待實作](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：PraxisBound 對一份 Goal 計畫所宣告的完整工作節點、依賴與 Story 契約集合；ForgePilot 以它核對登錄是否完整且一致。它不是原始需求沒有漏拆的證明。
+_Avoid_：Run Record、未來 action 清單、需求覆蓋證明
+
+**Plan Node Reference**（[已定案，待實作](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：Goal Plan Manifest 中一個工作節點的識別，在同一 Goal 內與一張 Work Item 明確對應；不同節點可引用同一個 Story。
+_Avoid_：Story path、External Work Reference、Work Item lifecycle
+
+**Plan Coverage Review**（[已定案，待實作](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：PraxisBound 對原始需求與 Goal 計畫之間覆蓋關係所提供、經明確人工核准且綁定受審來源與計畫版本的審查結論；它與 ForgePilot 核對計畫是否完整登錄是不同的責任。
+_Avoid_：manifest 集合相等、Verification PASS、Human final acceptance
+
 **Whole-DAG Story Readiness Review**：ForgePilot 在一個 Goal 上對所有 Story Readiness Contracts、Work Item dependency DAG 與本機 artifact facts 所做的 read-only preflight；它回報規劃缺陷，既不是 Work Item Readiness projection、Gate、Evidence，也不授權 lifecycle transition。
 _Avoid_：Verification、Agent judgment、second state machine、PASS
 
@@ -102,6 +111,18 @@ _Avoid_：daemon、排程器、第二套工作狀態機、自動核准者
 
 **Agent Session**：Runner 為一張 Work Item 的一次 attempt 所啟動的一個全新 coding CLI 程序。每次實作或修復都是新的 session，不延續前一次對話。
 _Avoid_：長對話、跨 Work Item 的脈絡、Verification Run
+
+**Main Agent Session**（[已定案，待實作](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：使用者下達執行意圖、查看進度與接手工作的外部 Agent 對話；它透過 ForgePilot 的公開介面調派工作，不擁有 Work Item lifecycle 或合法動作判定權。
+_Avoid_：Runner 啟動的 Agent Session、程序 supervisor、持久化進度來源
+
+**Execution Authorization**（[已定案，待實作](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：使用者對指定 workspace 與 Goal 給予的有界執行授權，每個版本綁定計畫、Worker Profile、ForgePilot 引擎版本、總額度與固定到期時間，累計消耗跨 run 與授權修訂保留。它不授予 Human Decision、Human acceptance 或額外工程範圍。
+_Avoid_：Run Record、單次 run 預算、無限續跑、經過認證的身分
+
+**Worker Profile**（[已定案，待實作](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：一個 Execution Authorization 版本內實作與修復共用、綁定解析後 executable 身分的 Agent runtime、model、effort 與權限選擇；resume 與跨 run 續接沿用同一份選擇。
+_Avoid_：Agent Session Check Profile、Verification Runtime Contract、調派模型
+
+**External Fulfillment Declaration**（[已定案，待實作](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：對 ForgePilot 無法離線查證的外部條件所作、綁定計畫與授權版本、節點、條件及等待項目的具名自述確認，供明確 resume 使用。
+_Avoid_：Verification Evidence、Gate resolution、Human final acceptance、經查證的外部事實
 
 **Agent Session Check Profile**：Runner handoff 對該次 Agent Session 的檢查責任說明；session 做 focused diagnostics，Runner 另行擁有正式 Candidate Verification，project instructions 指定的 integration/final owner 再負責 canonical 以外的 gates。它是 instruction-only，不是 Evidence 或另一套 Verification。
 _Avoid_：Worker Verification、PASS claim、check attestation、repository command manifest

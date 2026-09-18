@@ -413,6 +413,19 @@ Schema v4 相對 v3 只有新增：`schema_version` 改為 4、Evidence 加入�
 
 ## Long-running Runner：`forgepilot run`
 
+**已定案，尚未實作：** 長任務設計採用 PraxisBound 的完整計畫與人工覆蓋核准，以
+Plan Node Reference 對應 Work Item；同 Goal 修訂保留既有節點／Story reference／依賴。
+Execution Authorization 的歷史與消耗跨 run／修訂保留，各版本綁定計畫、Worker Profile、
+固定 ForgePilot 引擎、顯式總額度與到期時間；只在單 run steps／duration 用完且條件仍有效時自動續接。
+授權層明確續接與 exact-run resume 分開；所有 Runner 入口共用授權，既有 run 經明確切換後保留為歷史。
+背景執行獨立於 Main Agent Session，使用者暫停必須持久化並明確 resume。
+CLI、主 Session 與首版唯讀 TUI 共用進度判定來源，inspection 不啟動 subprocess；
+actual probes 由正式啟動管理，未重新確認的 freshness 顯示歷史觀察或未知。
+引擎升級須暫停並修訂授權，受引用版本不能被分發清理；無法以相符備份恢復的總帳不提供重設。
+完整契約見
+[accepted ADR-0035](adr/0035-supervised-goal-execution-with-bounded-rollover.md)。
+下文仍描述既有 Runner；不得把新方向當成目前的存活或續跑保證。
+
 Runner 由使用者明確啟動，對單一 Goal 循序執行：取得下一個合法動作、必要時開一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續。範圍與驗收見 [specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)。
 
 責任分工是全部：**Runner 負責執行，ForgePilot 負責判定，PraxisBound 負責工程驗證規範。**
