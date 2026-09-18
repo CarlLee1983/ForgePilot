@@ -85,6 +85,40 @@ M1 每個 `.forgepilot/` 管理一個 repository，可以包含多個 Goal；不
 
 Story reference 為 repository-relative path，必須存在於 `specs/stories/` 內。可指向 ForgeFlow 所使用的檔案或目錄；不猜測其 business schema。路徑正規化與 symlink 解析後仍須在允許範圍，拒絕逃出 repository 的 reference。
 
+### Whole-DAG Story readiness review
+
+PraxisBound owns an opt-in-to-Runner, versioned `readiness.json` sidecar in every
+Story directory. It validates the sidecar's correspondence to `story.md` and
+`acceptance.md` and generates a SHA-256 digest of each file's raw bytes; ForgePilot
+does not parse either Markdown file or own their schema.
+The only proposed v1 sidecar declares Story identity; criterion operations, owner and
+future identities; repository or prerequisite inputs; outputs; and exact resolved-Gate
+decision follow-ups. A `runner_worker` may only require the fixed `plan`／`modify`
+capability set. A missing, malformed, unsupported or unsafe sidecar fails the review
+closed; it is never read as an empty contract or reconstructed from prose. This is the
+narrow amendment to ADR-0013 recorded in accepted ADR-0029.
+
+The proposed app orchestration loads one Goal's state, contained sidecar and named
+source bytes via `internal/repository`, resolved Gates and local artifact facts, then
+invokes one pure whole-DAG review module. The module accepts only values and returns
+every stable defect in deterministic order. It compares declared source digests with
+raw-byte digests but never reads files, Git, state, CLI output, Runner history or
+Evidence, and it does not implement a Work Item transition or readiness predicate.
+`internal/work` retains lifecycle and dependency-progression ownership;
+`internal/runner` asks `internal/app` for the typed review result and never parses a
+Story or derives defects itself.
+
+`run`／`resume` will perform recovery before the review, then review after Goal
+eligibility and before runtime resolution, run-record creation, snapshot capture,
+external execution or a lifecycle write. An active Runner repeats the same app review
+before each action; sidecar and recomputed source digests join the existing Goal scope
+fingerprint so a changed valid declaration or source stops the run, while a changed
+source without a regenerated sidecar fails the review. A clean report grants no action:
+typed next selection, Gates, Candidate facts and existing transitions remain
+authoritative. A defect refuses a new run or stops an existing run operationally; no
+report is persisted and it creates no Evidence, Gate or lifecycle state. Full v1 rules
+and acceptance matrix are in [the Story readiness review spec](specs/story-readiness-review/spec.md).
+
 M1 不要求受管理專案已提供 `make verify`；該檢查與執行屬於 M2。ForgePilot 自身的 `make verify` 則由 M1 交付。
 
 Repository 路徑搬移、跨 worktree 共用 state 與 repository identity migration 尚未定義；M1 不默默重綁到其他 repository。

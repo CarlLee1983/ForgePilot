@@ -19,6 +19,18 @@ _Avoid_：Story ID 的替代品、可修改 metadata、跨 Goal 全域 ID、完�
 **ForgeFlow Story**：由 ForgeFlowV2 管理的工程契約，包含需求、acceptance criteria 與工程指引。ForgePilot 自身借用 ForgeFlowV2 的 Story 目錄格式（`specs/stories/<story-id>/` 下的 `story.md` 與 `acceptance.md`），但不交出治理所有權；`specs/stories/m5-*.md` 是 M5 當時手寫的兩份，保留為刻意的歷史偏離。取捨見 [ADR-0013](docs/adr/0013-forgepilot-self-adoption-of-forgeflow.md)。
 _Avoid_：ForgePilot requirement、Work Item 的需求副本
 
+**Story Readiness Contract**：由 ForgeFlowV2／PraxisBound 擁有、隨單一 ForgeFlow Story 提供的版本化 machine-readable 宣告；它列出 ForgePilot 可讀取的 inputs、outputs、criterion operations、future identities 與 decision follow-up refs，但不把 Story schema 或核准權交給 ForgePilot。取捨見 [ADR-0029](docs/adr/0029-story-readiness-contract-is-upstream-owned.md)。
+_Avoid_：Work Item requirement、ForgePilot-owned Story schema、Story Markdown inference
+
+**Story Source Digest**：Story Readiness Contract 對其命名的 `story.md` 或 `acceptance.md` 原始 bytes 所宣告的 SHA-256 identity。PraxisBound 產生它；ForgePilot 只重算 bytes 並比對，不解析 Markdown。
+_Avoid_：Markdown semantic hash、ForgePilot-owned criterion coverage、可由 prose 推論的宣告
+
+**Whole-DAG Story Readiness Review**：ForgePilot 在一個 Goal 上對所有 Story Readiness Contracts、Work Item dependency DAG 與本機 artifact facts 所做的 read-only preflight；它回報規劃缺陷，既不是 Work Item Readiness projection、Gate、Evidence，也不授權 lifecycle transition。
+_Avoid_：Verification、Agent judgment、second state machine、PASS
+
+**Delivered Input**：由 prerequisite Story Readiness Contract 宣告、被 downstream Story contract 消費的 output；它是規劃關係，不是已被實作或取得 Verification PASS 的主張。
+_Avoid_：Evidence、verified artifact、implicit prose dependency
+
 **Gate**：依附於單一 Work Item、需要明確 Human Decision 才能解除的工程決策關卡；提出時必須列出至少兩個選項。未解除的 Gate 阻擋該工作推進，但不改變它的狀態。
 _Avoid_：自動核准、驗證失敗、Goal 層級的阻擋
 
