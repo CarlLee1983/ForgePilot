@@ -322,7 +322,7 @@ func TestWorkAddWithoutStoriesDirectoryNamesTheMissingDirectory(t *testing.T) {
 	if err == nil {
 		t.Fatalf("unexpectedly succeeded: %s", output)
 	}
-	if !strings.Contains(output, "specs/stories does not exist") || !strings.Contains(output, "ForgePilot expects ForgeFlow Story files") {
+	if !strings.Contains(output, "specs/stories does not exist") || !strings.Contains(output, "ForgePilot expects PraxisBound Story files") {
 		t.Fatalf("output %q does not name the missing directory", output)
 	}
 	if strings.Contains(output, "lstat") {
@@ -520,7 +520,7 @@ func fixture(t *testing.T) (string, string) {
 }
 
 // fixtureWithoutStories is fixture minus specs/stories: a repository that has
-// never adopted ForgeFlow, which is the one shape none of the other fixtures
+// never adopted PraxisBound, which is the one shape none of the other fixtures
 // exercise since they all pre-create the directory.
 func fixtureWithoutStories(t *testing.T) (string, string) {
 	t.Helper()

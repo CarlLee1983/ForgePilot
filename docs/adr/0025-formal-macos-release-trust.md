@@ -3,8 +3,10 @@
 **Status relation:** [ADR-0030](0030-source-built-onboarding-without-apple-developer.md) 改定目前
 supported onboarding 為 source-built，因為維護者不使用 Apple Developer Program；
 [ADR-0032](0032-formal-macos-onboarding-is-apple-silicon-only.md) 再把正式 macOS 支援面限定為
-Apple Silicon。本 ADR 保留為未來若要重新提供 signed prebuilt macOS binary 時不可放寬的信任門檻，
-不再是目前導入的前提；其中原本的雙架構要求由 ADR-0032 取代。
+Apple Silicon；[ADR-0033](0033-source-built-bootstrap-separates-distribution-from-onboarding.md)
+新增的 source-built Bootstrap 不改變本 ADR 的 signed-prebuilt 門檻。本 ADR 保留為未來若要重新提供
+signed prebuilt macOS binary 時不可放寬的信任門檻，不再是目前導入的前提；其中原本的雙架構要求由
+ADR-0032 取代。
 
 預編譯 binary 解除了 Go 的安裝前提，也使開發者與 agent 必須判斷下載到的是不是預期版本。未簽署資產加上 checksum 可以較快試用，但 checksum 無法單獨證明發佈者身分，macOS 也可能阻擋首次執行。因此正式的「貼 prompt 導入」承諾只適用於 Developer ID 簽署、與預先固定的 ForgePilot 簽署者 Team ID／明確簽署要求相符、且 notarized 的 Apple Silicon `arm64` macOS 15+ Release；未簽署試用流程不得稱為正式導入。[Apple 的 code-signing requirements 說明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)可用於定義與查驗預期簽署者。
 

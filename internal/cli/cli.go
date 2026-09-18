@@ -62,7 +62,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   review <approve|reject> <work-id> [--pr <owner/name#number>]
   status [--work <work-id> --summary] print full status, or one Work Item's current summary
 
-ForgePilot does not replace ForgeFlow or your coding agent. Nothing here makes
+ForgePilot does not replace PraxisBound or your coding agent. Nothing here makes
 a network request; the run command launches the local coding CLI you name, and
 that CLI may contact a model service of its own.
 `

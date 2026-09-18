@@ -1,5 +1,11 @@
 # ForgePilot source-built onboarding procedure
 
+> **Current procedure:** this document describes the current coupled
+> source-built walkthrough. ADR-0033 accepts a future Bootstrap that installs a
+> same-version CLI and Codex skill before Repository Onboarding; it is not
+> implemented yet. Its design is [documented separately](bootstrap.md), so these
+> instructions must not claim that `scripts/forgepilot-bootstrap` exists.
+
 Formal onboarding builds ForgePilot from a developer-supplied, full 40-character
 commit SHA. It is not a prebuilt-binary, signing, or platform-trust promise.
 The procedure is outside ForgePilot's offline governance CLI.
@@ -67,7 +73,7 @@ After the target preflight, read and reuse that ForgePilot state if
 `.forgepilot/` already exists. Do not rerun `init` or overwrite existing Goals
 or Work Items.
 
-When a valid ForgeFlow Story already exists, use its path. Otherwise draft
+When a valid PraxisBound Story already exists, use its path. Otherwise draft
 `specs/stories/<story-id>/story.md` and `acceptance.md` with intent, scope,
 observable acceptance criteria, `make verify`, assumptions, and relevant
 guidance. Present it for human review. Do not run `forgepilot work add` until

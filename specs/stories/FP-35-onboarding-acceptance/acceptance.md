@@ -19,7 +19,7 @@
 * [x] AC-012: `FORGEPILOT_ONBOARDING_CODEX_ACCEPTANCE` 精確等於 `1` 時，opt-in 判斷評估為 enabled，流程只會到 generated test spy；spy 記錄原本會 dispatch 的 agent action，而不解析或執行真實 Codex、登入、環境憑證或模型 CLI。判斷順序仍先於建立 fixture、讀取登入與解析輸出。
 * [x] AC-013: `FORGEPILOT_ONBOARDING_CLAUDE_ACCEPTANCE` 精確等於 `1` 時，opt-in 判斷評估為 enabled，流程只會到 generated test spy；spy 記錄原本會 dispatch 的 agent action，而不解析或執行真實 Claude Code、登入、環境憑證或模型 CLI。判斷順序仍先於建立 fixture、讀取登入與解析輸出。
 * [x] AC-014: generated spy 回傳的 exit code 為 0 或輸出文字宣稱成功，都只被記錄為 sanitized agent-output-only test report，不被呈現或記錄為 ForgePilot 的 Verification PASS 或 Evidence。
-* [x] AC-015: repository 已有合法 ForgeFlow Story 時流程引用既有 Story；沒有既有 Story 時才草擬新 Story 供人於 `work add` 前檢閱。
+* [x] AC-015: repository 已有合法 PraxisBound Story 時流程引用既有 Story；沒有既有 Story 時才草擬新 Story 供人於 `work add` 前檢閱。
 
 ## Failure Cases
 

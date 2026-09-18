@@ -117,7 +117,7 @@ func ValidateStory(root, reference string) (string, error) {
 	}
 	base, err := filepath.EvalSymlinks(filepath.Join(root, "specs", "stories"))
 	if errors.Is(err, os.ErrNotExist) {
-		return "", errors.New("specs/stories does not exist in this repository; ForgePilot expects ForgeFlow Story files to live under specs/stories")
+		return "", errors.New("specs/stories does not exist in this repository; ForgePilot expects PraxisBound Story files to live under specs/stories")
 	}
 	if err != nil {
 		return "", fmt.Errorf("resolve story directory: %w", err)

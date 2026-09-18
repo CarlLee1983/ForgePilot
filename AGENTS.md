@@ -80,9 +80,11 @@ Commit 格式 `<type>: [ <scope> ] <subject>`，scope 用 milestone 代號（`m4
 
 ## 驗證
 
-`make verify` 是這個專案自己的 canonical check（格式、`go vet`、`go test ./...`、CLI build），也是它對受管理專案要求的同一個命令。另跑 `go test -race -count=1 ./...`。
+**驗證分級：** 修改文件／靜態頁面、圖、Go／Makefile、release／onboarding／skill scripts 前，先讀 [development plan 的變更面驗證矩陣](docs/development-plan.md#變更面驗證矩陣)，執行該變更面直接需要的檢查並回報未跑的完整 gate 與理由。
 
-**開工前自己重跑一次。** 任何文件裡寫的「上次通過了」都是紀錄，不是現在的結果。
+`make verify` 是這個專案自己的 canonical full gate（格式、`go vet`、`go test ./...`、CLI build 與 release／onboarding／skill regressions），也是它對受管理專案要求的同一個命令。`go test -race -count=1 ./...` 是 integration／final acceptance 的 race gate；兩者在 Story、release、整合或 Human final acceptance 明定時必跑，不以 focused check 取代。
+
+**開工前自己重跑一次受影響的檢查。** 任何文件裡寫的「上次通過了」都是紀錄，不是現在的結果。
 
 **ForgePilot Runner 啟動的 Agent Session 是明列例外。** handoff 出現 Agent Session Check Profile 時，只跑 Story／變更直接相關的 focused checks；不要為了滿足 repository-wide Story AC 重跑 `make verify` 或 `go test -race -count=1 ./...`。這些 AC 是轉交、不是取消：Runner 在 `implementation_finished` 後負責正式 `make verify`，人所指揮的 primary integration/final workflow 在 `AWAITING_GOAL_REVIEW` 後、Human final acceptance 前負責 race gate，並在 final handoff 回報 command 與 exit result。Repair session 從 handoff 指定的正式 failure log 做最小重現；只有為診斷該 failure 所必需時才擴大檢查。離開 Runner Agent Session 後，前述兩個完整 gate 與開工前 baseline 規則照常適用。
 

@@ -8,7 +8,7 @@
 
 **Status:** done
 
-- [x] `review approve` append 一筆 APPROVED Evidence，綁定 repository、Work Item、ForgeFlow Story、當下的完整 commit SHA、自述審查者與時間
+- [x] `review approve` append 一筆 APPROVED Evidence，綁定 repository、Work Item、PraxisBound Story、當下的完整 commit SHA、自述審查者與時間
 - [x] `review reject` append 一筆 REJECTED Evidence 並要求理由，缺少時被拒絕
 - [x] REJECTED 把 Work Item 退回 RUNNING
 - [x] 審查者身分預設取自 Git 設定，可由參數覆寫

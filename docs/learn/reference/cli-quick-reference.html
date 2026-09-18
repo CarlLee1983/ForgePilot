@@ -4,14 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ForgePilot CLI 快速參考</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../../tokens.css">
 <link rel="stylesheet" href="../assets/course.css">
 </head>
 <body>
+
+<!-- 微動態自然水波光暈 -->
+<div class="ambient-scene" aria-hidden="true">
+  <div class="ambient-glow-top"></div>
+  <div class="ambient-glow-bottom"></div>
+</div>
+
+<nav class="site-nav" aria-label="主要導覽">
+  <div class="site-nav__inner">
+    <a class="wordmark" href="../../index.html">
+      <span class="brand-diamond"></span>
+      <span>ForgePilot</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="../../index.html">首頁</a></li>
+      <li><a href="../../guide.html">完整導覽</a></li>
+      <li><a href="../handbook.html">使用手冊</a></li>
+      <li><a href="cli-quick-reference.html" class="active">指令速查表</a></li>
+      <li><a href="../../architecture.md">架構</a></li>
+    </ul>
+    <div class="nav-actions">
+      <a class="command-trigger" href="../../index.html">
+        <span>回首頁</span>
+      </a>
+    </div>
+  </div>
+</nav>
+
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">Reference · 印得出來的一頁</p>
-  <h1>ForgePilot CLI 快速參考</h1>
+  <div class="hero-tag">
+    <span class="hero-tag-dot"></span>
+    <span>Reference · 印得出來的一頁</span>
+  </div>
+  <h1>ForgePilot CLI <span class="mark-accent">快速參考</span></h1>
   <p class="lede">十個指令、六個狀態、四項完成條件，以及每一個會拒絕你的地方。以 <code>internal/cli</code> 的實際行為為準。</p>
 </header>
 

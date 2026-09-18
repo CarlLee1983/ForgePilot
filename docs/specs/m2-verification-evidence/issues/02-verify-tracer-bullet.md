@@ -12,7 +12,7 @@
 
 - [x] `verify` 在乾淨工作樹上解析目前 HEAD，並在以 detach 加完整 SHA 建立的隔離 worktree 中執行受管理專案的 canonical 檢查
 - [x] 通過時 Work Item 進入 REVIEW，失敗時退回 RUNNING
-- [x] 每次執行 append 一筆 Evidence，含 repository、Work Item、ForgeFlow Story、完整 commit SHA、實際執行的 command、exit code、result、type、遞增 ID 與 timestamp
+- [x] 每次執行 append 一筆 Evidence，含 repository、Work Item、PraxisBound Story、完整 commit SHA、實際執行的 command、exit code、result、type、遞增 ID 與 timestamp
 - [x] 既有 Evidence 永不被覆寫
 - [x] 工作樹有已修改的 tracked 檔案、staged 變更或未追蹤檔案時拒絕執行且不留 Evidence；ignored 檔案不計入
 - [x] 受管理專案沒有 canonical 檢查的 target 時拒絕執行且不留 Evidence

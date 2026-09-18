@@ -6,7 +6,7 @@ Intel 支援，會把無法持續驗證的路徑變成產品契約。正式 plan
 拒絕非 Darwin `arm64` host，且公開文件不得把跨編譯或 unsigned `amd64` trial asset 當成 Intel
 支援證據。
 
-這項決定只縮小平台支援面，不放寬 ADR-0030 的固定 source SHA、兩次明確核准、canonical
+這項決定只縮小平台支援面，不放寬 ADR-0030 與 ADR-0033 的固定 source SHA、明確核准、canonical
 verification 與原子 entrypoint 切換，也不改變 ADR-0025 對未來 signed prebuilt binary 的簽署、
 notarization 與 immutable publication 門檻。ADR-0025 與 ADR-0030 中要求 Intel 與 Apple Silicon
 雙架構原生驗收的部分由本 ADR 取代；若未來恢復 Intel 支援，必須另行決定並以原生 Intel Mac

@@ -34,7 +34,7 @@ implicit empty declaration.
 ## Domain terms
 
 - **Story Readiness Contract** is the upstream-owned, versioned declaration of one
-  ForgeFlow Story's machine-checkable inputs, outputs, acceptance-criterion
+  PraxisBound Story's machine-checkable inputs, outputs, acceptance-criterion
   operations, future-identity dependencies, and decision follow-up references.
 - **Whole-DAG Story Readiness Review** is ForgePilot's read-only comparison of every
   Story Readiness Contract in one Goal against that Goal's Work Item dependency DAG

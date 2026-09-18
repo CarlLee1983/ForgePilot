@@ -2,7 +2,9 @@
 
 **Status relation:** [ADR-0032](0032-formal-macos-onboarding-is-apple-silicon-only.md)
 把正式 macOS onboarding 支援面限定為 Apple Silicon，取代本 ADR 原本的 Intel／Apple Silicon
-雙架構驗收前提；固定 source、信任與授權邊界不變。
+雙架構驗收前提；[ADR-0033](0033-source-built-bootstrap-separates-distribution-from-onboarding.md)
+取代 source acquisition 與 target onboarding 必須同一 walkthrough 的部分。固定 source、信任與
+授權邊界不變。
 
 維護者不申請 Apple Developer Program，因此 ForgePilot 目前不能承諾 Developer ID、notarization
 或 Gatekeeper 無警告啟動的預編譯 macOS binary。checksum、GitHub immutable Release 與 provenance

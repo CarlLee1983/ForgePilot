@@ -1,0 +1,10 @@
+{
+  "scanned_at": "2026-09-18",
+  "target": "docs/index.html",
+  "framework": "vanilla HTML",
+  "font_stack": "introduced Space Grotesk, IBM Plex Sans, JetBrains Mono via Google Fonts",
+  "palette": "introduced Cobalt OKLCH tokens in docs/tokens.css",
+  "motion": "motion-on, using native CSS and IntersectionObserver only",
+  "spacing": "introduced 4-point named token scale",
+  "notes": "No existing design.md, package manifest, framework configuration, or Hallmark stamp was present."
+}

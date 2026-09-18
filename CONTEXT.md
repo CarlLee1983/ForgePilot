@@ -1,8 +1,26 @@
 # ForgePilot
 
-ForgePilot 管理工程工作的可執行性、進度與決策證據；工程要求本身由 ForgeFlowV2 定義。
+ForgePilot 管理工程工作的可執行性、進度與決策證據；工程要求本身由 PraxisBound 定義。
 
 ## Language
+
+**Distribution Bootstrap**：在使用者環境中安裝 ForgePilot CLI 與一個可被指定 Agent 發現的 skill adapter 的分發流程；它不讀取、改寫或初始化任何受管理 repository。
+_Avoid_：Repository Onboarding、silent install、核心 CLI command
+
+**Repository Onboarding**：在一個目標 Git repository 導入 ForgePilot 的受控流程，包含 Candidate preflight、Story review，以及經明確授權後的 state 初始化與第一個 Goal／Work Item 建立。
+_Avoid_：Distribution Bootstrap、skill installation、automatic project setup
+
+**Bootstrap Transaction**：Distribution Bootstrap 對一個固定 ForgePilot source commit 的可回復安裝交易；CLI entrypoint 與 Agent skill 經同一個 managed current pointer 在新版本完成 staging、build 與驗證後一起切換，失敗時既有版本仍是唯一可用版本。
+_Avoid_：Repository Onboarding transaction、partial upgrade、best-effort installation
+
+**Bootstrap Source**：Bootstrap Transaction 以絕對本機 Git `--source` 與完整 40-character commit SHA 指定、由 installer 在 staging 取得 detached checkout 的 ForgePilot source identity；執行 installer 的工作樹不構成被安裝版本的身分。
+_Avoid_：installer checkout、floating branch、latest release alias
+
+**Bootstrap Approval**：使用者對一份展示了 Bootstrap Transaction 來源、版本、路徑與效果的 action plan 所作的明確同意；它只授權使用者目錄的 CLI／skill 安裝，不授權任何 Repository Onboarding 寫入。
+_Avoid_：Repository Onboarding approval、implicit consent、blanket authorization
+
+**Bootstrap Manifest**：Bootstrap 管理的使用者目錄中、只描述已管理版本與 current／previous CLI／skill 指標的安全狀態檔；它不保存 target repository、ForgePilot state、環境值、憑證或 command output。
+_Avoid_：ForgePilot state、installation log、target repository registry
 
 **Goal**：需要跨多次工程工作推進的長期目標。
 _Avoid_：Story、Work Item
@@ -10,16 +28,16 @@ _Avoid_：Story、Work Item
 **Goal Review Policy**：Goal 持久化的 Human Review 邊界選擇；`WORK_ITEM`（預設）逐件工作審查，`GOAL` 只允許機器驗證後的工作推進依賴，並把 Human acceptance 留在 Goal 的最終審查邊界。
 _Avoid_：skip review、單次指令的權限、Work Item 的可選屬性
 
-**Work Item**：歸屬一個 Goal、參照一個 ForgeFlow Story 的工程工作單位，具有自己的狀態與依賴。
+**Work Item**：歸屬一個 Goal、參照一個 PraxisBound Story 的工程工作單位，具有自己的狀態與依賴。
 _Avoid_：Story、Task（作為另一種獨立工作物件）
 
 **External Work Reference**：呼叫方在建立 Work Item 時提供、只作同一 Goal 內安全重試的不可變冪等鍵。它不代表 Story identity、需求內容、PR、revision 或 lifecycle；未帶此鍵的舊 Work Item 不會被事後推測或認領。
 _Avoid_：Story ID 的替代品、可修改 metadata、跨 Goal 全域 ID、完成／審查條件
 
-**ForgeFlow Story**：由 ForgeFlowV2 管理的工程契約，包含需求、acceptance criteria 與工程指引。ForgePilot 自身借用 ForgeFlowV2 的 Story 目錄格式（`specs/stories/<story-id>/` 下的 `story.md` 與 `acceptance.md`），但不交出治理所有權；`specs/stories/m5-*.md` 是 M5 當時手寫的兩份，保留為刻意的歷史偏離。取捨見 [ADR-0013](docs/adr/0013-forgepilot-self-adoption-of-forgeflow.md)。
+**PraxisBound Story**：由 PraxisBound 管理的工程契約，包含需求、acceptance criteria 與工程指引。ForgePilot 自身借用 PraxisBound 的 Story 目錄格式（`specs/stories/<story-id>/` 下的 `story.md` 與 `acceptance.md`），但不交出治理所有權；`specs/stories/m5-*.md` 是 M5 當時手寫的兩份，保留為刻意的歷史偏離。取捨見 [ADR-0013](docs/adr/0013-forgepilot-self-adoption-of-forgeflow.md)。
 _Avoid_：ForgePilot requirement、Work Item 的需求副本
 
-**Story Readiness Contract**：由 ForgeFlowV2／PraxisBound 擁有、隨單一 ForgeFlow Story 提供的版本化 machine-readable 宣告；它列出 ForgePilot 可讀取的 inputs、outputs、criterion operations、future identities 與 decision follow-up refs，但不把 Story schema 或核准權交給 ForgePilot。取捨見 [ADR-0029](docs/adr/0029-story-readiness-contract-is-upstream-owned.md)。
+**Story Readiness Contract**：由 PraxisBound 擁有、隨單一 PraxisBound Story 提供的版本化 machine-readable 宣告；它列出 ForgePilot 可讀取的 inputs、outputs、criterion operations、future identities 與 decision follow-up refs，但不把 Story schema 或核准權交給 ForgePilot。取捨見 [ADR-0029](docs/adr/0029-story-readiness-contract-is-upstream-owned.md)。
 _Avoid_：Work Item requirement、ForgePilot-owned Story schema、Story Markdown inference
 
 **Story Source Digest**：Story Readiness Contract 對其命名的 `story.md` 或 `acceptance.md` 原始 bytes 所宣告的 SHA-256 identity。PraxisBound 產生它；ForgePilot 只重算 bytes 並比對，不解析 Markdown。

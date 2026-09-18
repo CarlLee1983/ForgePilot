@@ -12,7 +12,7 @@ M1 之後，使用者可以建立 Goal、排入 Work Item、選出下一件並�
 
 新增 `forgepilot verify <work-id>`。它把受管理專案在某個確切 commit 上的 canonical 檢查跑完，並把結果保存成 Evidence。
 
-執行時，ForgePilot 先確認工作樹乾淨，解析出目前的 HEAD SHA，在一個隔離的 detached worktree 裡對那個 SHA 執行專案自己的 `make verify`，然後把 repository、Work Item、ForgeFlow Story、完整 SHA、實際執行的 command、exit code、result 與時間一併 append 成一筆 Evidence。PASS 讓工作進入 REVIEW，FAIL 讓它退回 RUNNING。無論成敗，Evidence 都保留，既有的不被覆寫。
+執行時，ForgePilot 先確認工作樹乾淨，解析出目前的 HEAD SHA，在一個隔離的 detached worktree 裡對那個 SHA 執行專案自己的 `make verify`，然後把 repository、Work Item、PraxisBound Story、完整 SHA、實際執行的 command、exit code、result 與時間一併 append 成一筆 Evidence。PASS 讓工作進入 REVIEW，FAIL 讓它退回 RUNNING。無論成敗，Evidence 都保留，既有的不被覆寫。
 
 `status` 因此能顯示每件工作最新一筆 Evidence 的 result 與 SHA。當那個 SHA 不再等於目前的 HEAD，`status` 標示為 stale——舊的 PASS 保留為歷史，但不適用於現在。
 

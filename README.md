@@ -2,16 +2,16 @@
 
 ForgePilot tells your engineering agents what work is actionable next.
 
-ForgeFlowV2 defines how that work must be engineered and verified.
+PraxisBound defines how that work must be engineered and verified.
 
-ForgePilot does not replace ForgeFlowV2 or your coding agent.
+ForgePilot does not replace PraxisBound or your coding agent.
 
 ```text
 Human
  ↓
 ForgePilot
  ↓
-ForgeFlow Story
+PraxisBound Story
  ↓
 Agent
  ↓
@@ -86,7 +86,7 @@ go build -o forgepilot ./cmd/forgepilot
 
 ## 使用流程
 
-在已有 ForgeFlow Stories 的 repository root 執行：
+在已有 PraxisBound Stories 的 repository root 執行：
 
 ```bash
 forgepilot init
@@ -107,7 +107,7 @@ forgepilot goal create --id dbcli-dba --title "DBA Workflow Support" --review-po
 
 接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 只改變 Work Item 間的 progression。Runner 已經實作（[`forgepilot run`](#交給-runner-連續跑)），它能把一個 `GOAL` policy 的 Goal 推進到**等待 Goal final review 為止**；跨過那條邊界的東西還沒有——Goal 最終 Human acceptance 的 command 與 Goal Evidence 尚未實作，`goal complete` 對 `GOAL` policy 仍然拒絕。
 
-`--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 ForgeFlowV2 執行工程工作。
+`--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 PraxisBound 執行工程工作。
 
 若 `work add` 發現該 Story 尚未提交，它會在成功輸出後提供兩條下一步：使用剛配發的 Work Item ID 執行 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行不帶 flag 的 commit-mode verification。
 

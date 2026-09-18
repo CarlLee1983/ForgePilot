@@ -4,16 +4,18 @@
 
 M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
 
-開發時如採用 ForgeFlowV2，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
+開發時如採用 PraxisBound，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
-Dogfood Goal FP-28 的導入方向改為 prompt-first、fixed-source-version 本機建置：Agent 先以
+Dogfood Goal FP-28 的導入方向是 prompt-first、fixed-source-version 本機建置：Agent 先以
 inspection-only commands 檢查與展示，逐條顯示完整 commit SHA、commands、路徑與效果；使用者
 授權後才能取得 source、安裝／建置、執行 `make verify` 或切換 entrypoint。既有 Go 是正式前提，
 source-built CLI 通過啟動檢查後才進入 Story 人工檢閱；預設 `WORK_ITEM` Goal／Work Item 建立前
-必須另取 repository write 的明確授權。unsigned binary 只可作 maintainer trial，不宣稱正式導入
-或 macOS execution trust。Apple signing、notarization 與 no-Go prebuilt release 留作未來獨立工作；
-具體邊界見 [architecture.md](architecture.md#distribution-and-onboarding-boundary)、ADR-0024、ADR-0025
-與 ADR-0030。
+必須另取 repository write 的明確授權。ADR-0033 已定案一個**尚未實作**的 Bootstrap：它同版安裝
+CLI 與 Codex skill、但不取得 Repository Onboarding 權限；完整 contract 在
+[docs/specs/source-built-bootstrap.md](specs/source-built-bootstrap.md)。unsigned binary 只可作 maintainer
+trial，不宣稱正式導入或 macOS execution trust。Apple signing、notarization 與 no-Go prebuilt release
+留作未來獨立工作；具體邊界見 [architecture.md](architecture.md#distribution-and-onboarding-boundary)、
+ADR-0024、ADR-0025、ADR-0030 與 ADR-0033。
 
 ## Milestones
 
@@ -391,8 +393,8 @@ log 檔案落在 `.forgepilot/logs/WI-001-<short-sha>-<started-at>.log`，`.giti
 
 M5 交付完成後用 ForgePilot 自我駕駛的 dogfood（`docs/specs/m5-dogfood-friction.md`）撞到
 的摩擦，拆成獨立的票修補，不併入 M5、不開新 milestone：story 路徑錯誤訊息的改善見
-issue #9，`work add` 的提示改善見 issue #10，ForgeFlow Story 定義與現況不符、
-「是否自我套用 ForgeFlowV2」的未決問題、以及 Evidence 不承諾工作時序這三件事的文件記錄
+issue #9，`work add` 的提示改善見 issue #10，PraxisBound Story 定義與現況不符、
+「是否自我套用 PraxisBound」的未決問題、以及 Evidence 不承諾工作時序這三件事的文件記錄
 見 issue #12；issue #11（事後補跑與邊做邊跑在 state 裡分辨不出來）的關閉結論記在
 [ADR-0012](adr/0012-verification-log-outside-state.md)。
 
@@ -422,7 +424,7 @@ Schema 升至 v6：`current_run` 與 Evidence 增加 `candidate_kind`、`base_re
 - 同 Work Item 的 snapshot verification 仍由既有 flock serialization；中斷後 append `INTERRUPTED` 並保存原 run candidate。
 - v5 migration 保存 Goal、Work Item、Evidence、Gate 與 in-flight run，並將舊 candidate 明確標成 `COMMIT`。
 
-Snapshot retention／GC、cloud／GitHub integration、network request、自動 commit／PR、ForgeFlowV2 readiness 與其他 CLI 擴充不在 P0-001。
+Snapshot retention／GC、cloud／GitHub integration、network request、自動 commit／PR、PraxisBound readiness 與其他 CLI 擴充不在 P0-001。
 
 ## P0-002 — Work Item Status Summary
 
@@ -466,6 +468,19 @@ Goal 在建立時可持久化 `--review-policy work-item|goal`；`work-item` 是
 Schema 升至 v8：Goal 加入必填 `review_policy`；v7 與更舊 state migration 明確填 `WORK_ITEM`，先備份 `state.json.v<n>.bak`。不自動升級、不提供 downgrade；rollback 是手動還原備份。
 
 驗收：預設及 migration 都維持 WORK_ITEM compatibility；GOAL PASS → VERIFIED 並僅作 progression；READY 在 prerequisite 重驗或 OPEN Gate 新增時回到 PENDING，fresh PASS／Gate closure 後再 READY，而 Goal BLOCKED 保持 Work Item status；Gate／Goal／failure／interruption／freshness 不可被繞過；Work Item review 和 direct `goal complete` 在 GOAL policy 都被拒；readiness 對 inactive、empty、stale、non-PASS 或 OPEN Gate fail closed，並保留 exact Verification Evidence IDs。
+
+## 變更面驗證矩陣
+
+先讀 Story／acceptance／release contract：其中明定的 checks 一律優先。未指定時，依下表選擇能直接觀察變更的最小檢查；full gate 是 integration、release、Human final acceptance，或變更本身觸及其組成時的必要條件，而不是所有文字修改的預設。
+
+| 變更面 | 每次變更的檢查 | 升格為 full gate 的條件 |
+|---|---|---|
+| 非執行文件（Markdown、README、一般 HTML／CSS） | `git diff --check`；核對已改引用、指令與相對 `href`／`src`；HTML／CSS 於本機瀏覽器開啟已改頁面，確認版面與已改連結可用 | Story／acceptance 明定、release／整合交付，或同次改動也觸及其他列 |
+| `docs/diagrams/` 的圖規格與產物 | 依 [圖的重新產生程序](diagrams/README.md#怎麼重新產生) render 與 visual-check | 同上 |
+| Go、module metadata、Makefile 或 canonical verification 行為 | `make verify` | integration／Human final acceptance 時另跑 `go test -race -count=1 ./...`；Story 也可明定 race gate |
+| `scripts/release/`、`scripts/onboarding/` 或 `scripts/skills/` | 分別跑 `sh scripts/release/build_trial_assets_test.sh`、`sh scripts/onboarding/onboarding_test.sh`、`sh scripts/skills/check_adapters_test.sh` 與／或 `sh scripts/skills/short_prompt_regression_test.sh` 中受影響者 | release、跨面整合，或同次變更碰到 Go／Makefile 時跑 `make verify`；final acceptance 另跑 race gate |
+
+報告每一項實跑命令、結果，以及沒有跑的 full gate 與理由。不得把未跑的必要 check 寫成 PASS；若必需 check 被阻擋，交付仍是 partial。這份矩陣不改變 ForgePilot 對受管理 repository 的 canonical `make verify` contract。
 
 ## 每階段交付格式
 

@@ -4,13 +4,13 @@
 
 人類完成 Goal、Story、Work Item 與依賴的前置規劃之後，`forgepilot run --goal <goal-id>` 依 ForgePilot 的判定自動取得下一個合法動作、必要時啟動一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續下一項；因 Gate、預算或異常而停止，或在全部條件滿足時停在等待 Goal final review。
 
-責任分工是這一版唯一的設計主張：**Runner 負責執行，ForgePilot 負責判定，ForgeFlowV2 負責工程驗證規範。**細節記在 [ADR-0019](../../adr/0019-runner-executes-forgepilot-decides.md)。
+責任分工是這一版唯一的設計主張：**Runner 負責執行，ForgePilot 負責判定，PraxisBound 負責工程驗證規範。**細節記在 [ADR-0019](../../adr/0019-runner-executes-forgepilot-decides.md)。
 
 ## 範圍
 
 做進 ForgePilot，單一 workspace、單一 Runner、單一指定 Goal、循序執行。只接受 ACTIVE、非空、review policy 為 `GOAL` 的 Goal。只支援 snapshot verification，不自動 commit。一個真實 Codex CLI adapter，加一個不依賴網路的 fake subprocess adapter。每次實作或 repair attempt 都建立新的 Agent session。最後停在等待 Goal final review，不自行核准。
 
-不包含：多 Agent 平行執行、多 Goal 自動切換、daemon、排程、Web UI、A2A、MCP、遠端執行、自動 merge／release、Goal 最終人工核准指令。不修改 ForgeFlowV2，不新增通用 workflow framework。
+不包含：多 Agent 平行執行、多 Goal 自動切換、daemon、排程、Web UI、A2A、MCP、遠端執行、自動 merge／release、Goal 最終人工核准指令。不修改 PraxisBound，不新增通用 workflow framework。
 
 ## 分層
 

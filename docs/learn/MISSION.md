@@ -22,4 +22,4 @@ ForgePilot 的 M1–M4 已經實作完成、測試通過、文件齊全，但它
 ## Out of scope
 
 - 重新設計產品或新增 M5 功能——這是使用課，不是開發課
-- 教 Go、git 或 ForgeFlowV2 的 Story schema
+- 教 Go、git 或 PraxisBound 的 Story schema

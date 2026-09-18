@@ -2,664 +2,1293 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="ForgePilot 讓 AI 輔助工程中的可執行工作、驗證證據與人工決策維持在同一條可追溯的路徑上。">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<title>ForgePilot，讓「做完了」這句話變貴</title>
-<meta name="description" content="ForgePilot 是 AI 輔助開發的 engineering control plane。它不寫程式，只負責在證據不足的時候擋下「做完了」這句話，不管說的是 agent 還是你自己。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css">
+<title>ForgePilot — 完成，不是宣告</title>
 <style>
-:root {
-  --bg: #fbfaf8;
-  --panel: #ffffff;
-  --ink: #16150f;
-  --muted: #6b6a63;
-  --faint: #93918a;
-  --line: #e3e0d8;
-  --hair: #eeece5;
-  --accent: #0f7b5f;
-  --accent-soft: #e6f2ed;
-  --stop: #a33045;
-  --code-bg: #f4f2ec;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #131310; --panel: #1b1b17; --ink: #ecebe4; --muted: #a3a199;
-    --faint: #7a7871; --line: #302f29; --hair: #262520;
-    --accent: #4bbd97; --accent-soft: #16332a; --stop: #e08095; --code-bg: #201f1a;
-  }
-}
-* { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+/* ── 全局重置與基底排版 ── */
+html, body { overflow-x: clip; }
+html { scroll-behavior: smooth; background: var(--color-paper); }
 body {
-  margin: 0; background: var(--bg); color: var(--ink);
-  font-family: var(--sans); line-height: 1.75; font-size: 16px;
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink-soft);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.72;
   -webkit-font-smoothing: antialiased;
+  position: relative;
 }
-.wrap { max-width: 1000px; margin: 0 auto; padding: 0 28px; }
-.narrow { max-width: 700px; }
-a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
-p { margin: 0 0 18px; }
-code {
-  font-family: var(--mono); font-size: .88em;
-  background: var(--code-bg); padding: 1.5px 5px; border-radius: 4px;
+*, *::before, *::after { box-sizing: border-box; }
+a { color: inherit; text-decoration-thickness: var(--rule); text-underline-offset: 3px; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+code, pre, kbd { font-family: var(--font-mono); }
+h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--color-ink); }
+:focus-visible { outline: var(--rule) solid var(--color-focus); outline-offset: var(--space-2xs); }
+
+.shell { width: min(100% - (var(--space-md) * 2), 76rem); margin-inline: auto; position: relative; z-index: var(--z-base); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* ── 微動態自然水波光暈（純 CSS，拒絕粗暴霓虹光） ── */
+.ambient-scene {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.ambient-glow-top {
+  position: absolute;
+  top: -200px;
+  right: -100px;
+  width: 760px;
+  height: 760px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(18, 99, 106, 0.07) 0%, rgba(240, 244, 244, 0) 70%);
+  animation: ambientFloat 18s ease-in-out infinite alternate;
+}
+.ambient-glow-bottom {
+  position: absolute;
+  top: 45%;
+  left: -240px;
+  width: 840px;
+  height: 840px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(21, 143, 153, 0.05) 0%, rgba(240, 244, 244, 0) 70%);
+  animation: ambientFloat 24s ease-in-out infinite alternate-reverse;
+}
+@keyframes ambientFloat {
+  0% { transform: scale(0.96) translate(0, 0); opacity: 0.7; }
+  50% { transform: scale(1.06) translate(30px, 20px); opacity: 1; }
+  100% { transform: scale(0.98) translate(-20px, 35px); opacity: 0.8; }
+}
+
+/* ── 網站導覽 (Navbar) ── */
+.site-nav {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--z-sticky);
+  border-block-end: var(--rule) solid var(--color-rule);
+  background: color-mix(in srgb, var(--color-paper) 88%, transparent);
+  backdrop-filter: blur(14px);
+}
+.site-nav__inner {
+  min-height: 4.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.brand-diamond {
+  width: 14px;
+  height: 14px;
+  background: var(--color-accent);
+  transform: rotate(45deg);
+  border-radius: 2px;
+  transition: transform .3s var(--ease-out);
+}
+.wordmark:hover .brand-diamond { transform: rotate(90deg) scale(1.1); }
+.nav-links {
+  display: none;
+  align-items: center;
+  gap: var(--space-lg);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nav-links a {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color var(--dur-short) var(--ease-out);
+}
+.nav-links a:hover { color: var(--color-accent); }
+
+/* ── 按鈕系統 ── */
+.command-trigger, .button {
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding-inline: var(--space-sm);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--dur-short) var(--ease-out), border-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out), transform var(--dur-micro) var(--ease-out);
+}
+.command-trigger kbd {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: var(--color-paper-deep);
+}
+.button--primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-ink);
+  box-shadow: 0 2px 8px rgba(18, 99, 106, 0.18);
+}
+.button--quiet { border-color: var(--color-rule-strong); background: var(--color-surface); }
+.button--primary:hover {
+  background: var(--color-ink);
+  border-color: var(--color-ink);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+.command-trigger:hover, .button--quiet:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* ── HERO 區塊 ── */
+.hero {
+  padding-block: var(--space-3xl) var(--space-3xl);
+  border-block-end: var(--rule) solid var(--color-rule);
+}
+.hero__layout {
+  display: grid;
+  grid-template-columns: 1.15fr 0.95fr;
+  gap: var(--space-2xl);
+  align-items: start;
+}
+.hero-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+  border: var(--rule) solid var(--color-accent-border);
+  padding: 4px 10px;
+  border-radius: var(--radius-badge);
+  margin-block-end: var(--space-md);
+}
+.hero-tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 0 var(--color-accent);
+  animation: pulseDot 2.4s infinite;
+}
+@keyframes pulseDot {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(18, 99, 106, 0.6); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(18, 99, 106, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(18, 99, 106, 0); }
+}
+
+.hero__word {
+  margin: 0 0 var(--space-md);
+  font-family: var(--font-display);
+  font-size: var(--text-display);
+  font-weight: 700;
+  letter-spacing: -0.055em;
+  line-height: 1.05;
+}
+.hero__word span.mark-accent {
+  color: var(--color-accent);
+  position: relative;
+  display: inline-block;
+}
+.hero__word span.mark-accent::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  height: 3px;
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  border-radius: 2px;
+}
+
+.hero__prose {
+  display: grid;
+  gap: var(--space-sm);
+  max-width: 52ch;
+  margin-block-end: var(--space-xl);
+  font-size: var(--text-base);
+  color: var(--color-ink-soft);
+}
+.hero__prose p.lead {
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1.6;
+  color: var(--color-ink);
+  margin: 0;
+}
+.hero__prose p.context {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  margin: 0;
+}
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+/* ── Work Trace 儀表（陶瓷紙感面板，非黑底） ── */
+.trace-stage {
+  position: relative;
+  background: var(--color-surface);
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-surface);
+  padding: var(--space-lg);
+  box-shadow: 0 16px 36px -12px var(--color-shadow), 0 0 0 1px rgba(255, 255, 255, 0.8);
+  transition: transform var(--dur-short) var(--ease-out), box-shadow var(--dur-short) var(--ease-out);
+}
+.trace-stage:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 40px -10px rgba(18, 99, 106, 0.08), 0 0 0 1px var(--color-accent-border);
+}
+.trace-stage__caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-block-end: var(--space-sm);
+  border-block-end: var(--rule) solid var(--color-rule);
+  margin-block-end: var(--space-md);
+}
+.trace-stage__title {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.trace-badge {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  border: var(--rule) solid color-mix(in srgb, var(--color-success) 30%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.trace-meter {
+  position: relative;
+  height: 3px;
+  background: var(--color-rule);
+  border-radius: 2px;
+  margin-block-end: var(--space-lg);
+}
+.trace-meter__bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 75%;
+  background: var(--color-accent);
+  border-radius: 2px;
+  animation: tracePulse 4s ease-in-out infinite alternate;
+}
+@keyframes tracePulse {
+  0% { width: 55%; }
+  100% { width: 92%; }
+}
+
+.trace-nodes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-xs);
+  list-style: none;
+  margin: 0 0 var(--space-lg);
+  padding: 0;
+}
+.trace-node { display: flex; flex-direction: column; gap: 4px; }
+.trace-node__state {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--color-faint);
+  letter-spacing: 0.04em;
+}
+.trace-node__fact {
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.trace-node.is-done .trace-node__fact { color: var(--color-success); }
+.trace-node.is-active .trace-node__fact { color: var(--color-accent); }
+
+.trace-terminal {
+  background: var(--color-paper-deep);
+  border: var(--rule) solid var(--color-rule);
+  border-radius: var(--radius-control);
+  padding: var(--space-sm);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+.t-cmd { color: var(--color-ink); font-weight: 600; }
+.t-cmd::before { content: "$ "; color: var(--color-faint); font-weight: 400; }
+.t-pass { color: var(--color-success); font-weight: 500; }
+.t-stop { color: var(--color-error); font-weight: 500; }
+
+/* ── 深度剖析（有段落感的結構文案） ── */
+.problem-deepdive {
+  padding-block: var(--space-3xl);
+  border-block-end: var(--rule) solid var(--color-rule);
+}
+.deepdive__layout {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: var(--space-2xl);
+  align-items: start;
 }
 .eyebrow {
-  font-family: var(--mono); font-size: 11.5px; letter-spacing: .16em;
-  text-transform: uppercase; color: var(--faint); margin: 0 0 14px;
+  margin: 0 0 var(--space-xs);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.icon { width: 22px; height: 22px; display: block; stroke: currentColor; fill: none;
-        stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.icon-lg { width: 26px; height: 26px; }
+.deepdive__title {
+  margin: 0 0 var(--space-md);
+  font-size: var(--text-display-s);
+  letter-spacing: -0.04em;
+  line-height: 1.15;
+}
+.deepdive__prose {
+  display: grid;
+  gap: var(--space-md);
+  font-size: var(--text-base);
+  color: var(--color-ink-soft);
+  line-height: 1.75;
+}
+.deepdive__prose p { margin: 0; }
+.deepdive__callout {
+  background: var(--color-surface);
+  border-inline-start: 3px solid var(--color-accent);
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  padding: var(--space-md);
+  box-shadow: 0 4px 16px var(--color-shadow);
+  color: var(--color-ink);
+}
+.deepdive__callout strong { color: var(--color-accent); font-weight: 600; }
 
-/* ── 導覽 ─────────────────────────────────── */
-nav {
-  border-bottom: 1px solid var(--hair); position: sticky; top: 0; z-index: 10;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: saturate(180%) blur(12px);
+/* ── 流程動態推進 ── */
+.proof {
+  border-block-end: var(--rule) solid var(--color-rule);
+  padding-block: var(--space-3xl);
 }
-nav .wrap { display: flex; align-items: center; gap: 22px; height: 58px; }
-.brand { display: flex; align-items: center; gap: 9px; font-weight: 600; letter-spacing: -.01em; }
-.brand svg { color: var(--accent); }
-nav .spacer { flex: 1; }
-nav a { color: var(--muted); text-decoration: none; font-size: 14.5px; }
-nav a:hover { color: var(--ink); }
-@media (max-width: 700px) { nav .hide-sm { display: none; } }
+.proof__layout { display: grid; gap: var(--space-2xl); }
+.proof__copy h2 { margin: 0 0 var(--space-sm); font-size: var(--text-display-s); letter-spacing: -0.04em; }
+.proof__copy p { max-width: 60ch; color: var(--color-muted); font-size: var(--text-md); margin: 0; }
 
-/* ── Hero ─────────────────────────────────── */
-header.hero { padding: 96px 0 76px; border-bottom: 1px solid var(--line); }
-h1 {
-  font-size: clamp(38px, 6.4vw, 62px); line-height: 1.08;
-  letter-spacing: -.03em; margin: 0 0 26px; max-width: 15ch; font-weight: 600;
+.proof-flow {
+  position: relative;
+  display: grid;
+  gap: var(--space-sm);
+  border-inline-start: var(--rule) solid var(--color-rule-strong);
+  padding-inline-start: var(--space-lg);
 }
-h1 em { font-style: normal; color: var(--accent); }
-.lede { font-size: clamp(17px, 2.2vw, 20px); color: var(--muted); max-width: 54ch; margin: 0 0 34px; }
-.cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.btn {
-  display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
-  font-size: 15px; padding: 11px 20px; border-radius: 999px; border: 1px solid var(--line);
-  color: var(--ink); background: var(--panel); transition: border-color .15s, transform .15s;
+.proof-flow::before {
+  position: absolute;
+  inset-block: 0 auto;
+  inset-inline-start: calc(var(--space-3xs) * -1);
+  width: var(--space-2xs);
+  background: var(--color-accent);
+  content: "";
+  transform: scaleY(0);
+  transform-origin: top;
 }
-.btn:hover { border-color: var(--accent); transform: translateY(-1px); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-:root:not([data-theme="light"]) .btn.primary { color: #10221c; }
-.btn .icon { width: 17px; height: 17px; stroke-width: 1.7; }
+.proof-flow.is-in::before { animation: draw-line var(--dur-draw) var(--ease-out) forwards; }
+.flow-node {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding-block: var(--space-sm);
+  border-block-end: var(--rule) solid var(--color-rule);
+  opacity: 0;
+  transform: translateY(var(--space-xs));
+}
+.proof-flow.is-in .flow-node { animation: settle var(--dur-long) var(--ease-out) forwards; }
+.proof-flow.is-in .flow-node:nth-child(2) { animation-delay: var(--dur-micro); }
+.proof-flow.is-in .flow-node:nth-child(3) { animation-delay: calc(var(--dur-micro) * 2); }
+.proof-flow.is-in .flow-node:nth-child(4) { animation-delay: calc(var(--dur-micro) * 3); }
+.flow-node__left { display: flex; align-items: center; gap: 12px; }
+.flow-node__icon { color: var(--color-accent); width: 20px; height: 20px; flex-shrink: 0; }
+.flow-node__name { color: var(--color-ink); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.03em; }
+.flow-node__fact { color: var(--color-muted); font-size: var(--text-sm); font-family: var(--font-mono); }
 
-/* ── 區塊 ─────────────────────────────────── */
-section { padding: 78px 0; border-bottom: 1px solid var(--hair); }
-h2 {
-  font-size: clamp(26px, 3.6vw, 34px); line-height: 1.25; letter-spacing: -.02em;
-  margin: 0 0 22px; font-weight: 600; max-width: 22ch;
+/* ── 三大架構原則 ── */
+.principles { padding-block: var(--space-3xl); border-block-end: var(--rule) solid var(--color-rule); }
+.principles__head { margin-block-end: var(--space-2xl); max-width: 60ch; }
+.principles__head h2 { margin: 0 0 var(--space-xs); font-size: var(--text-display-s); }
+.principles__head p { margin: 0; color: var(--color-muted); font-size: var(--text-md); }
+.principles__grid { display: grid; gap: var(--space-lg); grid-template-columns: repeat(3, 1fr); }
+.principle-card {
+  background: var(--color-surface);
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-surface);
+  padding: var(--space-xl) var(--space-lg);
+  transition: all var(--dur-short) var(--ease-out);
+  display: flex;
+  flex-direction: column;
 }
-h3 { font-size: 17.5px; margin: 0 0 8px; letter-spacing: -.01em; }
-.section-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 34px; }
-.section-head .num {
-  font-family: var(--mono); font-size: 12px; color: var(--faint);
-  letter-spacing: .1em; padding-top: 6px;
+.principle-card:hover {
+  border-color: var(--color-accent-border);
+  box-shadow: 0 12px 28px -8px rgba(18, 99, 106, 0.08);
+  transform: translateY(-2px);
 }
-.body-text { max-width: 64ch; }
-.body-text p { color: var(--ink); }
-.body-text p.dim { color: var(--muted); }
-.pull {
-  font-size: clamp(19px, 2.6vw, 23px); line-height: 1.55; letter-spacing: -.015em;
-  border-left: 2px solid var(--accent); padding: 2px 0 2px 22px; margin: 34px 0;
-  max-width: 30ch; color: var(--ink);
+.principle-card__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-block-end: var(--space-md);
+}
+.principle-card__num {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.principle-card__icon { color: var(--color-accent); width: 22px; height: 22px; }
+.principle-card__title { margin: 0 0 var(--space-xs); font-size: var(--text-lg); line-height: 1.3; }
+.principle-card__body { margin: 0; color: var(--color-muted); font-size: var(--text-sm); line-height: 1.7; flex-grow: 1; }
+
+/* ── 預留擴充區塊 (Slot for future sections) ── */
+.custom-extension-slot {
+  margin-block: var(--space-2xl);
+  padding: var(--space-lg);
+  border: 1px dashed var(--color-rule-strong);
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--color-paper-deep) 50%, transparent);
+  text-align: center;
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
 }
 
-/* ── 卡片格 ───────────────────────────────── */
-.grid { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.grid.two { grid-template-columns: repeat(2, 1fr); }
-.grid.three { grid-template-columns: repeat(3, 1fr); }
-.cell { background: var(--bg); padding: 26px 24px; }
-.cell .icon { color: var(--accent); margin-bottom: 14px; }
-.cell p { margin: 0; font-size: 14.8px; color: var(--muted); line-height: 1.7; }
-.cell .tag {
-  font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--faint); display: block; margin-top: 12px;
+/* ── Graph Engineering: 完整實踐機制與閉環流程 ── */
+.graph-engineering {
+  padding-block: var(--space-3xl);
+  border-block-end: var(--rule) solid var(--color-rule);
 }
-@media (max-width: 760px) { .grid.two, .grid.three { grid-template-columns: 1fr; } }
+.graph-head {
+  max-width: 68ch;
+  margin-block-end: var(--space-2xl);
+}
+.graph-head h2 {
+  margin: 0 0 var(--space-xs);
+  font-size: var(--text-display-s);
+  letter-spacing: -0.04em;
+}
+.graph-head p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--text-md);
+  line-height: 1.7;
+}
 
-/* ── 步驟 ─────────────────────────────────── */
-.steps { border-top: 1px solid var(--line); margin-top: 8px; }
-.stepline {
-  display: grid; grid-template-columns: 116px 1fr; gap: 28px;
-  padding: 26px 0; border-bottom: 1px solid var(--hair);
+.graph-pipeline {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-md);
+  margin-block-end: var(--space-2xl);
 }
-.stepline .k {
-  font-family: var(--mono); font-size: 12.5px; color: var(--accent);
-  letter-spacing: .04em; padding-top: 3px;
+.pipeline-step {
+  background: var(--color-surface);
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-surface);
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: transform var(--dur-short) var(--ease-out), box-shadow var(--dur-short) var(--ease-out), border-color var(--dur-short) var(--ease-out);
 }
-.stepline p { margin: 0; color: var(--muted); font-size: 15px; }
-.stepline strong { color: var(--ink); font-weight: 600; }
-@media (max-width: 700px) { .stepline { grid-template-columns: 1fr; gap: 6px; } }
+.pipeline-step:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-accent-border);
+  box-shadow: 0 10px 24px -6px rgba(18, 99, 106, 0.08);
+}
+.pipeline-step__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-block-end: var(--space-sm);
+}
+.pipeline-step__tag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-accent);
+  letter-spacing: 0.08em;
+}
+.pipeline-step__badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-paper-deep);
+  color: var(--color-muted);
+}
+.pipeline-step__title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  margin: 0 0 var(--space-xs);
+  line-height: 1.3;
+}
+.pipeline-step__desc {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+  margin: 0;
+  flex-grow: 1;
+}
 
-/* ── 終端機 ───────────────────────────────── */
-.term {
-  background: var(--code-bg); border: 1px solid var(--line); border-radius: 12px;
-  font-family: var(--mono); font-size: 13px; line-height: 1.75; overflow-x: auto;
-  margin: 0; padding: 0;
+/* Graph 架構圖 */
+.graph-visual-card {
+  background: var(--color-surface);
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-surface);
+  padding: var(--space-xl);
+  box-shadow: 0 4px 20px var(--color-shadow);
+  margin-block-end: var(--space-2xl);
 }
-.term .bar {
-  display: flex; align-items: center; gap: 7px; padding: 11px 16px;
-  border-bottom: 1px solid var(--line); color: var(--faint); font-size: 11px;
-  letter-spacing: .1em; text-transform: uppercase;
+.graph-visual-card__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-block-end: var(--space-lg);
+  padding-block-end: var(--space-sm);
+  border-block-end: var(--rule) solid var(--color-rule);
 }
-.term .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
-.term pre { margin: 0; padding: 18px 20px; white-space: pre; }
-.term .c { color: var(--ink); }
-.term .c::before { content: "$ "; color: var(--faint); }
-.term .o { color: var(--muted); }
-.term .ok { color: var(--accent); }
-.term .no { color: var(--stop); }
+.graph-visual-card__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.graph-visual-card__meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+}
 
-/* ── 圖 ───────────────────────────────────── */
-figure { margin: 30px 0 0; }
-figure svg { width: 100%; height: auto; display: block; }
-figcaption {
-  font-size: 13.5px; color: var(--faint); margin-top: 12px;
-  padding-top: 10px; border-top: 1px solid var(--hair); max-width: 62ch;
+/* 圖像展示 */
+.graph-image-slot {
+  border: var(--rule) solid var(--color-accent-border);
+  border-radius: var(--radius-surface);
+  background: var(--color-paper-deep);
+  position: relative;
+  overflow: hidden;
 }
-.d-box { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
-.d-box.on { stroke: var(--accent); }
-.d-line { stroke: var(--line); stroke-width: 1.2; fill: none; }
-.d-line.on { stroke: var(--accent); }
-.d-line.stopline { stroke: var(--stop); stroke-dasharray: 4 3; }
-.d-t { fill: var(--ink); font-size: 14px; font-weight: 600; }
-.d-t.small { font-size: 12.5px; font-weight: 500; fill: var(--muted); }
-.d-lab {
-  fill: var(--faint); font-size: 11.5px; font-family: var(--mono);
-  letter-spacing: .04em;
+.graph-image-slot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: calc(var(--radius-surface) - var(--rule));
 }
-.d-lab.on { fill: var(--accent); }
-.d-lab.stop { fill: var(--stop); }
-.d-dot { fill: var(--bg); stroke: var(--accent); stroke-width: 1.6; }
-.d-dot.human { fill: var(--accent); }
 
-/* ── 對照 ─────────────────────────────────── */
-.split { display: grid; grid-template-columns: 1fr 1fr; gap: 46px; align-items: start; }
-@media (max-width: 820px) { .split { grid-template-columns: 1fr; gap: 34px; } }
-ul.plain { list-style: none; padding: 0; margin: 0; }
-ul.plain li {
-  display: flex; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--hair);
-  font-size: 15px; color: var(--muted); line-height: 1.65;
+/* 實踐三原則 */
+.graph-principles-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-lg);
 }
-ul.plain li .icon { flex: none; margin-top: 3px; width: 18px; height: 18px; }
-ul.plain li b { color: var(--ink); font-weight: 600; }
-.yes .icon { color: var(--accent); }
-.no-list .icon { color: var(--faint); }
+.graph-principle {
+  background: var(--color-surface);
+  border: var(--rule) solid var(--color-rule);
+  border-radius: var(--radius-surface);
+  padding: var(--space-lg);
+}
+.graph-principle h4 {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  margin: 0 0 var(--space-2xs);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ink);
+}
+.graph-principle p {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.65;
+  margin: 0;
+}
 
-/* ── 頁尾 ─────────────────────────────────── */
-footer { padding: 60px 0 80px; color: var(--faint); font-size: 14.5px; }
-footer .links { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 26px; }
-footer a { color: var(--muted); text-decoration: none; }
-footer a:hover { color: var(--accent); }
-footer p { max-width: 60ch; margin: 0 0 10px; }
+/* 響應式佈局調整 */
+@media (max-width: 68rem) {
+  .graph-pipeline { grid-template-columns: repeat(2, 1fr); }
+  .graph-principles-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 44rem) {
+  .graph-pipeline { grid-template-columns: 1fr; }
+}
+
+/* ── 導覽指引與手冊 ── */
+.guide-intro {
+  display: grid;
+  gap: var(--space-xl);
+  padding-block: var(--space-3xl);
+  border-block-end: var(--rule) solid var(--color-rule);
+}
+.guide-intro h2 { margin: 0 0 var(--space-xs); font-size: var(--text-display-s); }
+.guide-intro__lede { max-width: 65ch; margin: 0; color: var(--color-muted); font-size: var(--text-md); }
+.guide-links { display: grid; border-block: var(--rule) solid var(--color-rule); grid-template-columns: repeat(2, 1fr); }
+.guide-link {
+  display: grid;
+  gap: var(--space-2xs);
+  padding: var(--space-md);
+  border-block-end: var(--rule) solid var(--color-rule);
+  color: var(--color-ink);
+  text-decoration: none;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
+}
+.guide-link:nth-child(odd) { border-inline-end: var(--rule) solid var(--color-rule); }
+.guide-link__name {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.guide-link__name svg { width: 18px; height: 18px; transition: transform .2s ease; }
+.guide-link:hover .guide-link__name svg { transform: translateX(3px); }
+.guide-link__description { color: var(--color-muted); font-size: var(--text-sm); }
+.guide-link:hover { background: var(--color-accent-soft); color: var(--color-accent); }
+
+/* ── 開始起手式 (Start) ── */
+.start { padding-block: var(--space-3xl); }
+.start__layout { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2xl); align-items: center; }
+.start__title { margin: 0 0 var(--space-sm); font-size: var(--text-display-s); }
+.start__copy { max-width: 54ch; color: var(--color-muted); font-size: var(--text-md); margin-block-end: var(--space-lg); }
+.start-terminal {
+  background: var(--color-surface);
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-surface);
+  padding: var(--space-md);
+  box-shadow: 0 8px 24px var(--color-shadow);
+}
+.start-terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-block-end: var(--space-xs);
+  border-block-end: var(--rule) solid var(--color-rule);
+  margin-block-end: var(--space-sm);
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+}
+.start-terminal-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-rule-strong); }
+
+/* ── 頁尾 ── */
+.footer {
+  padding-block: var(--space-3xl) var(--space-xl);
+  border-block-start: var(--rule) solid var(--color-rule);
+  background: var(--color-paper-deep);
+}
+.footer__statement {
+  max-width: 20ch;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-display-s);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  color: var(--color-ink);
+}
+.footer__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-lg);
+  align-items: center;
+  justify-content: space-between;
+  margin-block-start: var(--space-2xl);
+  padding-block-start: var(--space-sm);
+  border-block-start: var(--rule) solid var(--color-rule);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+.footer__links { display: flex; flex-wrap: wrap; gap: var(--space-md); }
+.footer__links a { color: var(--color-muted); text-decoration: none; }
+.footer__links a:hover { color: var(--color-accent); }
+
+/* ── 搜尋 Dialog ── */
+.command-palette {
+  width: min(100% - (var(--space-md) * 2), 36rem);
+  max-height: min(80dvh, 40rem);
+  padding: 0;
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-surface);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+  box-shadow: 0 var(--space-md) var(--space-xl) rgba(17, 26, 31, 0.12);
+}
+.command-palette::backdrop { background: rgba(17, 26, 31, 0.35); backdrop-filter: blur(4px); }
+.command-palette__head { display: grid; gap: var(--space-2xs); padding: var(--space-md); border-block-end: var(--rule) solid var(--color-rule); }
+.command-palette__head label { color: var(--color-muted); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.06em; }
+.command-palette__input {
+  min-height: var(--control-height);
+  width: 100%;
+  border: var(--rule) solid var(--color-rule-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-paper-deep);
+  color: var(--color-ink);
+  padding-inline: var(--space-sm);
+}
+.command-palette__results { display: grid; gap: var(--space-3xs); padding: var(--space-sm); }
+.command-item {
+  min-height: var(--control-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border: var(--rule) solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+  padding-inline: var(--space-sm);
+  text-align: start;
+}
+.command-item:hover, .command-item.is-selected { background: var(--color-accent-soft); border-color: var(--color-accent-border); color: var(--color-accent); }
+.command-palette__footer { padding: var(--space-sm) var(--space-md); border-block-start: var(--rule) solid var(--color-rule); color: var(--color-muted); font-size: var(--text-xs); }
+
+@keyframes settle { to { opacity: 1; transform: translateY(0); } }
+@keyframes draw-line { to { transform: scaleY(1); } }
+
+@media (max-width: 960px) {
+  .hero__layout { grid-template-columns: 1fr; gap: var(--space-xl); }
+  .deepdive__layout { grid-template-columns: 1fr; }
+  .principles__grid { grid-template-columns: 1fr; }
+  .start__layout { grid-template-columns: 1fr; }
+  .guide-links { grid-template-columns: 1fr; }
+  .guide-link:nth-child(odd) { border-inline-end: 0; }
+}
+@media (min-width: 60rem) { .nav-links { display: flex; } }
 </style>
 </head>
 <body>
 
+<!-- 精緻北歐水波晨光 (純 CSS 微動態) -->
+<div class="ambient-scene" aria-hidden="true">
+  <div class="ambient-glow-top"></div>
+  <div class="ambient-glow-bottom"></div>
+</div>
+
+<!-- SVG 圖示資源庫 -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
-    <symbol id="i-gate" viewBox="0 0 24 24"><path d="M4 21V6a2 2 0 0 1 2-2h4v17"/><path d="M20 21V6a2 2 0 0 0-2-2h-4"/><path d="M2 21h20"/><path d="M14 12h.01"/></symbol>
-    <symbol id="i-seal" viewBox="0 0 24 24"><circle cx="12" cy="9" r="5.5"/><path d="M9.5 9.2l1.7 1.7 3.3-3.4"/><path d="M8.6 13.6L7 22l5-2.4L17 22l-1.6-8.4"/></symbol>
-    <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"/></symbol>
-    <symbol id="i-ask" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.3a2.9 2.9 0 0 1 5.6.9c0 1.9-2.8 2.4-2.8 4"/><path d="M12 17.4h.01"/></symbol>
-    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4.5h11l-2 3.5 2 3.5H5"/></symbol>
-    <symbol id="i-term" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4"/></symbol>
-    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><path d="M12 15v2"/></symbol>
-    <symbol id="i-offline" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3.2 9.5h17.6M3.2 14.5h17.6"/><path d="M12 3c-4.5 6-4.5 12 0 18 4.5-6 4.5-12 0-18z"/><path d="M4 20L20 4"/></symbol>
-    <symbol id="i-bot" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="17" height="12" rx="3"/><path d="M12 7.5V4M9 12.8h.01M15 12.8h.01M9.5 16.2h5"/></symbol>
-    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
-    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H19v18H5.5A1.5 1.5 0 0 1 4 19.5z"/><path d="M4 17.5h15"/><path d="M8 7.5h7"/></symbol>
-    <symbol id="i-code" viewBox="0 0 24 24"><path d="M8.5 8L4 12l4.5 4M15.5 8l4.5 4-4.5 4"/></symbol>
-    <symbol id="i-map" viewBox="0 0 24 24"><path d="M3 6.5l6-2.5 6 2.5 6-2.5v14l-6 2.5-6-2.5-6 2.5z"/><path d="M9 4v14M15 6.5v14"/></symbol>
-    <symbol id="i-block" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></symbol>
-    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.4l3.4 2"/></symbol>
-    <symbol id="i-stack" viewBox="0 0 24 24"><path d="M12 3l9 4.5-9 4.5-9-4.5z"/><path d="M3 12.5l9 4.5 9-4.5"/><path d="M3 17l9 4.5 9-4.5"/></symbol>
+    <symbol id="i-gate" viewBox="0 0 24 24"><path d="M4 21V6a2 2 0 0 1 2-2h4v17" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 21V6a2 2 0 0 0-2-2h-4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M2 21h20" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M14 12h.01" stroke="currentColor" stroke-width="2.5"/></symbol>
+    <symbol id="i-seal" viewBox="0 0 24 24"><circle cx="12" cy="9" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 9.2l1.7 1.7 3.3-3.4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.6 13.6L7 22l5-2.4L17 22l-1.6-8.4" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3L8 21M16 3l-2 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-ask" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.2 9.3a2.9 2.9 0 0 1 5.6.9c0 1.9-2.8 2.4-2.8 4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 17.4h.01" stroke="currentColor" stroke-width="2.5"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 4.5h11l-2 3.5 2 3.5H5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H19v18H5.5A1.5 1.5 0 0 1 4 19.5z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 17.5h15" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="5" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="19" cy="6" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.5 7.5l2.5 8M16.5 7.5l-2.5 8" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><path d="M21 15l-5-5L5 21" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
   </defs>
 </svg>
 
-<nav>
-  <div class="wrap">
-    <span class="brand"><svg class="icon" aria-hidden="true"><use href="#i-gate"/></svg>ForgePilot</span>
-    <span class="spacer"></span>
-    <a href="#eli5" class="hide-sm">最簡單的講法</a>
-    <a href="#gates" class="hide-sm">四道關卡</a>
-    <a href="#agent" class="hide-sm">跟 agent 一起用</a>
-    <a href="#how">怎麼用</a>
-    <a href="learn/handbook.html">手冊</a>
-    <a href="https://github.com/CarlLee1983/ForgePilot">GitHub</a>
+<nav class="site-nav" aria-label="主要導覽">
+  <div class="shell site-nav__inner">
+    <a class="wordmark" href="#top">
+      <span class="brand-diamond"></span>
+      <span>ForgePilot</span>
+    </a>
+    <ul class="nav-links">
+      <li><a href="#problem">為什麼需要</a></li>
+      <li><a href="#proof">四道關卡</a></li>
+      <li><a href="#graph-engineering">Graph 工程實踐</a></li>
+      <li><a href="#principles">設計邊界</a></li>
+      <li><a href="guide.html">完整導覽</a></li>
+      <li><a href="learn/handbook.html">手冊</a></li>
+    </ul>
+    <button class="command-trigger" type="button" data-command-open aria-haspopup="dialog">
+      <span>尋找內容</span><kbd>⌘K</kbd>
+    </button>
   </div>
 </nav>
 
-<header class="hero">
-  <div class="wrap">
-    <p class="eyebrow">Engineering Control Plane</p>
-    <h1>讓<em>「做完了」</em>這句話變貴</h1>
-    <p class="lede">ForgePilot 不寫程式，也不取代你的 coding agent。證據不夠的時候，它不讓任何人宣告工作完成，包括 agent，也包括你自己。</p>
-    <div class="cta">
-      <a class="btn primary" href="#eli5"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>先聽最簡單的講法</a>
-      <a class="btn" href="learn/handbook.html"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>完整使用手冊</a>
-      <a class="btn" href="https://github.com/CarlLee1983/ForgePilot"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg>原始碼</a>
-    </div>
-  </div>
-</header>
-
-<section id="eli5">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="num">01</span>
-      <h2>用五歲小孩聽得懂的方式講一次</h2>
-    </div>
-    <div class="body-text">
-      <p>想像一條走廊，走到底就是「這件事做完了」。走廊上有四道關卡，每一關都要交出一樣東西才過得去，而那樣東西不能自己寫。</p>
-      <p>沒有這條走廊的時候，事情長這樣。你請一個很會寫程式的幫手做一件事，它做完跟你說「好了」。你問它測試過嗎，它說測過了。你信了，把它接到下一件事上。三天後你才發現，它測的是三個版本以前的程式碼。</p>
-      <p class="dim">它沒有騙人。「做完了」這句話誰都能說，說的時候<strong>不需要附上任何東西</strong>，所以它幾乎不用付出什麼。</p>
-      <div class="pull">ForgePilot 做的事，就是讓這句話說出口之前得先交出四樣東西。</div>
-      <p>它自己不寫程式，也不判斷程式碼好不好，那些是你和你的 agent 的事。它站在關卡旁邊清點東西，少了什麼就<strong>直接說出少的是什麼</strong>。</p>
-      <p>聽起來很煩。一個從來不擋人的流程，跟沒有流程差不多。</p>
-    </div>
-  </div>
-</section>
-
-<section id="gates">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="num">02</span>
-      <h2>四道關卡，少一道就走不到底</h2>
-    </div>
-    <div class="grid two">
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-seal"/></svg>
-        <h3>有人真的看過並且同意</h3>
-        <p>要有一筆明確記下來的人工審查，寫著誰在什麼時候同意了什麼。沒人反對不算同意。</p>
-        <span class="tag">Human Review</span>
-      </div>
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-hash"/></svg>
-        <h3>測試通過的，是你正在看的那一版</h3>
-        <p>每次驗證都綁死一個 immutable Candidate：既有 commit 或 working-tree snapshot。之後 Candidate 不再代表目前內容時，那次驗證就不算數了，工作重新卡住。</p>
-        <span class="tag">Evidence · exact revision</span>
-      </div>
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-ask"/></svg>
-        <h3>沒有懸著沒人決定的問題</h3>
-        <p>遇到不該自己決定的事，開一道 Gate 把問題記下來。問題還開著，工作就過不去，而且誰都看得見它開著。</p>
-        <span class="tag">Gate</span>
-      </div>
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"/></svg>
-        <h3>這個目標本身還在進行中</h3>
-        <p>目標被暫停的時候，底下的工作連驗證都不給跑，直到有人把它解除。</p>
-        <span class="tag">Goal</span>
-      </div>
-    </div>
-    <div class="body-text" style="margin-top:34px">
-      <p class="dim">四樣東西同時齊了，工作才進入 DONE。同一個瞬間，等著它的下一件工作變成可以開始，中間沒有「A 完成了但 B 還沒被通知」的空檔。</p>
-    </div>
-  </div>
-</section>
-
-<section id="agent">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="num">03</span>
-      <h2>跟 agent 一起工作的時候，它站在哪裡</h2>
-    </div>
-    <div class="body-text">
-      <p>把寫程式的工作交給 agent 之後，有兩件事會同時發生。它做得比你快，而且它也比你更容易說出「做完了」。</p>
-      <p>它手上同時握著三個角色，自己挑要做哪一件事，自己寫，自己宣布完成。這三件事只要有一件出錯，你通常要等到很後面才會發現。</p>
-      <div class="pull">agent 可以寫程式，但不能發給自己通行證。</div>
-      <p>ForgePilot 把那三個角色拆開。哪一件事現在可以做，由佇列決定；程式碼由 agent 寫；算不算完成，由證據和人決定。agent 從頭到尾只被允許做中間那一段。</p>
-    </div>
-
-    <figure>
-      <svg viewBox="0 0 700 350" role="img" aria-labelledby="loop-title">
-        <title id="loop-title">人、ForgePilot 與 agent 的分工循環</title>
-        <defs>
-          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0 1 L9 5 L0 9 z" fill="currentColor"/>
-          </marker>
-        </defs>
-
-        <g class="d-line" color="var(--line)">
-          <rect class="d-box" x="34" y="30" width="170" height="78" rx="12"/>
-          <rect class="d-box on" x="265" y="30" width="170" height="78" rx="12"/>
-          <rect class="d-box" x="496" y="30" width="170" height="78" rx="12"/>
-          <rect class="d-box" x="496" y="238" width="170" height="78" rx="12"/>
-          <rect class="d-box" x="265" y="238" width="170" height="78" rx="12"/>
-        </g>
-
-        <text class="d-t" x="119" y="63" text-anchor="middle">你</text>
-        <text class="d-t small" x="119" y="85" text-anchor="middle">定目標，做決定</text>
-
-        <text class="d-t" x="350" y="63" text-anchor="middle">ForgePilot</text>
-        <text class="d-t small" x="350" y="85" text-anchor="middle">派工、擋人、記錄</text>
-
-        <text class="d-t" x="581" y="63" text-anchor="middle">agent</text>
-        <text class="d-t small" x="581" y="85" text-anchor="middle">讀 Story，寫程式</text>
-
-        <text class="d-t" x="581" y="271" text-anchor="middle">make verify</text>
-        <text class="d-t small" x="581" y="293" text-anchor="middle">repo 自己的 Makefile</text>
-
-        <text class="d-t" x="350" y="271" text-anchor="middle">Evidence</text>
-        <text class="d-t small" x="350" y="293" text-anchor="middle">結果綁死一個 Candidate</text>
-
-        <g class="d-line" color="var(--line)" marker-end="url(#ah)">
-          <path d="M204 69 L258 69"/>
-          <path d="M435 69 L489 69"/>
-          <path d="M581 108 L581 231"/>
-          <path d="M496 277 L442 277"/>
-        </g>
-        <g class="d-line on" color="var(--accent)" marker-end="url(#ah)">
-          <path d="M350 238 L350 115"/>
-        </g>
-        <g class="d-line stopline" color="var(--stop)" marker-end="url(#ah)">
-          <path d="M300 108 C 300 168, 119 168, 119 115"/>
-        </g>
-
-        <text class="d-lab" x="231" y="58" text-anchor="middle">目標</text>
-        <text class="d-lab" x="462" y="56" text-anchor="middle">派工</text>
-        <text class="d-lab" x="595" y="175" text-anchor="start">commit</text>
-        <text class="d-lab" x="469" y="264" text-anchor="middle">跑</text>
-        <text class="d-lab on" x="338" y="175" text-anchor="end">證據回填</text>
-        <text class="d-lab stop" x="210" y="190" text-anchor="middle">卡住了就回到你</text>
-      </svg>
-      <figcaption>agent 只在右半邊活動。左邊那條虛線是它自己走不完的部分，需要人決定的時候，工作會停下來等你。</figcaption>
-    </figure>
-
-    <div class="body-text" style="margin-top:46px">
-      <p>一次完整的迴圈長這樣。agent 從問「現在該做什麼」開始，到交出證據為止，中間有兩個地方它一定過不去。</p>
-    </div>
-
-    <figure>
-      <svg viewBox="0 0 700 230" role="img" aria-labelledby="flow-title">
-        <title id="flow-title">一次工作迴圈與兩個擋點</title>
-        <line class="d-line" x1="46" y1="118" x2="662" y2="118"/>
-
-        <g>
-          <circle class="d-dot" cx="60" cy="118" r="6.5"/>
-          <circle class="d-dot" cx="180" cy="118" r="6.5"/>
-          <circle class="d-dot" cx="300" cy="118" r="6.5"/>
-          <circle class="d-dot" cx="420" cy="118" r="6.5"/>
-          <circle class="d-dot human" cx="540" cy="118" r="6.5"/>
-          <circle class="d-dot human" cx="650" cy="118" r="6.5"/>
-        </g>
-
-        <g class="d-lab">
-          <text x="60" y="98" text-anchor="middle">AGENT</text>
-          <text x="180" y="98" text-anchor="middle">AGENT</text>
-          <text x="300" y="98" text-anchor="middle">AGENT</text>
-          <text x="420" y="98" text-anchor="middle">AGENT</text>
-        </g>
-        <g class="d-lab on">
-          <text x="540" y="98" text-anchor="middle">你</text>
-          <text x="650" y="98" text-anchor="middle">佇列</text>
-        </g>
-
-        <g class="d-t small">
-          <text x="60" y="146" text-anchor="middle">next</text>
-          <text x="180" y="146" text-anchor="middle">start</text>
-          <text x="300" y="146" text-anchor="middle">寫程式</text>
-          <text x="420" y="146" text-anchor="middle">verify</text>
-          <text x="540" y="146" text-anchor="middle">review</text>
-          <text x="650" y="146" text-anchor="middle">DONE</text>
-        </g>
-        <g class="d-lab">
-          <text x="60" y="166" text-anchor="middle">問，不是自己挑</text>
-          <text x="180" y="166" text-anchor="middle">認領</text>
-          <text x="300" y="166" text-anchor="middle">commit / snapshot</text>
-          <text x="420" y="166" text-anchor="middle">產生證據</text>
-          <text x="540" y="166" text-anchor="middle">同意或退回</text>
-          <text x="650" y="166" text-anchor="middle">下游解鎖</text>
-        </g>
-
-        <g class="d-line stopline" color="var(--stop)">
-          <path d="M420 108 L420 56"/>
-          <path d="M540 108 L540 56"/>
-        </g>
-        <g class="d-lab stop">
-          <text x="420" y="44" text-anchor="middle">commit mode 要乾淨</text>
-          <text x="540" y="44" text-anchor="middle">agent 到不了這裡</text>
-        </g>
-      </svg>
-      <figcaption>綠點是人和佇列的位置。agent 走到 verify 就交出主導權，剩下兩步不該由它代跑。</figcaption>
-    </figure>
-
-    <div class="body-text" style="margin-top:46px">
-      <p>這樣一來，agent 每次開工都得先問一次佇列，它拿到的是一件依賴已經清乾淨、確實輪到它的工作。做完之後它能做的最後一件事是跑驗證，把結果留下來。</p>
-      <p>你要看的東西也跟著變少。不必回頭審每一次對話，只要看 <code>status</code> 上有沒有卡住的工作，以及卡住的原因是哪一個。</p>
-      <p class="dim">同一份佇列可以同時給好幾個 agent 用。狀態檔有程序鎖，兩個 agent 不會同時認領到同一件工作。</p>
-    </div>
-
-    <h3 style="margin-top:52px">怎麼把 agent 接上去</h3>
-    <div class="body-text">
-      <p>ForgePilot 沒有 agent 外掛，也不去攔截誰在跑什麼。它就是一個 CLI，所以接法是把規則寫進 agent 每次都會讀的那份指示檔，<code>CLAUDE.md</code>、<code>AGENTS.md</code> 或你的工具用的那一份都行。四條就夠了，規則本身建議用英文寫，指令與 flag 都是英文，混著中文敘述反而多一層轉換。</p>
-    </div>
-
-    <div class="term" style="margin-top:22px">
-      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;貼進 AGENTS.md</div>
-<pre><span class="o">## How work is picked up in this repo
-
-1. Before starting anything, run `forgepilot next` and work only
-   on the item it names. If it prints none, stop and ask a human.
-   Never pick your own next task.
-2. Claim it with `forgepilot start &lt;work-id&gt;`. Do not skip this.
-3. Never report "done". When you believe the work is finished, run
-   `forgepilot verify &lt;work-id&gt;` and paste the output verbatim.
-   The evidence speaks for the work; your summary does not.
-4. When a decision is not yours to make, run `forgepilot gate open`
-   with the question and the options, then stop and wait. Never
-   pick an option and carry on.
-
-`review approve` is run by a human, never by you.</span></pre>
-    </div>
-
-    <div class="body-text" style="margin-top:26px">
-      <p>第四條最容易被忽略，它也是這套東西真正改變的地方。agent 卡住的時候原本會自己選一條路走下去，現在它把問題留在佇列上，你下次看 <code>status</code> 就會看到。</p>
-      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件，agent 就算跑了 approve，只要最新 PASS 與 approval 沒有綁同一個 Candidate revision，或還有 Gate 開著，工作照樣不會進 DONE，而且那筆審查會用它的 git 身分留在記錄裡，跑不掉。</p>
-      <p>接下來的事跟你手動用一模一樣，<a href="#start">安裝與 init</a> 之後把上面四條貼進去就能開始。</p>
-    </div>
-  </div>
-</section>
-
-<section id="refuse">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="num">04</span>
-      <h2>被擋下來的時候，它會說出還差什麼</h2>
-    </div>
-    <div class="split">
-      <div class="body-text">
-        <p>最容易讓人愣住的是這種情況。測試明明過了，你也按了同意，工作卻沒有完成。</p>
-        <p>因為在那兩件事之間，你又改了一行程式碼。通過測試的是舊的那一版，你同意的是新的那一版，兩邊對不上。</p>
-        <p>ForgePilot 不會默默吞掉你的同意，也不會假裝沒事讓它過。它<strong>把審查記下來</strong>，因為那件事真的發生過，然後把兩個版本編號並排印給你看。</p>
-        <p class="dim">再跑一次驗證，兩邊對齊，就過了。</p>
-      </div>
-      <div class="term">
-        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;實際輸出</div>
-<pre><span class="c">forgepilot review approve WI-002</span>
-<span class="o">EV-007 APPROVED at 96f3e0b2eef1</span>
-<span class="o">WI-002 REVIEW</span>
-<span class="no">Not complete: the latest PASS is at
-revision 26be05c98447 but the
-approval is at 96f3e0b2eef1</span>
-
-<span class="c">forgepilot verify WI-002</span>
-<span class="ok">EV-009 PASS at 96f3e0b2eef1</span>
-
-<span class="c">forgepilot review approve WI-002</span>
-<span class="o">EV-010 APPROVED at 96f3e0b2eef1</span>
-<span class="ok">WI-002 DONE</span></pre>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="how">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="num">05</span>
-      <h2>從一個目標到 DONE，完整走一次</h2>
-    </div>
-    <div class="body-text">
-      <p>假設你要做的是把結帳流程的錯誤處理補起來。這件事會經過四個角色的手，先講清楚誰負責什麼，順序才不會記錯。</p>
-    </div>
-
-    <div class="grid two" style="margin-top:8px">
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"/></svg>
-        <h3>你</h3>
-        <p>決定要做什麼、什麼時候算完成。設 Goal、掛工作、回答 Gate 上的問題、做最後的 review。</p>
-      </div>
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-book"/></svg>
-        <h3>ForgeFlowV2</h3>
-        <p>定義工程契約。Story 的格式、acceptance criteria、coding standards、什麼樣才算驗證過，都寫在它那邊。它是規範，不是執行者。</p>
-      </div>
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-bot"/></svg>
-        <h3>agent</h3>
-        <p>讀 Story，照著規範寫程式並 commit。它不挑工作，也不宣布完成。</p>
-      </div>
-      <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-gate"/></svg>
-        <h3>ForgePilot</h3>
-        <p>派工、擋人、記錄。真正去跑驗證並把結果綁在 immutable Candidate 上的是它，但跑什麼內容不由它決定。</p>
-      </div>
-    </div>
-
-    <div class="body-text" style="margin-top:40px">
-      <p><strong>你先設目標。</strong> <code>goal create</code> 開一個 Goal，這是要跨好幾件工作才推得動的東西。接著 <code>work add</code> 把工作一件一件掛上去，每一件指向一份 Story，順手寫清楚誰依賴誰。Story 是 ForgeFlowV2 的東西，ForgePilot 只記住它的路徑，不讀內容也不猜格式。依賴還沒完成的工作，一建立就是等待狀態。</p>
-
-      <p><strong>agent 問下一件。</strong> 它跑 <code>next</code>，拿到的是依賴已經清乾淨、確實輪到的那一件，然後 <code>start</code> 認領。它不自己挑，也挑不到還卡著依賴的工作。</p>
-
-      <p><strong>寫程式，選擇 Candidate。</strong> 有兩條合法路徑：先 commit，再用 <code>verify</code> 驗證乾淨工作樹的 HEAD；或用 <code>verify WI-001 --snapshot</code> 把目前 working tree 固定成 immutable snapshot 後驗證。前者的工作樹只要還有未提交內容（含未追蹤檔案）就會拒絕，而且不寫 Evidence；那是無法驗證，不是驗證失敗。</p>
-
-      <p><strong>verify。</strong> commit mode 把 HEAD checkout 到隔離的 worktree；snapshot mode 先把 working tree 固定成 immutable snapshot，再在隔離 checkout 執行 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 ForgeFlowV2 的工程契約決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS 或 FAIL 連同 Candidate revision 記成 Evidence。PASS 之後工作進 REVIEW，FAIL 就退回去繼續改。</p>
-
-      <p><strong>人看過才算完成。</strong> 你 <code>review approve</code>，四項條件同時成立的話，工作在那一刻進 DONE，等著它的下游在同一次交易裡變成可以開始。條件不齊就只記下審查，並告訴你差什麼。</p>
-
-      <p><strong>agent 再問一次 next。</strong> 迴圈就這樣接上了。中間任何時候它遇到不該自己決定的事，<code>gate open</code> 把問題留在佇列上停住，等你回答。</p>
-    </div>
-
-    <div class="body-text" style="margin-top:34px">
-      <p>兩個最常被記反的地方。<strong>不帶 flag 的 verify 要先 commit；要保留 working tree 就用 <code>verify --snapshot</code></strong>。<strong>verify 通過不等於完成</strong>，那只是進了 REVIEW，還要人點頭。</p>
-      <p class="dim">全部是本機的命令列，不需要伺服器，也不需要帳號。狀態存在你 repo 裡的一個 JSON 檔，由程序鎖保護，多個終端機或多個 agent 同時用不會打架。</p>
-    </div>
-
-    <h3 style="margin-top:46px">同一條路線的指令對照</h3>
-    <div class="steps">
-      <div class="stepline">
-        <span class="k">init</span>
-        <p>在 repo 裡建立狀態檔。它會動到 <code>.gitignore</code>；若接著走 commit mode，先把它 commit。要驗證尚未提交內容時可改用 <code>verify --snapshot</code>。</p>
-      </div>
-      <div class="stepline">
-        <span class="k">goal / work add</span>
-        <p>宣告一個要跨多次工作才推得動的目標，把工作掛上去，順手寫清楚誰依賴誰。<strong>依賴還沒完成的工作，一建立就是等待狀態</strong>，不用你自己記。</p>
-      </div>
-      <div class="stepline">
-        <span class="k">next</span>
-        <p>問它現在該做哪一件。這是純查詢，不會偷偷把工作認領給你，而且它會<strong>說出為什麼選中這一件</strong>。</p>
-      </div>
-      <div class="stepline">
-        <span class="k">start</span>
-        <p>開始。這時候你或你的 agent 才真正去寫程式，ForgePilot 在這一段完全不插手。</p>
-      </div>
-      <div class="stepline">
-        <span class="k">verify</span>
-        <p>它在一個<strong>隔離的工作區</strong>裡，對確切 Candidate 跑<strong>那個 repo 自己 Makefile 裡的 <code>verify</code> target</strong>。不帶 flag 時 Candidate 是乾淨 HEAD；<code>--snapshot</code> 時是由目前 working tree 固定的 immutable snapshot。連 Makefile 存不存在都是在那份 checkout 裡判斷的，被 gitignore 掉的 Makefile 騙不過它。結果連同 Candidate revision 一起存起來。</p>
-      </div>
-      <div class="stepline">
-        <span class="k">gate</span>
-        <p>做到一半發現有件事不該自己決定，就把問題和選項寫下來，工作停在那裡等人。<strong>它想養成的習慣就是這個，問題交出去，不要自己挑一個繼續做。</strong></p>
-      </div>
-      <div class="stepline">
-        <span class="k">review</span>
-        <p>人看過之後同意或退回，理由留在檔案裡。四樣東西齊了就完成，同時解鎖下游；不齊就把審查記下來，並告訴你還差什麼。</p>
-      </div>
-      <div class="stepline">
-        <span class="k">status</span>
-        <p>把所有東西攤開。<strong>沒有驗證、沒有審查都會被明講出來</strong>，不會用留白帶過。沉默的缺席會被讀成沒問題的結果。</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="not">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="num">06</span>
-      <h2>它刻意不做的事</h2>
-    </div>
-    <div class="split">
+<main id="top">
+  <!-- HERO 區塊 -->
+  <section class="hero shell" aria-labelledby="hero-title">
+    <div class="hero__layout">
       <div>
-        <ul class="plain no-list">
-          <li><svg class="icon" aria-hidden="true"><use href="#i-bot"/></svg><span><b>不寫程式，也不取代你的 agent。</b>寫程式的還是它們，ForgePilot 只決定哪件事現在可以動，以及它算不算完成。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-offline"/></svg><span><b>不發出任何網路請求。</b>連你標註的 pull request 都不去查證，它只檢查格式，不假裝自己驗過了。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-block"/></svg><span><b>不驗證身分。</b>審查者的名字來自你的 git 設定，所以每次都明白印上「自稱」兩個字，免得誰把它當成簽章。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg><span><b>完成之後不能反悔。</b>DONE 是終點，沒有重開。要再動就開一件新工作，把歷史留著。</span></li>
-        </ul>
-      </div>
-      <div>
-        <ul class="plain yes">
-          <li><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span><b>狀態是一個檔案。</b>程序鎖加上原子替換，跨終端機、跨 session、關掉再開都讀得回同一份事實。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg><span><b>驗證的內容由你定義。</b>它固定跑 <code>make verify</code>，內容是那個 repo 自己 Makefile 寫的，ForgePilot 只負責在乾淨且隔離的環境裡執行並如實記錄。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-stack"/></svg><span><b>記錄只增不改。</b>通過、退回、被中斷的驗證都並排留著，「測試沒過」跟「人不接受」是兩件不同的事。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg><span><b>每個不易反轉的決定都寫成 ADR，</b>附上它在什麼條件下會失效。你可以不同意，但不會找不到理由。</span></li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
+        <div class="hero-tag">
+          <span class="hero-tag-dot"></span>
+          <span>Engineering Control Plane</span>
+        </div>
+        <h1 class="hero__word" id="hero-title">完成，<span class="mark-accent">不是</span>宣告。</h1>
 
-<section id="start">
-  <div class="wrap">
-    <div class="section-head">
-      <span class="num">07</span>
-      <h2>開始</h2>
-    </div>
-    <div class="split">
-      <div class="body-text">
-        <p>需要 Go 1.25 以上。目前只宣稱支援 macOS 的本機檔案系統，因為程序鎖用的是作業系統的 <code>flock</code>，其他平台還沒實際驗證過。</p>
-        <p>裝好之後，<a href="learn/handbook.html">使用手冊</a>會帶你從 <code>init</code> 一路走到 <code>DONE</code>，包含每一個會擋住你的地方。裡面所有輸出都是真的跑出來貼上去的，不是寫出來的範例。</p>
-        <div class="cta" style="margin-top:26px">
-          <a class="btn primary" href="learn/handbook.html"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>讀使用手冊</a>
-          <a class="btn" href="learn/reference/cli-quick-reference.html"><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg>指令速查表</a>
+        <div class="hero__prose">
+          <p class="lead">
+            AI Agent 可以在幾秒內生成大量程式碼，也可以毫不費力地回報「我已經做完了」。ForgePilot 不相信任何缺乏證據的宣稱。
+          </p>
+          <p class="context">
+            它不是儀表板，也不介入寫程式的過程。它唯一的職責，是在驗證證據不足、工作樹髒污、或是關鍵人工決策尚未落地時，明確無誤地在原地擋下推進，讓軟體工程重拾可追溯的重量。
+          </p>
+        </div>
+
+        <div class="hero__actions">
+          <a class="button button--primary" href="guide.html">探索完整產品導覽 <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="button button--quiet" href="https://github.com/CarlLee1983/ForgePilot" target="_blank">查看 GitHub ↗</a>
         </div>
       </div>
-      <div class="term">
-        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;安裝</div>
-<pre><span class="c"># 正式導入：貼上版本固定的 onboarding prompt</span>
-<span class="c"># Agent 先展示完整 commit SHA 與所有動作</span>
-<span class="c"># 等待明確授權，再 source-build</span>
 
-<span class="c">cd your-project</span>
-<span class="c">forgepilot init</span>
-<span class="ok">Initialized ForgePilot in /your/project</span>
+      <!-- 右側 Work Trace 儀表 -->
+      <figure class="trace-stage" data-trace aria-labelledby="trace-caption">
+        <figcaption class="trace-stage__caption" id="trace-caption">
+          <div class="trace-stage__title">
+            <svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-hash"/></svg>
+            <strong>WORK TRACE</strong><span>· WI-002</span>
+          </div>
+          <span class="trace-badge">RUNNING · CANDIDATE BOUND</span>
+        </figcaption>
 
-<span class="c">git add .gitignore &amp;&amp; git commit \
-    -m "chore: adopt forgepilot"</span></pre>
+        <div class="trace-meter" aria-hidden="true">
+          <div class="trace-meter__bar"></div>
+        </div>
+
+        <ol class="trace-nodes">
+          <li class="trace-node is-done">
+            <span class="trace-node__state">01 · QUEUE</span>
+            <span class="trace-node__fact">Claimed ✓</span>
+          </li>
+          <li class="trace-node is-done">
+            <span class="trace-node__state">02 · CANDIDATE</span>
+            <span class="trace-node__fact">96f3e0b2</span>
+          </li>
+          <li class="trace-node is-active">
+            <span class="trace-node__state">03 · VERIFY</span>
+            <span class="trace-node__fact">sandbox verify</span>
+          </li>
+          <li class="trace-node">
+            <span class="trace-node__state">04 · DECIDE</span>
+            <span class="trace-node__fact">Human Gate</span>
+          </li>
+        </ol>
+
+        <div class="trace-terminal">
+          <div><span class="t-cmd">forgepilot review approve WI-002</span></div>
+          <div class="t-stop">Not complete: latest PASS is at revision 26be05c9 but approval is at 96f3e0b2</div>
+          <div style="margin-top:6px;"><span class="t-cmd">forgepilot verify WI-002</span></div>
+          <div class="t-pass">EV-009 PASS at 96f3e0b2 (sandbox make verify)</div>
+          <div style="margin-top:6px;"><span class="t-cmd">forgepilot review approve WI-002</span></div>
+          <div class="t-pass">EV-010 APPROVED · WI-002 DONE</div>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- 剖析段落：為什麼交付需要付代價 -->
+  <section class="problem-deepdive shell" id="problem" aria-labelledby="problem-title">
+    <div class="deepdive__layout">
+      <div>
+        <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-gate"/></svg> The Cost of Certainty</span>
+        <h2 class="deepdive__title" id="problem-title">當生成變得便宜，驗證就必須變得極度昂貴。</h2>
+        <p style="color:var(--color-muted); font-size:var(--text-base); margin:0;">
+          在人類寫程式的時代，完成工作的阻力來自撰寫過程；而在 Agent 時代，最大的系統性風險在於「宣告做完」不需要承擔任何成本。
+        </p>
+      </div>
+
+      <div class="deepdive__prose">
+        <p>
+          當你把工程委託給 AI Agent，它通常同時掌握過多的權力：自己決定挑哪一題、自己在工作目錄修改代碼、最後自己宣布測試通過。只要其中一環出現幻覺或遺漏，你往往要等到合併或上線後才會發現災難。
+        </p>
+        <div class="deepdive__callout">
+          <strong>ForgePilot 將這三個角色強制解耦。</strong><br>
+          哪一件工作現在可以做，由依賴佇列客觀決定；代碼由 Agent 撰寫；但算不算完成，只能由隔離環境的真實 PASS 紀錄、以及人類在確切 Candidate 上的核准決定。Agent 的完成宣稱與 exit code 永遠不是通行證。
+        </div>
+        <p>
+          ForgePilot 的核心治理命令與 state 不依賴網路、也不架設遠端資料庫；Runner 所啟動的本機 coding CLI 則可能依其自身設定連線。一切治理事實以具備程序鎖保護的狀態檔落地保存。不留模糊空間，沒有任何僥倖。
+        </p>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<footer>
-  <div class="wrap">
-    <div class="links">
-      <a href="learn/handbook.html">使用手冊</a>
-      <a href="learn/reference/cli-quick-reference.html">速查表</a>
-      <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/docs/architecture.md">架構</a>
-      <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/docs/adr/README.md">決策紀錄</a>
-      <a href="diagrams/work-item-lifecycle.html">狀態機圖</a>
-      <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md">詞彙</a>
-      <a href="https://github.com/CarlLee1983/ForgePilot">GitHub</a>
+  <!-- 四道推進順序 (Proof Flow) -->
+  <section class="proof shell" id="proof" aria-labelledby="proof-title">
+    <div class="proof__layout">
+      <div class="proof__copy">
+        <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-seal"/></svg> Immutable Gates</span>
+        <h2 id="proof-title">四道關卡，少一道就停在原地。</h2>
+        <p>這不是空泛的 dashboard，而是真實的狀態機門檻。少了任何一項事實證據，系統明確拒絕推進。</p>
+      </div>
+
+      <div class="proof-flow" data-reveal aria-label="ForgePilot 的工作推進順序">
+        <div class="flow-node">
+          <div class="flow-node__left">
+            <svg class="flow-node__icon" aria-hidden="true"><use href="#i-flag"/></svg>
+            <span class="flow-node__name">Work Item · 目標佇列</span>
+          </div>
+          <span class="flow-node__fact">無依賴衝突，唯一輪到的下一件</span>
+        </div>
+        <div class="flow-node">
+          <div class="flow-node__left">
+            <svg class="flow-node__icon" aria-hidden="true"><use href="#i-hash"/></svg>
+            <span class="flow-node__name">Candidate · 確切版本</span>
+          </div>
+          <span class="flow-node__fact">鎖定 Commit SHA 或工作樹 Snapshot</span>
+        </div>
+        <div class="flow-node">
+          <div class="flow-node__left">
+            <svg class="flow-node__icon" aria-hidden="true"><use href="#i-seal"/></svg>
+            <span class="flow-node__name">Verification · 隔離驗證</span>
+          </div>
+          <span class="flow-node__fact">在乾淨 Worktree 實跑 Makefile Canonical Check</span>
+        </div>
+        <div class="flow-node">
+          <div class="flow-node__left">
+            <svg class="flow-node__icon" aria-hidden="true"><use href="#i-ask"/></svg>
+            <span class="flow-node__name">Human Review & Gate</span>
+          </div>
+          <span class="flow-node__fact">人工簽核與決策落地，解鎖下游</span>
+        </div>
+      </div>
     </div>
-    <p>ForgePilot 服務 AI 輔助的軟體工程，管理工作佇列、狀態、人工決策與驗證證據，讓工程工作能跨 agent 與 session 延續。它不取代 ForgeFlow，也不取代你的 coding agent。</p>
-    <p>文件與實際行為不符時以程式碼為準。每一條流程在 <code>integration_test.go</code> 都有一個以獨立 process 對真實 git repository 執行的測試。</p>
+  </section>
+
+  <!-- Graph Engineering 實踐機制與完整閉環 -->
+  <section class="graph-engineering shell" id="graph-engineering" aria-labelledby="graph-title">
+    <div class="graph-head">
+      <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-graph"/></svg> Real-world Graph Engineering</span>
+      <h2 id="graph-title">從 ADR、Spec、Story 到 Work Item DAG 的驅動閉環</h2>
+      <p>
+        這不是理論推導，而是我們在多輪 Dogfood 開發中<strong>真實驗證並落地</strong>的工程機制。前置規格由 PraxisBound 完整定稿，ForgePilot 接手將其構建為嚴密的可執行依賴圖（DAG），透過隔離驗證、Evidence 與明確 Human Review 邊界維持可追溯的推進順序。
+      </p>
+    </div>
+
+    <!-- 四階段流水線 -->
+    <div class="graph-pipeline" aria-label="Graph Engineering 推進流水線">
+      <article class="pipeline-step">
+        <div class="pipeline-step__head">
+          <span class="pipeline-step__tag">STAGE 01</span>
+          <span class="pipeline-step__badge">PraxisBound</span>
+        </div>
+        <h3 class="pipeline-step__title">ADR 決策固化</h3>
+        <p class="pipeline-step__desc">
+          所有非直觀的架構取捨與邊界約束，皆先沉澱為不可隨意反轉的架構決策紀錄（ADR），明訂成立邊界與失效條件，杜絕後續反覆推翻。
+        </p>
+      </article>
+
+      <article class="pipeline-step">
+        <div class="pipeline-step__head">
+          <span class="pipeline-step__tag">STAGE 02</span>
+          <span class="pipeline-step__badge">PraxisBound</span>
+        </div>
+        <h3 class="pipeline-step__title">Spec & Story 規格拆分</h3>
+        <p class="pipeline-step__desc">
+          將宏觀目標細化為具備唯一職責的規格文檔與 Story，附帶完備的 Acceptance Criteria (AC) 與不可妥協的測試契約，定義「何謂正確」。
+        </p>
+      </article>
+
+      <article class="pipeline-step">
+        <div class="pipeline-step__head">
+          <span class="pipeline-step__tag">STAGE 03</span>
+          <span class="pipeline-step__badge">ForgePilot</span>
+        </div>
+        <h3 class="pipeline-step__title">Work Item DAG 拓撲編排</h3>
+        <p class="pipeline-step__desc">
+          ForgePilot 接手以 <code>work add --depends-on</code> 構建嚴密的有向無環圖。前置未滿足者為 PENDING，解鎖後推進為 READY，排除所有循環與死鎖。
+        </p>
+      </article>
+
+      <article class="pipeline-step">
+        <div class="pipeline-step__head">
+          <span class="pipeline-step__tag">STAGE 04</span>
+          <span class="pipeline-step__badge">ForgePilot Runner</span>
+        </div>
+        <h3 class="pipeline-step__title">單點實作、驗證與核准邊界</h3>
+        <p class="pipeline-step__desc">
+          Agent 只做指定 focused checks；ForgePilot 對 immutable Candidate 執行 canonical verification。預設 WORK_ITEM policy 須經 Human Review 才解鎖下游；GOAL policy 則保留 Goal final review。
+        </p>
+      </article>
+    </div>
+
+    <!-- Graph Engineering 架構視覺 -->
+    <div class="graph-visual-card">
+      <div class="graph-visual-card__top">
+        <div class="graph-visual-card__title">
+          <svg style="width:18px;height:18px;color:var(--color-accent);" aria-hidden="true"><use href="#i-image"/></svg>
+          <span>GRAPH ENGINEERING ARCHITECTURE VISUAL</span>
+        </div>
+        <span class="graph-visual-card__meta">PRECISION PIPELINE & DAG TOPOLOGY</span>
+      </div>
+
+      <div class="graph-image-slot">
+        <img src="images/graph-engineering.png" alt="Graph Engineering 流程：ADR、Spec 與 Story 規格匯入 Work Item 依賴圖，經隔離驗證取得 PASS Evidence，再經 Human Review 後解鎖下游工作。">
+      </div>
+      <p style="margin:var(--space-sm) 0 0; color:var(--color-muted); font-size:var(--text-sm);">圖示為預設 WORK_ITEM policy：PASS 不會直接解鎖下游；Human <code>review approve</code> 使 Work Item 成為 DONE。GOAL policy 則以 VERIFIED 推進依賴，並保留 Goal final review。</p>
+    </div>
+
+    <!-- 實踐核心三大原則 -->
+    <div class="graph-principles-grid">
+      <div class="graph-principle">
+        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-loop"/></svg> 單點實作與隔離驗證</h4>
+        <p>
+          每個節點被認領後，由 Agent 在全新 Session 中專注實作該 Story 的 AC，並只執行交接指定的 focused checks。完成後由 ForgePilot 在 Candidate 的隔離 checkout 執行 canonical <code>make verify</code>，才取得客觀 PASS Evidence。
+        </p>
+      </div>
+
+      <div class="graph-principle">
+        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-seal"/></svg> 預算邊界與一次收斂</h4>
+        <p>
+          驗證失敗才在明確的 Attempt 預算內進入 Repair 迴圈。預設 WORK_ITEM policy 的 PASS 先等 Human Review，只有 DONE 才推進下游；GOAL policy 的 VERIFIED 仍停在 Goal final review。一旦超出預算或遇到架構決策立即停下，絕不無界浪費資源。
+        </p>
+      </div>
+
+      <div class="graph-principle">
+        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-flag"/></svg> 全域拓撲確定性驅動</h4>
+        <p>
+          Agent 永遠不需要猜測「下一步做什麼」。ForgePilot 根據 Graph 拓撲與狀態機即時給出唯一合法的 <code>next</code> 行動，有條不紊地驅動任務鏈，直到所有目標達成。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 三大架構邊界原則 -->
+  <section class="principles shell" id="principles" aria-labelledby="principles-title">
+    <div class="principles__head">
+      <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-book"/></svg> Architectural Bounds</span>
+      <h2 id="principles-title">守住工程確定性的三道硬性邊界</h2>
+      <p>工具只管理它擁有的邊界，把不該猜的決策留給真正負責的人。</p>
+    </div>
+
+    <div class="principles__grid">
+      <article class="principle-card">
+        <div class="principle-card__top">
+          <span class="principle-card__num">01 / EVIDENCE</span>
+          <svg class="principle-card__icon" aria-hidden="true"><use href="#i-hash"/></svg>
+        </div>
+        <h3 class="principle-card__title">沒有 Evidence，就沒有完成。</h3>
+        <p class="principle-card__body">
+          驗證結果永遠綁定在具體的 Candidate Revision。代碼有任何未提交變更，舊的 PASS 絕不替新內容背書。
+        </p>
+      </article>
+
+      <article class="principle-card">
+        <div class="principle-card__top">
+          <span class="principle-card__num">02 / HUMAN DECISION</span>
+          <svg class="principle-card__icon" aria-hidden="true"><use href="#i-ask"/></svg>
+        </div>
+        <h3 class="principle-card__title">人該決定的，不交給流程猜。</h3>
+        <p class="principle-card__body">
+          Gate 讓關鍵設計分歧有名字、有選項，明確暫停下一步工作。只要問題懸而未決，下游一律凍結。
+        </p>
+      </article>
+
+      <article class="principle-card">
+        <div class="principle-card__top">
+          <span class="principle-card__num">03 / SEAM DISCIPLINE</span>
+          <svg class="principle-card__icon" aria-hidden="true"><use href="#i-gate"/></svg>
+        </div>
+        <h3 class="principle-card__title">工具只管理它擁有的邊界。</h3>
+        <p class="principle-card__body">
+          Story 的規格屬於 PraxisBound，代碼質量屬於 Repository；ForgePilot 僅專注於驗證「現在能否推進」的事實。
+        </p>
+      </article>
+    </div>
+  </section>
+
+  <!-- 指引入口 (Guides) -->
+  <section class="guide-intro shell" id="guide" aria-labelledby="guide-title">
+    <div>
+      <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-book"/></svg> Deep Documentation</span>
+      <h2 id="guide-title">想知道它為什麼這樣擋？讀完整設計。</h2>
+      <p class="guide-intro__lede">入口頁說明立場；長篇導覽則把狀態機、隔離驗證與不能妥協的設計邊界完整攤開。</p>
+    </div>
+
+    <div class="guide-links">
+      <a class="guide-link" href="guide.html">
+        <span class="guide-link__name">完整產品導覽 <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+        <span class="guide-link__description">從「為什麼」到 Goal、Work Item、Evidence 與 DONE。</span>
+      </a>
+      <a class="guide-link" href="learn/handbook.html">
+        <span class="guide-link__name">使用手冊 <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+        <span class="guide-link__description">依合法路徑操作 CLI，而不是從輸出猜狀態。</span>
+      </a>
+      <a class="guide-link" href="diagrams/work-item-lifecycle.html">
+        <span class="guide-link__name">狀態機圖 <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+        <span class="guide-link__description">看 Work Item 的生命週期和何時拒絕推進。</span>
+      </a>
+      <a class="guide-link" href="https://github.com/CarlLee1983/ForgePilot/blob/main/docs/architecture.md" target="_blank">
+        <span class="guide-link__name">Architecture <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+        <span class="guide-link__description">責任邊界、資料模型與不可重建的設計決定。</span>
+      </a>
+    </div>
+  </section>
+
+  <!-- 起手式 (Start) -->
+  <section class="start shell" aria-labelledby="start-title">
+    <div class="start__layout">
+      <div>
+        <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-flag"/></svg> Deterministic Onboarding</span>
+        <h2 class="start__title" id="start-title">把事實交給下一個 session。</h2>
+        <p class="start__copy">正式導入從一個固定的 Source Revision 開始。Agent 先檢查並展示影響，取得授權後才建置並寫入受管理 Repository。</p>
+        <a class="button button--primary" href="release/onboarding.md">閱讀 onboarding 程序 <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      </div>
+
+      <div class="start-terminal">
+        <div class="start-terminal-head">
+          <span class="start-terminal-dot"></span>
+          <span>TERMINAL QUICKSTART</span>
+        </div>
+        <pre style="margin:0; padding-block:var(--space-2xs); line-height:1.8;"><code><span style="color:var(--color-faint);">$</span> cd your-project
+<span style="color:var(--color-faint);">$</span> forgepilot init
+<span class="t-pass">Initialized ForgePilot in /your/project</span>
+
+<span style="color:var(--color-faint);">$</span> forgepilot status
+<span class="t-pass">Next action is explicit.</span></code></pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <p class="footer__statement">讓「完成」有足夠的重量。</p>
+    <div class="footer__meta">
+      <span>ForgePilot · local CLI for AI-assisted engineering</span>
+      <div class="footer__links">
+        <a href="guide.html">完整導覽</a>
+        <a href="learn/handbook.html">手冊</a>
+        <a href="https://github.com/CarlLee1983/ForgePilot" target="_blank">GitHub</a>
+      </div>
+    </div>
   </div>
 </footer>
 
+<!-- 快捷搜尋 Dialog -->
+<dialog class="command-palette" data-command-dialog aria-labelledby="command-title">
+  <div class="command-palette__head">
+    <label for="command-search" id="command-title">尋找內容</label>
+    <input class="command-palette__input" id="command-search" type="search" autocomplete="off" placeholder="輸入「手冊」、「架構」或「GitHub」" data-command-search>
+  </div>
+  <div class="command-palette__results" data-command-results>
+    <button class="command-item" type="button" data-command-target="guide.html"><span>完整產品導覽</span><small>Guide</small></button>
+    <button class="command-item" type="button" data-command-target="learn/handbook.html"><span>使用手冊</span><small>Handbook</small></button>
+    <button class="command-item" type="button" data-command-target="diagrams/work-item-lifecycle.html"><span>狀態機圖</span><small>Lifecycle</small></button>
+    <button class="command-item" type="button" data-command-target="https://github.com/CarlLee1983/ForgePilot"><span>GitHub repository</span><small>Source</small></button>
+    <p class="command-empty" data-command-empty hidden style="margin:0; padding:var(--space-md); color:var(--color-muted);">找不到相符內容。</p>
+  </div>
+  <div class="command-palette__footer">↑ ↓ 選擇　Enter 開啟　Esc 關閉</div>
+</dialog>
+
+<script>
+(() => {
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const revealTarget = document.querySelector('[data-reveal]');
+  if (revealTarget) {
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      revealTarget.classList.add('is-in');
+    } else {
+      new IntersectionObserver((entries, observer) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          revealTarget.classList.add('is-in');
+          observer.disconnect();
+        }
+      }, { threshold: 0.2 }).observe(revealTarget);
+    }
+  }
+
+  const dialog = document.querySelector('[data-command-dialog]');
+  const search = document.querySelector('[data-command-search]');
+  const openers = document.querySelectorAll('[data-command-open]');
+  const items = [...document.querySelectorAll('[data-command-target]')];
+  const empty = document.querySelector('[data-command-empty]');
+  let selected = 0;
+
+  const visibleItems = () => items.filter((item) => !item.hidden);
+  const select = (index) => {
+    const visible = visibleItems();
+    selected = Math.max(0, Math.min(index, visible.length - 1));
+    items.forEach((item) => item.classList.remove('is-selected'));
+    if (visible[selected]) visible[selected].classList.add('is-selected');
+  };
+  const open = () => {
+    if (!dialog.open) dialog.showModal();
+    search.value = '';
+    items.forEach((item) => { item.hidden = false; });
+    empty.hidden = true;
+    select(0);
+    search.focus({ preventScroll: true });
+  };
+  openers.forEach((opener) => opener.addEventListener('click', open));
+  search.addEventListener('input', () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    items.forEach((item) => {
+      item.hidden = !item.textContent.toLocaleLowerCase().includes(query);
+    });
+    empty.hidden = visibleItems().length !== 0;
+    select(0);
+  });
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener('keydown', (event) => {
+    const visible = visibleItems();
+    if (!visible.length) return;
+    if (event.key === 'ArrowDown') { event.preventDefault(); select((selected + 1) % visible.length); }
+    if (event.key === 'ArrowUp') { event.preventDefault(); select((selected - 1 + visible.length) % visible.length); }
+    if (event.key === 'Enter' && visible[selected]) { event.preventDefault(); visible[selected].click(); }
+  });
+  items.forEach((item) => item.addEventListener('click', () => { window.location.assign(item.dataset.commandTarget); }));
+  window.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === 'k') { event.preventDefault(); open(); }
+  });
+})();
+</script>
 </body>
 </html>

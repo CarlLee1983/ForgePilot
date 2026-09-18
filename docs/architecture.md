@@ -14,11 +14,25 @@ MVP 的 M1–M5、P0-001–P0-003、P1-004 Deterministic Runtime Resolution 與 
 |---|---|
 | Human | Goal approval、架構／範圍／安全判斷、production operation、merge／release authorization |
 | ForgePilot | Goal、工作佇列、狀態、Gate、Evidence index、Candidate identity、next-work selection |
-| ForgeFlowV2 | Story schema、acceptance criteria、工程流程、coding standards、測試與驗證契約、人工審查原則 |
+| PraxisBound | Story schema、acceptance criteria、工程流程、coding standards、測試與驗證契約、人工審查原則 |
 | Repository | 程式碼、tests、formatters、linters、type／architecture checks、canonical `make verify` |
 | Agent | 讀取 Story、實作、修復、推理與工具操作 |
 
-Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不讀取程式碼後自行判斷正確性，也不替代 ForgeFlowV2 的工程 lifecycle。
+Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不讀取程式碼後自行判斷正確性，也不替代 PraxisBound 的工程 lifecycle。
+
+### Graph Engineering: 規格拆分至 DAG 驅動閉環
+
+此架構在實務 Dogfood 中落實為 **Graph Engineering（圖工程體系）**，由兩大系統精確分工、各司其職：
+
+1. **上游規格體系 (PraxisBound)**：
+   - **ADR 決策固化**：架構取捨與技術約定先寫成 ADR，定案後不可無因推翻。
+   - **Spec 規格界定**：根據 ADR 撰寫系統架構規格、模組邊界與狀態機契約。
+   - **Story & AC 拆分**：將 Spec 拆解為具體可驗收的獨立 Story，每個 Story 具備明確的 Acceptance Criteria 與測試驗證指令。
+2. **下游圖執行與控制面 (ForgePilot)**：
+   - **Work Item DAG 拓撲編排**：以 `goal create` 建立目標，`work add --story <ref> --depends-on <prereqs>` 將所有 Stories 組裝為嚴密的有向無環圖（DAG）。未滿足依賴者為 `PENDING`，滿足者推進至 `READY`。
+   - **單點實作與驗證**：由 Runner 派發專屬 Agent Session 接單實作；Agent 只執行交接指定的 focused checks。Agent 回報 `implementation_finished` 後，ForgePilot 才在 explicit `verify` 或 Runner 的 verification orchestration 中，對 immutable Candidate 的隔離 checkout 執行 repository canonical `make verify` 並保存 Evidence。
+   - **預算約束與一次收斂**：驗證失敗才在明確的 Attempt 預算內進入有限 Repair 迴圈；超限或遇架構決策（Gate）立即中斷等待人類。預設 `WORK_ITEM` policy 的 PASS 先進 REVIEW，只有 Human `review approve` 成為 DONE 才解鎖下游；`GOAL` policy 的 PASS 才可成為 VERIFIED 以推進依賴。
+   - **拓撲順序與最終邊界**：ForgePilot 始終握有合法轉移與順序仲裁權，即時提供依確定排序選出的 `next` 建議動作；其他 independently READY Work Item 仍可合法 `start`。Runner 只把 `GOAL` policy 推進至等待 Goal final review；它不自動完成 Goal 或跨越任何 Human Review 邊界。
 
 Breaking change、architecture trade-off、security-sensitive decision、production operation、destructive action、scope expansion、ambiguous requirement、merge／release authorization 都需要明確 Human Decision。M3 起這些決策以 Gate 表示並保存；merge／release authorization 仍不在產品範圍內，Gate resolution 不授予該權限。
 
@@ -27,12 +41,14 @@ Breaking change、architecture trade-off、security-sensitive decision、product
 Onboarding procedure、可選 Codex／Claude adapters 與任何安裝 helper 都是 repository 內的分發
 表面，不是 ForgePilot 核心治理命令。正式 macOS 支援面只包含 Apple Silicon；完成乾淨原生
 Apple Silicon Mac 的固定 source commit 驗收前，不得宣稱正式支援，Intel Mac 不在支援範圍內。
-預定的 supported path 是使用者明確授權的 fixed-source-version 本機建置：先以
-inspection-only commands 確認目標 Candidate 與 `make verify` 是否存在，不執行
-repository-defined target；再逐條展示 immutable commit SHA、預計 commands、作用路徑與效果，等待
-授權後才以已安裝的 Go 建置、驗證並原子切換使用者目錄的 entrypoint。它不下載 ForgePilot binary、
-不持有憑證、也不把 agent output 當作 Verification Evidence；缺少 Go 或需使用 package manager 時，
-agent 只能展示行動並等待另一份授權。Story 人工檢閱後的 repository writes 需要獨立的明確授權。
+預定的 supported path 是使用者明確授權的 fixed-source-version 本機建置。已接受但尚未實作的
+Bootstrap（ADR-0033）以使用者提供的絕對本機 source checkout 與完整 commit SHA 建立 detached
+staging checkout，以已安裝的 Go 建置、跑 `make verify`、確認 staged CLI，然後透過一個 user-home
+managed current pointer 同版切換 CLI 與 Codex skill。它不下載 ForgePilot binary、不持有或呼叫
+credential helper、不改 shell profile，也不檢查或寫入 target repository。Bootstrap 之後的
+Repository Onboarding 才以 inspection-only commands 確認目標 Candidate 與 `make verify` 是否存在，
+不執行 repository-defined target；Story 人工檢閱與 repository writes 仍需獨立的明確授權。缺少 Go
+或需使用 package manager 時，Agent 只能展示行動並等待新的授權，不能安裝它。
 
 未簽署 prebuilt binary（包含 `amd64` trial asset）僅可作 maintainer trial，不是一般使用者或 agent 的預設入口；不教使用者
 移除 quarantine 或繞過 Gatekeeper。Developer ID 簽署、notarization 與 immutable publication
@@ -83,7 +99,7 @@ M1 每個 `.forgepilot/` 管理一個 repository，可以包含多個 Goal；不
 
 `init` 的作用位置是使用者指定工作的 repository root。後續命令從目前目錄向上尋找最近的 `.forgepilot/`；找不到時明確要求先 init。Goal 的 repository 必須與該 state root 一致。
 
-Story reference 為 repository-relative path，必須存在於 `specs/stories/` 內。可指向 ForgeFlow 所使用的檔案或目錄；不猜測其 business schema。路徑正規化與 symlink 解析後仍須在允許範圍，拒絕逃出 repository 的 reference。
+Story reference 為 repository-relative path，必須存在於 `specs/stories/` 內。可指向 PraxisBound 所使用的檔案或目錄；不猜測其 business schema。路徑正規化與 symlink 解析後仍須在允許範圍，拒絕逃出 repository 的 reference。
 
 ### Whole-DAG Story readiness review
 
@@ -399,7 +415,7 @@ Schema v4 相對 v3 只有新增：`schema_version` 改為 4、Evidence 加入�
 
 Runner 由使用者明確啟動，對單一 Goal 循序執行：取得下一個合法動作、必要時開一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續。範圍與驗收見 [specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)。
 
-責任分工是全部：**Runner 負責執行，ForgePilot 負責判定，ForgeFlowV2 負責工程驗證規範。**
+責任分工是全部：**Runner 負責執行，ForgePilot 負責判定，PraxisBound 負責工程驗證規範。**
 
 ### 分層與新的 package
 
