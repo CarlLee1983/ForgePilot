@@ -37,6 +37,7 @@
 | [0029](0029-story-readiness-contract-is-upstream-owned.md) | Whole-DAG Story readiness 使用 PraxisBound-owned sidecar 與 source digest；ForgePilot 只讀取並在 Runner preflight 檢查 | accepted |
 | [0030](0030-source-built-onboarding-without-apple-developer.md) | 正式導入從固定 source version 本機建置；unsigned binary 只作 maintainer trial | accepted（部分取代 0025 的現行前提） |
 | [0031](0031-goal-scoped-external-work-reference.md) | External Work Reference 是 Goal-scoped 的 immutable idempotency key；machine JSON 是狹窄 public projection | accepted |
+| [0032](0032-formal-macos-onboarding-is-apple-silicon-only.md) | 正式 macOS onboarding 僅支援 Apple Silicon；Intel trial asset 不構成支援承諾 | accepted（取代 0025、0030 的雙架構前提） |
 
 ## 什麼時候該加一份
 

@@ -1,5 +1,9 @@
 # 目前的正式導入從固定 source version 本機建置
 
+**Status relation:** [ADR-0032](0032-formal-macos-onboarding-is-apple-silicon-only.md)
+把正式 macOS onboarding 支援面限定為 Apple Silicon，取代本 ADR 原本的 Intel／Apple Silicon
+雙架構驗收前提；固定 source、信任與授權邊界不變。
+
 維護者不申請 Apple Developer Program，因此 ForgePilot 目前不能承諾 Developer ID、notarization
 或 Gatekeeper 無警告啟動的預編譯 macOS binary。checksum、GitHub immutable Release 與 provenance
 可以識別 source 或 asset bytes，卻不能代替 Apple 對執行檔的身分與 notarization 信任。把 unsigned
@@ -27,10 +31,11 @@ ADR-0025 繼續定義**未來**若恢復支援 signed prebuilt macOS binary 時�
 取代其「目前正式 onboarding 必須由 no-Go signed binary 開始」的前提。source identity／integrity
 與 macOS execution trust 是兩項不同的主張，文件不得把前者誤寫成後者。
 
-**Consequences:** 正式 onboarding 的前提是 Go，而不是 Apple signing identity。需在乾淨的 Intel
-與 Apple Silicon Mac 驗收同一個 source commit 的 source-built path，才可宣稱支援；不可用跨編譯或
-unsigned asset 作替代。使用者可選的 source-based Homebrew formula 是未來便利層，不得發布 bottle
-或宣稱 Homebrew 消除 Gatekeeper friction，除非另有驗收與決定。
+**Consequences:** 正式 onboarding 的前提是 Go，而不是 Apple signing identity。需在乾淨的原生
+Apple Silicon Mac 驗收固定 source commit 的 source-built path，才可宣稱支援；planner 在
+inspection-only 階段拒絕其他 host，不可用跨編譯或 unsigned asset 作替代。使用者可選的
+source-based Homebrew formula 是未來便利層，不得發布 bottle 或宣稱 Homebrew 消除 Gatekeeper
+friction，除非另有驗收與決定。
 
 **Falsified if:** 一般使用者文件或 agent 把 unsigned prebuilt binary 當成正式安裝入口、指示移除
 quarantine／繞過 Gatekeeper、宣稱沒有 Developer ID 仍有 notarization 或 signer trust；核心
