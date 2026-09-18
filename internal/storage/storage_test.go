@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -63,7 +64,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":10,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":11,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -376,7 +377,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 9`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 10`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -787,6 +788,97 @@ func TestUpgradeV8AssignsDistinctLegacyRunIDs(t *testing.T) {
 	}
 }
 
+func TestUpgradeV9AddsEmptyExternalReferences(t *testing.T) {
+	now := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	state := work.NewState()
+	state.SchemaVersion = 9
+	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.AddWork("g", "specs/stories/a", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents = bytes.Replace(contents, []byte(`,"external_ref":""`), nil, 1)
+	if bytes.Contains(contents, []byte(`"external_ref"`)) {
+		t.Fatalf("failed to construct field-absent v9 fixture: %s", contents)
+	}
+
+	upgraded, err := upgrade(contents, 9)
+	if err != nil {
+		t.Fatalf("upgrade = %v", err)
+	}
+	if upgraded.SchemaVersion != 10 {
+		t.Fatalf("schema version = %d, want 10", upgraded.SchemaVersion)
+	}
+	if got := upgraded.WorkItems[0].ExternalRef; got != "" {
+		t.Fatalf("migrated external reference = %q, want empty", got)
+	}
+
+	state.WorkItems[0].ExternalRef = "PB-001"
+	contents, err = json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upgrade(contents, 9); err == nil || !strings.Contains(err.Error(), "already carries an external reference") {
+		t.Fatalf("upgrade understated v9 external reference = %v", err)
+	}
+}
+
+func TestMigrateV9AddsEmptyExternalReferencesAndKeepsBackup(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = canonicalRoot
+	now := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	legacy := work.NewState()
+	legacy.SchemaVersion = 9
+	if err := legacy.AddGoal("g", "Goal", "", root, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.AddWork("g", "specs/stories/a", nil, now); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents = bytes.Replace(contents, []byte(`,"external_ref":""`), nil, 1)
+	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Migrate(root)
+	if err != nil || !upgraded {
+		t.Fatalf("Migrate = %v, %v", upgraded, err)
+	}
+	backup, err := os.ReadFile(filepath.Join(root, stateDirectory, "state.json.v9.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backup, contents) {
+		t.Fatal("v9 backup does not preserve the original field-absent snapshot")
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SchemaVersion != 10 || state.WorkItems[0].ExternalRef != "" {
+		t.Fatalf("migrated state = %#v", state)
+	}
+}
+
 func TestUpgradeV8RefusesPreexistingRunIdentity(t *testing.T) {
 	cases := map[string]func(*work.State){
 		"malformed evidence ID": func(state *work.State) {
@@ -865,7 +957,7 @@ func TestMigrateRefusesV7HeaderThatUnderstatesReviewPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 9`, `"schema_version": 7`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 10`, `"schema_version": 7`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}

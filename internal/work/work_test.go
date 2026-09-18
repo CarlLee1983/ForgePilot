@@ -55,6 +55,104 @@ func TestQueueRules(t *testing.T) {
 	}
 }
 
+func TestAddWorkWithRepositoryAndExternalRefReturnsExistingMatchingRequest(t *testing.T) {
+	now := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	state := NewState()
+	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+		t.Fatal(err)
+	}
+
+	first, created, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/a", nil, "PB-001", RepositoryState{}, now)
+	if err != nil || !created {
+		t.Fatalf("first add = %#v, created=%v, err=%v", first, created, err)
+	}
+	beforeRetry := state
+	repeated, created, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/a", nil, "PB-001", RepositoryState{}, now.Add(time.Minute))
+	if err != nil || created {
+		t.Fatalf("retry = %#v, created=%v, err=%v", repeated, created, err)
+	}
+	if !reflect.DeepEqual(repeated, first) {
+		t.Fatalf("retry item = %#v, want %#v", repeated, first)
+	}
+	if !reflect.DeepEqual(state, beforeRetry) {
+		t.Fatalf("matching retry changed state:\nbefore: %#v\nafter:  %#v", beforeRetry, state)
+	}
+	if _, _, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/b", nil, "PB-001", RepositoryState{}, now); err == nil {
+		t.Fatal("accepted a conflicting external reference")
+	}
+	beforeDependencyConflict := state
+	if _, _, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/a", []string{first.ID}, "PB-001", RepositoryState{}, now); err == nil {
+		t.Fatal("accepted a conflicting dependency set for an external reference")
+	}
+	if !reflect.DeepEqual(state, beforeDependencyConflict) {
+		t.Fatalf("dependency conflict changed state:\nbefore: %#v\nafter:  %#v", beforeDependencyConflict, state)
+	}
+	if err := state.AddGoal("other", "Other", "", "/repo", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := state.AddWorkWithRepositoryAndExternalRef("other", "specs/stories/a", nil, "PB-001", RepositoryState{}, now); err != nil || !created {
+		t.Fatalf("same key in another Goal = created=%v, err=%v", created, err)
+	}
+	state.Goals[0].Status, state.Goals[0].Reason = GoalBlocked, "paused"
+	beforeInactiveRetry := state
+	repeated, created, err = state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/a", nil, "PB-001", RepositoryState{}, now.Add(time.Minute))
+	if err != nil || created || repeated.ID != first.ID {
+		t.Fatalf("inactive Goal retry = %#v, created=%v, err=%v", repeated, created, err)
+	}
+	if !reflect.DeepEqual(state, beforeInactiveRetry) {
+		t.Fatalf("inactive Goal retry changed state:\nbefore: %#v\nafter:  %#v", beforeInactiveRetry, state)
+	}
+	if _, _, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/a", nil, "", RepositoryState{}, now); err == nil {
+		t.Fatal("accepted an empty external reference")
+	}
+	if _, _, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/a", nil, "bad\nreference", RepositoryState{}, now); err == nil {
+		t.Fatal("accepted a control character in an external reference")
+	}
+}
+
+func TestExternalReferenceRetryTreatsDependenciesAsASet(t *testing.T) {
+	now := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	state := NewState()
+	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+		t.Fatal(err)
+	}
+	first, err := state.AddWork("g", "specs/stories/a", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := state.AddWork("g", "specs/stories/b", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, wasCreated, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/c", []string{first.ID, second.ID}, "PB-003", RepositoryState{}, now)
+	if err != nil || !wasCreated {
+		t.Fatalf("initial dependency request = %#v, created=%v, err=%v", created, wasCreated, err)
+	}
+	retry, wasCreated, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/c", []string{second.ID, first.ID}, "PB-003", RepositoryState{}, now.Add(time.Minute))
+	if err != nil || wasCreated || retry.ID != created.ID {
+		t.Fatalf("reordered dependency retry = %#v, created=%v, err=%v", retry, wasCreated, err)
+	}
+}
+
+func TestValidateRejectsDuplicateExternalReferenceWithinGoal(t *testing.T) {
+	now := time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)
+	state := NewState()
+	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+		t.Fatal(err)
+	}
+	first, created, err := state.AddWorkWithRepositoryAndExternalRef("g", "specs/stories/a", nil, "PB-001", RepositoryState{}, now)
+	if err != nil || !created {
+		t.Fatalf("first add = %#v, created=%v, err=%v", first, created, err)
+	}
+	duplicate := first
+	duplicate.ID, duplicate.StoryRef = "WI-002", "specs/stories/b"
+	state.WorkItems = append(state.WorkItems, duplicate)
+	state.NextWorkID = 3
+	if err := state.Validate(); err == nil {
+		t.Fatal("validated duplicate Goal-scoped external reference")
+	}
+}
+
 func TestRefreshAndValidation(t *testing.T) {
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	state := State{SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}}, WorkItems: []Item{
@@ -101,8 +199,8 @@ func TestSelectionUsesTimestampThenID(t *testing.T) {
 }
 
 func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
-	if SchemaVersion != 9 {
-		t.Fatalf("SchemaVersion = %d, want 9", SchemaVersion)
+	if SchemaVersion != 10 {
+		t.Fatalf("SchemaVersion = %d, want 10", SchemaVersion)
 	}
 	fresh := NewState()
 	if fresh.NextEvidenceID != 1 || fresh.NextGateID != 1 {
@@ -121,7 +219,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 		t.Fatalf("older-version error %q does not tell the user to migrate", err)
 	}
 	newer := fresh
-	newer.SchemaVersion = 10
+	newer.SchemaVersion = 11
 	err = newer.Validate()
 	if err == nil {
 		t.Fatal("accepted a newer schema version")

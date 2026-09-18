@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -71,6 +72,125 @@ func TestCLIWorkflowAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	fail("status")
+}
+
+func TestJSONOutputCreatesIdempotentWorkAndListsItByGoal(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+
+	goalOutput, err := command(binary, root, "goal", "create", "--id", "batch", "--title", "Batch", "--review-policy", "goal", "--json")
+	if err != nil {
+		t.Fatalf("goal create --json: %v\n%s", err, goalOutput)
+	}
+	var createdGoal struct {
+		FormatVersion string `json:"format_version"`
+		Goal          struct {
+			ID           string `json:"id"`
+			Title        string `json:"title"`
+			Status       string `json:"status"`
+			ReviewPolicy string `json:"review_policy"`
+		} `json:"goal"`
+	}
+	if err := json.Unmarshal([]byte(goalOutput), &createdGoal); err != nil {
+		t.Fatalf("goal output is not one JSON document: %v\n%s", err, goalOutput)
+	}
+	if createdGoal.FormatVersion != "forgepilot.cli/v1" || createdGoal.Goal.ID != "batch" || createdGoal.Goal.Title != "Batch" || createdGoal.Goal.Status != "ACTIVE" || createdGoal.Goal.ReviewPolicy != "GOAL" {
+		t.Fatalf("goal JSON = %#v", createdGoal)
+	}
+
+	externalRef := "--PB-001"
+	arguments := []string{"work", "add", "--goal", "batch", "--story", "specs/stories/a.md", "--external-ref", externalRef, "--json"}
+	firstOutput, err := command(binary, root, arguments...)
+	if err != nil {
+		t.Fatalf("first work add --json: %v\n%s", err, firstOutput)
+	}
+	type workJSON struct {
+		ID          string   `json:"id"`
+		GoalID      string   `json:"goal_id"`
+		StoryRef    string   `json:"story_ref"`
+		ExternalRef *string  `json:"external_ref"`
+		Status      string   `json:"status"`
+		DependsOn   []string `json:"depends_on"`
+	}
+	var first struct {
+		FormatVersion string   `json:"format_version"`
+		Created       bool     `json:"created"`
+		WorkItem      workJSON `json:"work_item"`
+	}
+	if err := json.Unmarshal([]byte(firstOutput), &first); err != nil {
+		t.Fatalf("first work output is not one JSON document: %v\n%s", err, firstOutput)
+	}
+	if first.FormatVersion != "forgepilot.cli/v1" || !first.Created || first.WorkItem.ID != "WI-001" || first.WorkItem.GoalID != "batch" || first.WorkItem.StoryRef != "specs/stories/a.md" || first.WorkItem.ExternalRef == nil || *first.WorkItem.ExternalRef != externalRef || first.WorkItem.Status != "READY" || first.WorkItem.DependsOn == nil || len(first.WorkItem.DependsOn) != 0 {
+		t.Fatalf("first work JSON = %#v", first)
+	}
+
+	retryOutput, err := command(binary, root, arguments...)
+	if err != nil {
+		t.Fatalf("retry work add --json: %v\n%s", err, retryOutput)
+	}
+	var retry struct {
+		FormatVersion string   `json:"format_version"`
+		Created       bool     `json:"created"`
+		WorkItem      workJSON `json:"work_item"`
+	}
+	if err := json.Unmarshal([]byte(retryOutput), &retry); err != nil {
+		t.Fatalf("retry work output is not one JSON document: %v\n%s", err, retryOutput)
+	}
+	if retry.FormatVersion != "forgepilot.cli/v1" || retry.Created || retry.WorkItem.ID != first.WorkItem.ID {
+		t.Fatalf("retry work JSON = %#v", retry)
+	}
+	if output, err := command(binary, root, "work", "add", "--goal", "batch", "--story", "specs/stories/b.md", "--external-ref", externalRef, "--json"); err == nil || !strings.Contains(output, "external reference") {
+		t.Fatalf("conflicting retry = %q, %v", output, err)
+	}
+	if output, err := command(binary, root, "work", "add", "--goal", "batch", "--story", "specs/stories/b.md", "--depends-on", "WI-001", "--external-ref", "PB-002", "--json"); err != nil {
+		t.Fatalf("dependent work add --json: %v\n%s", err, output)
+	}
+	mustRun(t, binary, root, "work", "add", "--goal", "batch", "--story", "specs/stories/c.md")
+
+	statePath := filepath.Join(root, ".forgepilot", "state.json")
+	beforeList, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listOutput, err := command(binary, root, "work", "list", "--goal", "batch", "--json")
+	if err != nil {
+		t.Fatalf("work list --json: %v\n%s", err, listOutput)
+	}
+	var list struct {
+		FormatVersion string `json:"format_version"`
+		Goal          struct {
+			ID string `json:"id"`
+		} `json:"goal"`
+		WorkItems []workJSON `json:"work_items"`
+	}
+	if err := json.Unmarshal([]byte(listOutput), &list); err != nil {
+		t.Fatalf("work list output is not one JSON document: %v\n%s", err, listOutput)
+	}
+	if list.FormatVersion != "forgepilot.cli/v1" || list.Goal.ID != "batch" || len(list.WorkItems) != 3 || list.WorkItems[0].ID != "WI-001" || list.WorkItems[0].ExternalRef == nil || *list.WorkItems[0].ExternalRef != externalRef || list.WorkItems[1].ID != "WI-002" || list.WorkItems[1].ExternalRef == nil || *list.WorkItems[1].ExternalRef != "PB-002" || !reflect.DeepEqual(list.WorkItems[1].DependsOn, []string{"WI-001"}) || list.WorkItems[2].ID != "WI-003" || list.WorkItems[2].ExternalRef != nil || list.WorkItems[2].DependsOn == nil {
+		t.Fatalf("work list JSON = %#v", list)
+	}
+	afterList, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterList) != string(beforeList) {
+		t.Fatal("work list changed state.json")
+	}
+	mustRun(t, binary, root, "goal", "block", "batch", "--reason", "interrupted batch")
+	inactiveRetryOutput, err := command(binary, root, arguments...)
+	if err != nil {
+		t.Fatalf("retry work add after goal became inactive: %v\n%s", err, inactiveRetryOutput)
+	}
+	var inactiveRetry struct {
+		Created  bool     `json:"created"`
+		WorkItem workJSON `json:"work_item"`
+	}
+	if err := json.Unmarshal([]byte(inactiveRetryOutput), &inactiveRetry); err != nil {
+		t.Fatalf("inactive retry output is not one JSON document: %v\n%s", err, inactiveRetryOutput)
+	}
+	if inactiveRetry.Created || inactiveRetry.WorkItem.ID != first.WorkItem.ID {
+		t.Fatalf("inactive retry JSON = %#v", inactiveRetry)
+	}
 }
 
 func TestNextRecommendsAgentWorkWithoutWritingState(t *testing.T) {
@@ -294,6 +414,64 @@ func TestConcurrentAddsKeepBothItems(t *testing.T) {
 	}
 	if len(state.WorkItems) != 2 || state.WorkItems[0].ID == state.WorkItems[1].ID {
 		t.Fatalf("items = %#v", state.WorkItems)
+	}
+}
+
+func TestConcurrentAddsWithSameExternalReferenceCreateOneItem(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+
+	var group sync.WaitGroup
+	outputs := make(chan string, 2)
+	errors := make(chan error, 2)
+	arguments := []string{"work", "add", "--goal", "queue", "--story", "specs/stories/a.md", "--external-ref", "PB-001", "--json"}
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			output, err := command(binary, root, arguments...)
+			if err != nil {
+				errors <- &commandError{err, output}
+				return
+			}
+			outputs <- output
+		}()
+	}
+	group.Wait()
+	close(outputs)
+	close(errors)
+	for err := range errors {
+		t.Fatal(err)
+	}
+
+	createdCount := 0
+	for output := range outputs {
+		var result struct {
+			Created  bool `json:"created"`
+			WorkItem struct {
+				ID string `json:"id"`
+			} `json:"work_item"`
+		}
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatalf("concurrent output is not one JSON document: %v\n%s", err, output)
+		}
+		if result.WorkItem.ID != "WI-001" {
+			t.Fatalf("concurrent work item ID = %q, want WI-001", result.WorkItem.ID)
+		}
+		if result.Created {
+			createdCount++
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("created count = %d, want 1", createdCount)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.WorkItems) != 1 || state.NextWorkID != 2 {
+		t.Fatalf("state after concurrent idempotent add = %#v", state)
 	}
 }
 

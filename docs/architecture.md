@@ -104,6 +104,12 @@ M2 為驗證建立的 worktree 不在此限：它們是短暫的、detached 的�
 - `reconcile --goal <goal-id>` 是唯一把 readiness 重新對齊事實的寫入指令。readiness 是持久化欄位，但推導它的 facts 不是：Gate 或 Candidate 移動讓下游退回 PENDING 後，條件恢復不會自己更新那個值。它沿用同一個 progression predicate，只允許 `PENDING ↔ READY`，不碰其他狀態、Evidence、Gate 或 review policy；Goal 必須存在且 ACTIVE，facts 在受鎖 callback 內只解析這個 Goal 實際需要的種類，取得失敗即拒絕整個命令。相同 state 與 facts 下重複執行不產生變更，未改變的項目 `UpdatedAt` 不動。詳見 [ADR-0017](adr/0017-readiness-is-a-projection-made-durable.md)。
 - 不限制全域只能存在一個 RUNNING；`status` 必須能列出多個進行中的工作。
 
+### External Work Reference 與 schema v10
+
+schema v10 對 Work Item 新增 `external_ref`。它是選填、有效 UTF-8、無控制字元且沒有前後空白的 opaque caller value；不做 trim、大小寫折疊或 Unicode normalization。非空值只在同一 Goal 內唯一，且與 Work Item 的 normalized `story_ref`、dependency **set** 一起定義可安全重試的建立請求：同一請求在受鎖交易內回傳既有 Work Item、不改變 lifecycle 或配發 ID；同鍵指向不同請求則拒絕。重試可在 Goal 已不 ACTIVE 或 Work Item 已進入後續狀態時讀回既有結果，卻不會重開或修改它。沒有 external reference 的歷史／一般新增保留既有允許重複 Story 的行為，ForgePilot 不從 Story path 猜測或補填 key。v9→v10 migration 把舊項目明確保留為空 key；rollback 必須手動還原 `state.json.v9.bak`，並會失去 migration 後的所有 state 變更。
+
+`goal create --json`、`work add --json` 與 `work list --goal <id> --json` 是狹窄的 public projection，而不是 state snapshot：成功時各輸出單一 JSON document，`format_version` 為 `forgepilot.cli/v1`；query 的 Goal／Work Item order 是 durable creation order，`depends_on` 永遠為 `[]` 或非空 array，keyless Work Item 的 `external_ref` 是 `null`。DTO 不暴露 Evidence、Current Run、local paths 或未來 state 欄位；非零 exit 沒有 JSON envelope 保證。破壞性輸出契約改動必須新增 format version，不與持久化 `schema_version` 混用。詳見 [ADR-0031](adr/0031-goal-scoped-external-work-reference.md)。
+
 M3 完成某個 Work Item 時，在同一 state transaction 中只更新該 prerequisite 的直接 dependents；只有全部依賴 DONE 且符合適用條件時才 READY。Goal-level Review Policy 下，同一個 transaction 也可由無 OPEN Gate、且以 CLI 在受鎖 callback 內解析的 repository facts 證實仍 fresh 的 VERIFIED dependency 推進 READY；沒有 facts 時採 fail-closed，保留 PENDING。若該 prerequisite 開始重驗或新增 OPEN Gate 而不再滿足同一 predicate，受影響的 READY downstream 會回到 PENDING，fresh PASS 或帶 current facts 的 Gate closure／Goal unblock 後再回到 READY；局部 refresh 不改寫無關 Goal 的 READY。Goal BLOCKED 仍保留 Work Item status 不變；這不放寬 Goal ACTIVE、Gate、verification FAIL／INTERRUPTED 或 stale Candidate 的既有規則。
 
 ## Central transition policy
