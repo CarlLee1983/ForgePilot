@@ -4,6 +4,11 @@ Formal onboarding builds ForgePilot from a developer-supplied, full 40-character
 commit SHA. It is not a prebuilt-binary, signing, or platform-trust promise.
 The procedure is outside ForgePilot's offline governance CLI.
 
+The supported host is Apple Silicon macOS (`Darwin arm64`) only. The planner
+checks that boundary during inspection and refuses Intel Macs or other hosts
+before it prints an executable onboarding plan. Cross-compilation and unsigned
+`amd64` maintainer trial assets are not support evidence.
+
 ## Inspection-only phase
 
 Before a source fetch, build, `make verify`, entrypoint change, or repository

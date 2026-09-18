@@ -47,6 +47,37 @@ printf 'Run make verify\n' >"$fixture/target/specs/stories/ONBOARD-1/acceptance.
 [ "$(git -C "$fixture/source" rev-parse HEAD)" = "$source_head_before" ] || fail 'plan changed source commit'
 [ -z "$(git -C "$fixture/source" status --porcelain)" ] || fail 'plan changed source worktree'
 
+# Formal onboarding is intentionally Apple Silicon-only. The platform guard is
+# inspection-only and rejects an Intel host before it can disclose executable actions.
+mkdir -p "$fixture/intel-bin"
+printf '%s\n' '#!/bin/sh' 'case "$1" in' \
+	'  -s) [ "${TEST_UNAME_FAIL:-}" != s ] || exit 1; printf "%s\\n" "${TEST_UNAME_S:-Darwin}" ;;' \
+	'  -m) [ "${TEST_UNAME_FAIL:-}" != m ] || exit 1; printf "%s\\n" "${TEST_UNAME_M:-arm64}" ;;' \
+	'  *) exit 1 ;;' \
+	'esac' >"$fixture/intel-bin/uname"
+chmod +x "$fixture/intel-bin/uname"
+target_status_before=$(git -C "$fixture/target" status --porcelain)
+source_status_before=$(git -C "$fixture/source" status --porcelain)
+assert_platform_rejected() {
+	label=$1 os=$2 arch=$3 failure=$4 expected=$5
+	rejected_stage=$fixture/rejected-$label-stage
+	rejected_entrypoint=$fixture/rejected-$label-bin/forgepilot
+	if rejected_output=$(TEST_UNAME_S="$os" TEST_UNAME_M="$arch" TEST_UNAME_FAIL="$failure" PATH="$fixture/intel-bin:$PATH" "$plan" --source "$fixture/source" --commit "$source_commit" --stage-root "$rejected_stage" --entrypoint "$rejected_entrypoint" --target "$fixture/target" --candidate-kind COMMIT --candidate "$candidate" --goal-id ONBOARD-1 --goal-title onboarding --story specs/stories/ONBOARD-1 2>&1); then
+		fail "plan accepted unsupported platform case: $label"
+	fi
+	case "$rejected_output" in *"$expected"*) ;; *) fail "platform case $label failed for the wrong reason" ;; esac
+	case "$rejected_output" in *'FIRST EXPLICIT APPROVAL REQUIRED'*) fail "platform case $label disclosed executable actions" ;; esac
+	[ ! -e "$rejected_stage" ] && [ ! -L "$rejected_stage" ] || fail "platform case $label changed staging"
+	[ ! -e "$(dirname "$rejected_entrypoint")" ] && [ ! -L "$(dirname "$rejected_entrypoint")" ] || fail "platform case $label changed entrypoint paths"
+	[ "$(git -C "$fixture/target" status --porcelain)" = "$target_status_before" ] || fail "platform case $label changed target"
+	[ "$(git -C "$fixture/source" status --porcelain)" = "$source_status_before" ] || fail "platform case $label changed source"
+}
+assert_platform_rejected intel Darwin x86_64 '' 'formal onboarding supports only Apple Silicon macOS (Darwin arm64)'
+assert_platform_rejected non-darwin Linux arm64 '' 'formal onboarding supports only Apple Silicon macOS (Darwin arm64)'
+assert_platform_rejected unknown-arch Darwin ppc64 '' 'formal onboarding supports only Apple Silicon macOS (Darwin arm64)'
+assert_platform_rejected uname-os-failure Darwin arm64 s 'cannot determine onboarding host operating system'
+assert_platform_rejected uname-arch-failure Darwin arm64 m 'cannot determine onboarding host architecture'
+
 for bad_commit in "${source_commit%?}" main latest branch 0123456789abcdef0123456789abcdef0123456g; do
 	if invalid_output=$("$plan" --source "$fixture/source" --commit "$bad_commit" --stage-root "$fixture/stage" --entrypoint "$fixture/bin/forgepilot" --target "$fixture/target" --candidate-kind COMMIT --candidate "$candidate" --goal-id ONBOARD-1 --goal-title onboarding --story specs/stories/ONBOARD-1 2>&1); then
 		fail "plan accepted invalid commit: ${bad_commit:-missing}"
@@ -97,6 +128,7 @@ if "$plan" --source "$fixture/source" --commit "$source_commit" --stage-root "$f
 # The common procedure independently covers the target Candidate precheck,
 # source build, two approvals, state reuse, Story review, and snapshot advice.
 assert_contains "$document" 'inspection-only'
+assert_contains "$document" 'Apple Silicon macOS (`Darwin arm64`) only'
 assert_contains "$document" 'COMMIT Candidate'
 assert_contains "$document" 'SNAPSHOT Candidate'
 assert_contains "$document" 'Re-run the plan if HEAD changes'
@@ -117,6 +149,7 @@ assert_not_contains "$document" 'notarization'
 assert_not_contains "$document" 'quarantine'
 
 assert_contains "$prompt" 'full 40-character commit SHA'
+assert_contains "$prompt" 'Apple Silicon Mac'
 assert_contains "$prompt" 'first explicit approval'
 assert_contains "$prompt" 'second explicit approval'
 assert_contains "$prompt" 'Do not install Go'

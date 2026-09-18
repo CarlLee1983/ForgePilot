@@ -13,9 +13,11 @@ ForgePilot 目前只能以 `go install` 或原始碼建置取得，最新的 Git
 來源可追溯的資產作為輸入；在簽署與 notarization 的前置資源備妥之前，這批資產只能是試用性質。
 
 [ADR-0025](../../../docs/adr/0025-formal-macos-release-trust.md) 把正式導入的信任門檻定在
-Developer ID 簽署、預期簽署者、notarization 與兩種原生驗收上，並明確要求未簽署試用流程不得
-被稱為正式導入。這份 Story 產出的正是那個「未簽署試用」層級的資產，因此標示責任是它的核心
-需求，不是附帶說明。
+Developer ID 簽署、預期簽署者、notarization 與原生驗收上，並明確要求未簽署試用流程不得
+被稱為正式導入。[ADR-0032](../../../docs/adr/0032-formal-macos-onboarding-is-apple-silicon-only.md)
+後來把正式支援面限定為 Apple Silicon；本 Story 的雙架構輸出仍只是 maintainer trial，不使 Intel
+成為受支援平台。這份 Story 產出的正是「未簽署試用」層級的資產，因此標示責任是它的核心需求，
+不是附帶說明。
 
 [ADR-0024](../../../docs/adr/0024-onboarding-stays-outside-the-offline-cli.md) 把分發程序放在
 離線治理 CLI 之外，所以這個建置入口不屬於 `internal/cli`、`internal/app` 或 `internal/repository`，
@@ -60,7 +62,7 @@ Developer ID 簽署、預期簽署者、notarization 與兩種原生驗收上，
 * Developer ID 簽署、notarization、預期簽署者驗證——屬於 #36 與 #37。
 * Installer 的下載、驗證與安裝行為——屬於 #32。
 * 建立 GitHub Release、draft、上傳資產或 publish——屬於 #40 與 #41。
-* 在原生 Apple Silicon 與 Intel 機器上的安裝驗收——屬於 #38。
+* 正式支援平台的原生安裝驗收——屬於 #38；ADR-0032 後只包含 Apple Silicon。
 * 修改 `internal/cli`、`internal/app`、`internal/repository` 或 `internal/work` 的任何行為。
 * 為 ForgePilot 引入 Go 標準函式庫以外的相依。
 * #36 的正式簽署 Release Candidate 重用本 Story 的架構推導規則，但不重用、也不繼承 unsigned trial 通道標記——通道標記的取捨屬於 #36 的範圍。
@@ -108,7 +110,8 @@ Developer ID 簽署、預期簽署者、notarization 與兩種原生驗收上，
 
 * ForgePilot 的 Go 程式碼只用標準函式庫；這個入口不得為它加入新的 Go 相依。
 * 建置入口位於核心治理 CLI 之外，不得使 `internal/cli`、`internal/app` 或 `internal/repository` 取得下載、打包或網路責任。
-* 第一個正式免 Go 版本只宣稱 macOS 15+ 的 arm64 與 amd64；此入口不得產生或宣稱其他平台的資產。
+* 此入口只產生 arm64 與 amd64 unsigned trial；只有 arm64 屬於 ADR-0032 的預定正式支援面，
+  amd64 資產不得被用來宣稱 Intel 支援，也不宣稱任何 deployment target 相容性。
 * Repository 的 canonical check 是 `make verify`，另跑 `go test -race -count=1 ./...`。
 
 ## Guidance

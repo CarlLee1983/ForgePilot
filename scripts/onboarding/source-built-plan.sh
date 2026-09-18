@@ -58,6 +58,11 @@ for path in "$stage_root" "$entrypoint" "$target"; do
  case "$path" in /*) ;; *) fail '--stage-root, --entrypoint, and --target must be absolute paths' ;; esac
 done
 
+host_os=$(uname -s 2>/dev/null) || fail 'cannot determine onboarding host operating system'
+host_arch=$(uname -m 2>/dev/null) || fail 'cannot determine onboarding host architecture'
+[ "$host_os" = Darwin ] && [ "$host_arch" = arm64 ] ||
+	fail 'formal onboarding supports only Apple Silicon macOS (Darwin arm64)'
+
 # This is deliberately a conservative static check, never `make -n`: make can
 # run $(shell ...) while parsing. Dynamic/conditional targets need human review.
 static_verify() {
