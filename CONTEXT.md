@@ -13,6 +13,9 @@ _Avoid_：skip review、單次指令的權限、Work Item 的可選屬性
 **Work Item**：歸屬一個 Goal、參照一個 ForgeFlow Story 的工程工作單位，具有自己的狀態與依賴。
 _Avoid_：Story、Task（作為另一種獨立工作物件）
 
+**External Work Reference**：呼叫方在建立 Work Item 時提供、只作同一 Goal 內安全重試的不可變冪等鍵。它不代表 Story identity、需求內容、PR、revision 或 lifecycle；未帶此鍵的舊 Work Item 不會被事後推測或認領。
+_Avoid_：Story ID 的替代品、可修改 metadata、跨 Goal 全域 ID、完成／審查條件
+
 **ForgeFlow Story**：由 ForgeFlowV2 管理的工程契約，包含需求、acceptance criteria 與工程指引。ForgePilot 自身借用 ForgeFlowV2 的 Story 目錄格式（`specs/stories/<story-id>/` 下的 `story.md` 與 `acceptance.md`），但不交出治理所有權；`specs/stories/m5-*.md` 是 M5 當時手寫的兩份，保留為刻意的歷史偏離。取捨見 [ADR-0013](docs/adr/0013-forgepilot-self-adoption-of-forgeflow.md)。
 _Avoid_：ForgePilot requirement、Work Item 的需求副本
 

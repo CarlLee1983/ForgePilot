@@ -110,6 +110,18 @@ forgepilot goal create --id dbcli-dba --title "DBA Workflow Support" --review-po
 
 若 `work add` 發現該 Story 尚未提交，它會在成功輸出後提供兩條下一步：使用剛配發的 Work Item ID 執行 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行不帶 flag 的 commit-mode verification。
 
+### Machine-readable handoff and safe retry
+
+外部工具可使用版本化 JSON 來建立與恢復一個 Goal 的 Work Item 清單，而不需解析人類輸出：
+
+```bash
+forgepilot goal create --id batch-01 --title "Batch 01" --review-policy goal --json
+forgepilot work add --goal batch-01 --story specs/stories/FP-101 --external-ref FP-101 --json
+forgepilot work list --goal batch-01 --json
+```
+
+成功輸出是單一 JSON document，`format_version` 目前固定為 `forgepilot.cli/v1`。`work add` 的同一 Goal 與 `--external-ref` 是大小寫敏感的冪等鍵：完全相同的 Story 與 dependency set 重試時回傳同一 Work Item 並標示 `created: false`；不相同的請求會失敗且不改 state。`work list` 依建立順序列出該 Goal，`depends_on` 一律是 array，沒有 external reference 的歷史 Work Item 以 `external_ref: null` 表示。JSON 只保證 exit 0 的成功輸出；非零 exit 的 caller 必須停止並處理診斷，而不是嘗試解析 JSON。破壞性格式變更會使用新的 `format_version`。
+
 此時保存的是 `WI-001 = RUNNING`、`WI-002 = PENDING`。重新啟動 CLI 後，`status` 應呈現相同狀態；`next` 會推薦 `WI-001` 的 `resume implementation`，而不是開始另一張 READY 工作。沒有進行中的工作時，它才會輸出像 `Action: forgepilot start WI-002` 的建議。遇到 fresh REVIEW 的 Human Review、OPEN Gate 或 BLOCKED Goal 而沒有其他可做工作時，`next` 明確輸出等待原因；它從不替 Agent 執行建議。
 
 Agent 可以選擇驗證已提交 revision：

@@ -6,9 +6,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
-const SchemaVersion = 9
+const SchemaVersion = 10
 
 type GoalStatus string
 
@@ -59,14 +61,15 @@ type Goal struct {
 }
 
 type Item struct {
-	ID         string    `json:"id"`
-	GoalID     string    `json:"goal_id"`
-	StoryRef   string    `json:"story_ref"`
-	Status     Status    `json:"status"`
-	DependsOn  []string  `json:"depends_on"`
-	CurrentRun *Run      `json:"current_run"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	GoalID      string    `json:"goal_id"`
+	StoryRef    string    `json:"story_ref"`
+	ExternalRef string    `json:"external_ref"`
+	Status      Status    `json:"status"`
+	DependsOn   []string  `json:"depends_on"`
+	CurrentRun  *Run      `json:"current_run"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Run records a Verification Run that is currently in flight. It is cleared once
@@ -132,35 +135,58 @@ func validReviewPolicy(policy ReviewPolicy) bool {
 }
 
 func (s *State) AddWork(goalID, story string, dependencies []string, now time.Time) (Item, error) {
-	return s.addWork(goalID, story, dependencies, nil, now)
+	item, _, err := s.addWork(goalID, story, dependencies, "", nil, now)
+	return item, err
 }
 
 // AddWorkWithRepository applies current repository facts when deciding whether
 // VERIFIED dependencies make the new Work Item READY.
 func (s *State) AddWorkWithRepository(goalID, story string, dependencies []string, repository RepositoryState, now time.Time) (Item, error) {
-	return s.addWork(goalID, story, dependencies, &repository, now)
+	item, _, err := s.addWork(goalID, story, dependencies, "", &repository, now)
+	return item, err
 }
 
-func (s *State) addWork(goalID, story string, dependencies []string, repository *RepositoryState, now time.Time) (Item, error) {
+// AddWorkWithRepositoryAndExternalRef creates a Work Item with a Goal-scoped
+// idempotency key. Repeating the same request returns the original Item without
+// changing state; reusing a key for a different request is refused.
+func (s *State) AddWorkWithRepositoryAndExternalRef(goalID, story string, dependencies []string, externalRef string, repository RepositoryState, now time.Time) (Item, bool, error) {
+	if !validExternalRef(externalRef) {
+		return Item{}, false, errors.New("external reference must be valid UTF-8 without control characters, blank values, or surrounding whitespace")
+	}
+	return s.addWork(goalID, story, dependencies, externalRef, &repository, now)
+}
+
+func (s *State) addWork(goalID, story string, dependencies []string, externalRef string, repository *RepositoryState, now time.Time) (Item, bool, error) {
 	goal := s.goal(goalID)
 	if goal == nil {
-		return Item{}, fmt.Errorf("unknown goal %q", goalID)
+		return Item{}, false, fmt.Errorf("unknown goal %q", goalID)
+	}
+	if externalRef != "" {
+		if !validExternalRef(externalRef) {
+			return Item{}, false, errors.New("external reference must not be blank or have surrounding whitespace")
+		}
+		if existing := s.itemByExternalRef(goalID, externalRef); existing != nil {
+			if existing.StoryRef != story || !sameStrings(existing.DependsOn, dependencies) {
+				return Item{}, false, fmt.Errorf("external reference %q already belongs to work item %q with different story or dependencies", externalRef, existing.ID)
+			}
+			return *existing, false, nil
+		}
 	}
 	if goal.Status != GoalActive {
-		return Item{}, fmt.Errorf("goal %q is not active", goalID)
+		return Item{}, false, fmt.Errorf("goal %q is not active", goalID)
 	}
 	seen := map[string]bool{}
 	for _, dependency := range dependencies {
 		if seen[dependency] {
-			return Item{}, fmt.Errorf("duplicate dependency %q", dependency)
+			return Item{}, false, fmt.Errorf("duplicate dependency %q", dependency)
 		}
 		seen[dependency] = true
 		item := s.item(dependency)
 		if item == nil {
-			return Item{}, fmt.Errorf("unknown dependency %q", dependency)
+			return Item{}, false, fmt.Errorf("unknown dependency %q", dependency)
 		}
 		if item.GoalID != goalID {
-			return Item{}, fmt.Errorf("dependency %q belongs to another goal", dependency)
+			return Item{}, false, fmt.Errorf("dependency %q belongs to another goal", dependency)
 		}
 	}
 	if s.NextWorkID < 1 {
@@ -172,9 +198,42 @@ func (s *State) addWork(goalID, story string, dependencies []string, repository 
 	if !s.dependenciesSatisfiedAt(dependencies, repository) {
 		status = Pending
 	}
-	created := Item{ID: id, GoalID: goalID, StoryRef: story, Status: status, DependsOn: append([]string(nil), dependencies...), CreatedAt: now, UpdatedAt: now}
+	created := Item{ID: id, GoalID: goalID, StoryRef: story, ExternalRef: externalRef, Status: status, DependsOn: append([]string(nil), dependencies...), CreatedAt: now, UpdatedAt: now}
 	s.WorkItems = append(s.WorkItems, created)
-	return created, nil
+	return created, true, nil
+}
+
+func validExternalRef(reference string) bool {
+	if strings.TrimSpace(reference) != reference || reference == "" || !utf8.ValidString(reference) {
+		return false
+	}
+	for _, rune := range reference {
+		if unicode.IsControl(rune) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameStrings treats dependencies as a set: their persisted order is useful for
+// presentation, but reordering repeated --depends-on flags does not change the
+// Work Item request an idempotency key names.
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftValues := make(map[string]bool, len(left))
+	for _, value := range left {
+		leftValues[value] = true
+	}
+	rightValues := make(map[string]bool, len(right))
+	for _, value := range right {
+		if !leftValues[value] {
+			return false
+		}
+		rightValues[value] = true
+	}
+	return len(leftValues) == len(rightValues)
 }
 
 // RefreshReady reconciles PENDING and READY work with the dependency progression
@@ -341,6 +400,7 @@ func (s State) Validate() error {
 		goals[goal.ID] = goal
 	}
 	items := map[string]Item{}
+	externalRefs := map[string]map[string]string{}
 	maxID := 0
 	for _, item := range s.WorkItems {
 		if item.ID == "" || item.GoalID == "" || item.StoryRef == "" {
@@ -351,6 +411,20 @@ func (s State) Validate() error {
 		}
 		if _, ok := goals[item.GoalID]; !ok {
 			return fmt.Errorf("work item %q has unknown goal", item.ID)
+		}
+		if item.ExternalRef != "" {
+			if !validExternalRef(item.ExternalRef) {
+				return fmt.Errorf("work item %q has invalid external reference", item.ID)
+			}
+			refs := externalRefs[item.GoalID]
+			if refs == nil {
+				refs = map[string]string{}
+				externalRefs[item.GoalID] = refs
+			}
+			if other, exists := refs[item.ExternalRef]; exists {
+				return fmt.Errorf("work items %q and %q share external reference %q in goal %q", other, item.ID, item.ExternalRef, item.GoalID)
+			}
+			refs[item.ExternalRef] = item.ID
 		}
 		goal := goals[item.GoalID]
 		if goal.ReviewPolicy == ReviewPerGoal && (item.Status == Review || item.Status == Done) {
@@ -487,6 +561,31 @@ func (s *State) item(id string) *Item {
 		}
 	}
 	return nil
+}
+
+func (s *State) itemByExternalRef(goalID, externalRef string) *Item {
+	for i := range s.WorkItems {
+		if s.WorkItems[i].GoalID == goalID && s.WorkItems[i].ExternalRef == externalRef {
+			return &s.WorkItems[i]
+		}
+	}
+	return nil
+}
+
+// GoalByID returns one Goal without exposing State's storage representation to
+// a caller that only needs a read-only query result.
+func (s *State) GoalByID(id string) (Goal, bool) {
+	goal := s.goal(id)
+	if goal == nil {
+		return Goal{}, false
+	}
+	return *goal, true
+}
+
+// HasWorkItemByExternalRef reports whether a Goal-scoped external reference is
+// already durable. It intentionally exposes no mutable Item internals.
+func (s *State) HasWorkItemByExternalRef(goalID, externalRef string) bool {
+	return s.itemByExternalRef(goalID, externalRef) != nil
 }
 func (s *State) dependenciesSatisfiedAt(ids []string, repository *RepositoryState) bool {
 	for _, id := range ids {

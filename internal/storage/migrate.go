@@ -184,6 +184,16 @@ func upgrade(contents []byte, from int) (work.State, error) {
 		}
 		state.NextVerificationRunID = 1
 	}
+	if from < 10 {
+		// v9 → v10 adds the optional Work Item external reference. Earlier
+		// snapshots cannot honestly carry one, so leave every migrated value
+		// empty and reject a header that understates an existing reference.
+		for _, item := range state.WorkItems {
+			if item.ExternalRef != "" {
+				return work.State{}, fmt.Errorf("state declares schema version %d but work item %q already carries an external reference; refusing to migrate over it", from, item.ID)
+			}
+		}
+	}
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

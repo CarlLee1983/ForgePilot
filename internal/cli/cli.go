@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -43,9 +44,10 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
 
   init                              create .forgepilot state in the current repository
   migrate                           upgrade state written by an older binary
-  goal create --id <id> --title <t> [--review-policy <work-item|goal>]
+  goal create --id <id> --title <t> [--review-policy <work-item|goal>] [--json]
   goal <block|unblock|complete|cancel> <goal-id>
-  work add --goal <id> --story <path> [--depends-on <work-id>]
+  work add --goal <id> --story <path> [--depends-on <work-id>] [--external-ref <ref>] [--json]
+  work list --goal <id> --json     list one Goal's Work Items for machine use
   next                              recommend the next legal agent action
   start <work-id>                   move a READY work item to RUNNING
   reconcile --goal <goal-id>        recompute one Goal's PENDING/READY readiness
@@ -93,7 +95,7 @@ func run(args []string, cwd string, output io.Writer) error {
 	case "goal":
 		return goal(args[1:], root, output)
 	case "work":
-		return addWork(args[1:], root, output)
+		return workCommand(args[1:], root, output)
 	case "next":
 		return next(args[1:], root, output)
 	case "start":
@@ -152,6 +154,10 @@ func goal(args []string, root string, output io.Writer) error {
 }
 
 func createGoal(args []string, root string, output io.Writer) error {
+	args, jsonOutput, err := takeJSONFlag(args)
+	if err != nil {
+		return err
+	}
 	flags, err := flags(args, map[string]bool{"id": false, "title": false, "description": false, "review-policy": false})
 	if err != nil {
 		return err
@@ -167,10 +173,15 @@ func createGoal(args []string, root string, output io.Writer) error {
 	default:
 		return errors.New("--review-policy must be work-item or goal")
 	}
+	createdAt := now()
+	created := work.Goal{ID: flags.one("id"), Title: flags.one("title"), Description: flags.one("description"), Repository: root, Status: work.GoalActive, ReviewPolicy: policy, CreatedAt: createdAt, UpdatedAt: createdAt}
 	if err := storage.Update(root, func(state *work.State) error {
-		return state.AddGoalWithReviewPolicy(flags.one("id"), flags.one("title"), flags.one("description"), root, policy, now())
+		return state.AddGoalWithReviewPolicy(created.ID, created.Title, created.Description, root, policy, createdAt)
 	}); err != nil {
 		return err
+	}
+	if jsonOutput {
+		return writeJSON(output, goalCreateJSON{FormatVersion: jsonFormatVersion, Goal: encodeGoal(created)})
 	}
 	_, err = fmt.Fprintf(output, "Goal %s created\n", flags.one("id"))
 	return err
@@ -225,30 +236,33 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 
 func addWork(args []string, root string, output io.Writer) error {
 	if len(args) == 0 || args[0] != "add" {
-		return errors.New("usage: forgepilot work add --goal <id> --story <path> [--depends-on <work-id>]")
+		return errors.New("usage: forgepilot work add --goal <id> --story <path> [--depends-on <work-id>] [--external-ref <ref>] [--json]")
 	}
-	flags, err := flags(args[1:], map[string]bool{"goal": false, "story": false, "depends-on": true})
+	args, jsonOutput, err := takeJSONFlag(args[1:])
+	if err != nil {
+		return err
+	}
+	flags, err := flags(args, map[string]bool{"goal": false, "story": false, "depends-on": true, "external-ref": false})
 	if err != nil {
 		return err
 	}
 	if flags.one("goal") == "" || flags.one("story") == "" {
 		return errors.New("--goal and --story are required")
 	}
-	story, err := repository.ValidateStory(root, flags.one("story"))
+	externalRef, hasExternalRef := flags.one("external-ref"), len(flags["external-ref"]) > 0
+	if hasExternalRef && (externalRef == "" || strings.TrimSpace(externalRef) != externalRef) {
+		return errors.New("--external-ref must not be blank or have surrounding whitespace")
+	}
+	result, err := app.AddWork(context.Background(), root, app.WorkAddRequest{
+		GoalID: flags.one("goal"), StoryRef: flags.one("story"), Dependencies: flags.all("depends-on"),
+		ExternalRef: externalRef,
+	}, now)
 	if err != nil {
 		return err
 	}
-	var added work.Item
-	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := app.CandidateFacts(context.Background(), state, root)
-		if factsErr != nil {
-			return fmt.Errorf("resolve current Candidate before adding work: %w", factsErr)
-		}
-		var addErr error
-		added, addErr = state.AddWorkWithRepository(flags.one("goal"), story, flags.all("depends-on"), repositoryState, now())
-		return addErr
-	}); err != nil {
-		return err
+	added, created := result.Item, result.Created
+	if jsonOutput {
+		return writeJSON(output, workAddJSON{FormatVersion: jsonFormatVersion, Created: created, WorkItem: encodeWorkItem(added)})
 	}
 	if _, err := fmt.Fprintf(output, "%s %s\nStory: %s\n", added.ID, added.Status, added.StoryRef); err != nil {
 		return err
@@ -256,10 +270,57 @@ func addWork(args []string, root string, output io.Writer) error {
 	// Best-effort: work add already succeeded, so a failure to query git here
 	// must not turn a successful command into a failing one. The hint is a
 	// courtesy, not a result the caller depends on.
-	if uncommitted, hintErr := repository.Uncommitted(context.Background(), root, story); hintErr == nil && uncommitted {
-		_, err = fmt.Fprintf(output, "%s is not committed yet;\nuse `forgepilot verify %s --snapshot` to verify the working tree,\nor commit it before commit-mode verification.\n", story, added.ID)
+	if uncommitted, hintErr := repository.Uncommitted(context.Background(), root, added.StoryRef); hintErr == nil && uncommitted {
+		_, err = fmt.Fprintf(output, "%s is not committed yet;\nuse `forgepilot verify %s --snapshot` to verify the working tree,\nor commit it before commit-mode verification.\n", added.StoryRef, added.ID)
 	}
 	return err
+}
+
+func workCommand(args []string, root string, output io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: forgepilot work <add|list>")
+	}
+	switch args[0] {
+	case "add":
+		return addWork(args, root, output)
+	case "list":
+		return listWork(args[1:], root, output)
+	default:
+		return fmt.Errorf("unknown work subcommand %q", args[0])
+	}
+}
+
+func listWork(args []string, root string, output io.Writer) error {
+	args, jsonOutput, err := takeJSONFlag(args)
+	if err != nil {
+		return err
+	}
+	if !jsonOutput {
+		return errors.New("usage: forgepilot work list --goal <id> --json")
+	}
+	flags, err := flags(args, map[string]bool{"goal": false})
+	if err != nil {
+		return err
+	}
+	goalID := flags.one("goal")
+	if goalID == "" {
+		return errors.New("usage: forgepilot work list --goal <id> --json")
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		return err
+	}
+	goal, ok := state.GoalByID(goalID)
+	if !ok {
+		return fmt.Errorf("unknown goal %q", goalID)
+	}
+	response := workListJSON{FormatVersion: jsonFormatVersion, Goal: encodeGoal(goal), WorkItems: []workItemJSON{}}
+	for _, item := range state.WorkItems {
+		if item.GoalID == goalID {
+			response.WorkItems = append(response.WorkItems, encodeWorkItem(item))
+		}
+	}
+	return writeJSON(output, response)
 }
 
 func next(args []string, root string, output io.Writer) error {
@@ -441,6 +502,65 @@ func status(args []string, root string, output io.Writer) error {
 	return err
 }
 
+const jsonFormatVersion = "forgepilot.cli/v1"
+
+// The JSON shapes below are a deliberately small public inventory contract.
+// They do not mirror the durable State: run paths, Evidence, and other internal
+// details remain available only through their own product projections.
+type goalJSON struct {
+	ID           string            `json:"id"`
+	Title        string            `json:"title"`
+	Description  string            `json:"description"`
+	Status       work.GoalStatus   `json:"status"`
+	ReviewPolicy work.ReviewPolicy `json:"review_policy"`
+}
+
+type workItemJSON struct {
+	ID          string      `json:"id"`
+	GoalID      string      `json:"goal_id"`
+	StoryRef    string      `json:"story_ref"`
+	ExternalRef *string     `json:"external_ref"`
+	Status      work.Status `json:"status"`
+	DependsOn   []string    `json:"depends_on"`
+}
+
+type goalCreateJSON struct {
+	FormatVersion string   `json:"format_version"`
+	Goal          goalJSON `json:"goal"`
+}
+
+type workAddJSON struct {
+	FormatVersion string       `json:"format_version"`
+	Created       bool         `json:"created"`
+	WorkItem      workItemJSON `json:"work_item"`
+}
+
+type workListJSON struct {
+	FormatVersion string         `json:"format_version"`
+	Goal          goalJSON       `json:"goal"`
+	WorkItems     []workItemJSON `json:"work_items"`
+}
+
+func writeJSON(output io.Writer, value any) error {
+	return json.NewEncoder(output).Encode(value)
+}
+
+func encodeGoal(goal work.Goal) goalJSON {
+	return goalJSON{ID: goal.ID, Title: goal.Title, Description: goal.Description, Status: goal.Status, ReviewPolicy: goal.ReviewPolicy}
+}
+
+func encodeWorkItem(item work.Item) workItemJSON {
+	var externalRef *string
+	if item.ExternalRef != "" {
+		ref := item.ExternalRef
+		externalRef = &ref
+	}
+	return workItemJSON{
+		ID: item.ID, GoalID: item.GoalID, StoryRef: item.StoryRef, ExternalRef: externalRef,
+		Status: item.Status, DependsOn: append([]string{}, item.DependsOn...),
+	}
+}
+
 const statusUsage = "usage: forgepilot status [--work <work-id> --summary]"
 
 // statusSummary deliberately accepts only the paired selectors. A bare
@@ -569,7 +689,7 @@ func flags(args []string, allowed map[string]bool) (flagValues, error) {
 		if !ok {
 			return nil, fmt.Errorf("unknown flag --%s", name)
 		}
-		if len(args) < 2 || strings.HasPrefix(args[1], "--") {
+		if len(args) < 2 || (strings.HasPrefix(args[1], "--") && name != "external-ref") {
 			return nil, fmt.Errorf("--%s requires a value", name)
 		}
 		if len(values[name]) > 0 && !repeatable {
@@ -579,6 +699,32 @@ func flags(args []string, allowed map[string]bool) (flagValues, error) {
 		args = args[2:]
 	}
 	return values, nil
+}
+
+func takeJSONFlag(args []string) ([]string, bool, error) {
+	remaining := make([]string, 0, len(args))
+	found := false
+	for index := 0; index < len(args); {
+		arg := args[index]
+		if arg != "--json" {
+			remaining = append(remaining, arg)
+			index++
+			// All callers of this helper use flags that require one value. Keep
+			// that value paired with its flag so `--title --json text` remains
+			// the existing missing-value error rather than becoming valid input.
+			if strings.HasPrefix(arg, "--") && index < len(args) {
+				remaining = append(remaining, args[index])
+				index++
+			}
+			continue
+		}
+		if found {
+			return nil, false, errors.New("--json may only be specified once")
+		}
+		found = true
+		index++
+	}
+	return remaining, found, nil
 }
 
 func (f flagValues) one(name string) string {
