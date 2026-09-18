@@ -3,6 +3,7 @@ package forgepilot_test
 import (
 	"errors"
 	"fmt"
+	"go/version"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +52,8 @@ type onboardingHarness struct {
 
 func newOnboardingHarness(t *testing.T, binary, platform string) *onboardingHarness {
 	t.Helper()
-	h := &onboardingHarness{Root: onboardingRepository(t), Home: t.TempDir(), Stage: t.TempDir(), Tools: t.TempDir(), Binary: binary, Source: projectRoot(t), Commit: strings.Repeat("a", 40)}
+	source := projectRoot(t)
+	h := &onboardingHarness{Root: onboardingRepository(t), Home: t.TempDir(), Stage: t.TempDir(), Tools: t.TempDir(), Binary: binary, Source: source, Commit: onboardingGit(t, source, "rev-parse", "HEAD")}
 	h.Entry = filepath.Join(h.Home, "bin/forgepilot")
 	platformDir := map[string]string{"codex": ".agents", "claude-code": ".claude"}[platform]
 	adapter := filepath.Join(h.Source, "skills", platform, "forgepilot-onboarding/SKILL.md")
@@ -174,6 +176,86 @@ func (h *onboardingHarness) validateActions() error {
 var errOnboardingDeclined = errors.New("developer declined authorization")
 var errOnboardingReview = errors.New("Story draft requires human review")
 
+type onboardingPathSnapshot struct {
+	exists bool
+	mode   os.FileMode
+	value  string
+}
+
+func snapshotOnboardingPath(path string) (onboardingPathSnapshot, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return onboardingPathSnapshot{}, nil
+	}
+	if err != nil {
+		return onboardingPathSnapshot{}, err
+	}
+	snapshot := onboardingPathSnapshot{exists: true, mode: info.Mode()}
+	if info.Mode()&os.ModeSymlink != 0 {
+		snapshot.value, err = os.Readlink(path)
+		return snapshot, err
+	}
+	if info.Mode().IsRegular() {
+		contents, readErr := os.ReadFile(path)
+		snapshot.value = string(contents)
+		return snapshot, readErr
+	}
+	return snapshot, nil
+}
+
+type onboardingFailureDiagnostic struct {
+	SourceCommit, Action, Cause, ExitStatus                 string
+	EntrypointPreserved, TargetStatePreserved, TemporaryNew bool
+}
+
+func (d onboardingFailureDiagnostic) Error() string {
+	return fmt.Sprintf("source_commit=%s failed_action=%s cause=%s exit_status=%s entrypoint_preserved=%t target_state_preserved=%t temporary_entrypoint_present=%t raw_command_output=omitted", d.SourceCommit, d.Action, d.Cause, d.ExitStatus, d.EntrypointPreserved, d.TargetStatePreserved, d.TemporaryNew)
+}
+
+func onboardingExitStatus(err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return strconv.Itoa(exitErr.ExitCode())
+	}
+	return "unavailable"
+}
+
+func (h *onboardingHarness) failureDiagnostic(action, cause, exitStatus string, entrypointBefore, targetStateBefore onboardingPathSnapshot) error {
+	entrypointAfter, entrypointErr := snapshotOnboardingPath(h.Entry)
+	targetStateAfter, targetStateErr := snapshotOnboardingPath(filepath.Join(h.Root, ".forgepilot/state.json"))
+	_, temporaryErr := os.Lstat(h.Entry + ".new")
+	return onboardingFailureDiagnostic{
+		SourceCommit:         h.Commit,
+		Action:               action,
+		Cause:                cause,
+		ExitStatus:           exitStatus,
+		EntrypointPreserved:  entrypointErr == nil && entrypointAfter == entrypointBefore,
+		TargetStatePreserved: targetStateErr == nil && targetStateAfter == targetStateBefore,
+		TemporaryNew:         temporaryErr == nil,
+	}
+}
+
+func (h *onboardingHarness) compatibleGo(raw string) bool {
+	fields := strings.Fields(raw)
+	if len(fields) < 3 || fields[0] != "go" || fields[1] != "version" || !version.IsValid(fields[2]) {
+		return false
+	}
+	gitShow := exec.Command("git", "-C", h.Source, "show", h.Commit+":go.mod")
+	gitShow.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + h.Home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1"}
+	contents, err := gitShow.Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(contents), "\n") {
+		goDirective := strings.Fields(line)
+		if len(goDirective) == 2 && goDirective[0] == "go" {
+			required := "go" + goDirective[1]
+			return version.IsValid(required) && version.Compare(fields[2], required) >= 0
+		}
+	}
+	return false
+}
+
 func (h *onboardingHarness) run(t *testing.T) error {
 	t.Helper()
 	if err := h.plan(t); err != nil {
@@ -200,6 +282,14 @@ func (h *onboardingHarness) runTarget(t *testing.T) error {
 func (h *onboardingHarness) executeActions(t *testing.T, targetOnly bool) error {
 	t.Helper()
 	if err := h.validateActions(); err != nil {
+		return err
+	}
+	entrypointBefore, err := snapshotOnboardingPath(h.Entry)
+	if err != nil {
+		return err
+	}
+	targetStateBefore, err := snapshotOnboardingPath(filepath.Join(h.Root, ".forgepilot/state.json"))
+	if err != nil {
 		return err
 	}
 	for _, a := range h.Actions {
@@ -257,7 +347,14 @@ func (h *onboardingHarness) executeActions(t *testing.T, targetOnly bool) error 
 		raw, err := c.CombinedOutput()
 		h.Executed = append(h.Executed, a.ID)
 		if err != nil {
-			return fmt.Errorf("%s: %w: %s", a.ID, err, raw)
+			cause := "command_failed"
+			if a.ID == "go-prerequisite" {
+				cause = "go_unavailable"
+			}
+			return h.failureDiagnostic(a.ID, cause, onboardingExitStatus(err), entrypointBefore, targetStateBefore)
+		}
+		if a.ID == "go-prerequisite" && !h.compatibleGo(string(raw)) {
+			return h.failureDiagnostic(a.ID, "go_incompatible", "0", entrypointBefore, targetStateBefore)
 		}
 		if a.ID == "entrypoint-switch" {
 			h.installedIdentity = h.sourceIdentity()
@@ -418,7 +515,7 @@ func TestOnboardingApprovalAndFailureStops(t *testing.T) {
 				case "missing-git":
 					onboardingWrite(t, h.Tools, "git", "#!/bin/sh\nexit 127\n")
 				case "failed-build":
-					onboardingWrite(t, h.Tools, "go", "#!/bin/sh\n[ \"$1\" = version ]\n")
+					onboardingWrite(t, h.Tools, "go", "#!/bin/sh\ncase \"$1\" in\nversion) printf 'go version go1.25.5 darwin/arm64\\n';;\ninstall) exit 1;;\n*) exit 92;;\nesac\n")
 				case "failed-verify":
 					onboardingWrite(t, h.Tools, "make", "#!/bin/sh\nexit 1\n")
 				case "existing-state-missing-story":
@@ -501,6 +598,120 @@ func TestOnboardingSourceFailurePreservesExistingEntrypoint(t *testing.T) {
 		t.Fatal("failed installation replaced prior entrypoint")
 	}
 	requireAbsent(t, filepath.Join(h.Root, ".forgepilot"))
+}
+
+func TestOnboardingSourceFailureDiagnosticsAreSanitized(t *testing.T) {
+	_, binary := fixture(t)
+	const secret = "synthetic-source-credential"
+	tests := []struct {
+		name, failedAt, cause, exitStatus string
+		temporaryNew                      bool
+		executed                          []string
+		configure                         func(*testing.T, *onboardingHarness)
+	}{
+		{
+			name:       "missing-go",
+			failedAt:   "go-prerequisite",
+			cause:      "go_unavailable",
+			exitStatus: "127",
+			executed:   []string{"go-prerequisite"},
+			configure: func(t *testing.T, h *onboardingHarness) {
+				onboardingWrite(t, h.Tools, "go", "#!/bin/sh\nprintf '"+secret+"\\n' >&2\nexit 127\n")
+			},
+		},
+		{
+			name:       "incompatible-go",
+			failedAt:   "go-prerequisite",
+			cause:      "go_incompatible",
+			exitStatus: "0",
+			executed:   []string{"go-prerequisite"},
+			configure: func(t *testing.T, h *onboardingHarness) {
+				onboardingWrite(t, h.Tools, "go", "#!/bin/sh\nprintf 'go version go1.24.0 darwin/arm64\\n'\n")
+			},
+		},
+		{
+			name:       "failed-verification",
+			failedAt:   "verification",
+			cause:      "command_failed",
+			exitStatus: "1",
+			executed:   []string{"go-prerequisite", "stage-directories", "source-fetch", "source-commit", "source-checkout", "build", "verification"},
+			configure: func(t *testing.T, h *onboardingHarness) {
+				onboardingWrite(t, h.Tools, "make", "#!/bin/sh\nprintf '"+secret+"\\n' >&2\nexit 1\n")
+			},
+		},
+		{
+			name:         "failed-entrypoint-switch",
+			failedAt:     "entrypoint-switch",
+			cause:        "command_failed",
+			exitStatus:   "74",
+			temporaryNew: true,
+			executed:     []string{"go-prerequisite", "stage-directories", "source-fetch", "source-commit", "source-checkout", "build", "verification", "startup", "entrypoint-link", "entrypoint-switch"},
+			configure: func(t *testing.T, h *onboardingHarness) {
+				onboardingWrite(t, h.Tools, "mv", "#!/bin/sh\nprintf '"+secret+"\\n' >&2\nexit 74\n")
+				if err := os.Chmod(filepath.Join(h.Tools, "mv"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newOnboardingHarness(t, binary, "codex")
+			h.SourceApproved = true
+			h.RepositoryApproved = true
+			onboardingWrite(t, h.Home, "bin/forgepilot", "previous version sentinel")
+			mustRun(t, binary, h.Root, "init")
+			stateBefore, readErr := os.ReadFile(filepath.Join(h.Root, ".forgepilot/state.json"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			tc.configure(t, h)
+
+			err := h.run(t)
+			if err == nil {
+				t.Fatal("source failure did not stop")
+			}
+			want := fmt.Sprintf("source_commit=%s failed_action=%s cause=%s exit_status=%s entrypoint_preserved=true target_state_preserved=true temporary_entrypoint_present=%t raw_command_output=omitted", h.Commit, tc.failedAt, tc.cause, tc.exitStatus, tc.temporaryNew)
+			if err.Error() != want {
+				t.Fatalf("diagnostic = %q, want %q", err, want)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatal("diagnostic retained raw command output")
+			}
+			if !reflect.DeepEqual(h.Executed, tc.executed) {
+				t.Fatalf("executed actions = %v, want %v", h.Executed, tc.executed)
+			}
+			previous, readErr := os.ReadFile(h.Entry)
+			if readErr != nil || string(previous) != "previous version sentinel" {
+				t.Fatal("source failure replaced prior entrypoint")
+			}
+			stateAfter, readErr := os.ReadFile(filepath.Join(h.Root, ".forgepilot/state.json"))
+			if readErr != nil || string(stateAfter) != string(stateBefore) {
+				t.Fatal("source failure changed existing target state")
+			}
+		})
+	}
+}
+
+func TestOnboardingGoCompatibilityIgnoresReplacementObjects(t *testing.T) {
+	source := t.TempDir()
+	onboardingGit(t, source, "init", "-q")
+	onboardingGit(t, source, "config", "user.email", "onboarding@example.invalid")
+	onboardingGit(t, source, "config", "user.name", "Onboarding fixture")
+	onboardingWrite(t, source, "go.mod", "module example.invalid/source\n\ngo 1.25.5\n")
+	onboardingGit(t, source, "add", "go.mod")
+	onboardingGit(t, source, "commit", "-qm", "required version")
+	requiredCommit := onboardingGit(t, source, "rev-parse", "HEAD")
+
+	onboardingWrite(t, source, "go.mod", "module example.invalid/source\n\ngo 1.24.0\n")
+	onboardingGit(t, source, "commit", "-qam", "replacement version")
+	replacementCommit := onboardingGit(t, source, "rev-parse", "HEAD")
+	onboardingGit(t, source, "replace", requiredCommit, replacementCommit)
+
+	h := &onboardingHarness{Source: source, Commit: requiredCommit, Home: t.TempDir()}
+	if h.compatibleGo("go version go1.24.0 darwin/arm64\n") {
+		t.Fatal("replacement object weakened the exact source commit Go requirement")
+	}
 }
 
 func TestOnboardingDraftRejectsPathsChangedAfterReview(t *testing.T) {
