@@ -1,0 +1,393 @@
+#!/bin/sh
+set -eu
+umask 077
+export LC_ALL=C
+
+fail() { printf 'forgepilot-bootstrap: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+	cat <<'EOF'
+Usage:
+  forgepilot-bootstrap plan [--upgrade | --uninstall --commit SHA | --prune] [source options]
+  forgepilot-bootstrap install [source options] --approve PLAN_ID
+  forgepilot-bootstrap upgrade --source PATH --commit SHA --approve PLAN_ID
+  forgepilot-bootstrap status
+  forgepilot-bootstrap uninstall --commit SHA --approve PLAN_ID
+  forgepilot-bootstrap prune --approve PLAN_ID
+  forgepilot-bootstrap retention-v1 acquire|release --generation SHA --payload-digest DIGEST --reference TOKEN
+EOF
+}
+
+valid_sha() {
+	case "$1" in *[!0123456789abcdef]*) return 1 ;; esac
+	[ "${#1}" -eq 40 ]
+}
+
+valid_digest() {
+	case "$1" in sha256:*) value=${1#sha256:} ;; *) return 1 ;; esac
+	case "$value" in *[!0123456789abcdef]*) return 1 ;; esac
+	[ "${#value}" -eq 64 ]
+}
+
+valid_reference() {
+	case "$1" in *[!0123456789abcdef]*) return 1 ;; esac
+	[ "${#1}" -eq 64 ]
+}
+
+safe_mode() {
+	mode_value=$(/usr/bin/stat -f '%Lp' "$1" 2>/dev/null) || fail 'cannot inspect managed path mode'
+	case "$mode_value" in ''|*[!01234567]*) fail 'managed path has an invalid mode' ;; esac
+	mode_number=$((0$mode_value))
+	[ $((mode_number & 0022)) -eq 0 ] || fail 'managed path is group- or world-writable'
+}
+
+safe_dir() {
+	[ -d "$1" ] && [ ! -L "$1" ] || fail 'managed directory is missing or unsafe'
+	owner=$(/usr/bin/stat -f '%u' "$1" 2>/dev/null) || fail 'cannot inspect managed directory owner'
+	[ "$owner" = "$CURRENT_UID" ] || fail 'managed directory has an unexpected owner'
+	safe_mode "$1"
+	mode_number=$((0$mode_value))
+	[ $((mode_number & 0700)) -eq $((0700)) ] || fail "managed directory is not owner-accessible (mode $mode_value)"
+}
+
+private_dir() {
+	safe_dir "$1"
+	mode_number=$((0$mode_value))
+	[ $((mode_number & 0077)) -eq 0 ] || fail 'managed private directory is accessible to group or world'
+}
+
+safe_file() {
+	[ -f "$1" ] && [ ! -L "$1" ] || fail 'managed file is missing or unsafe'
+	owner=$(/usr/bin/stat -f '%u' "$1" 2>/dev/null) || fail 'cannot inspect managed file owner'
+	[ "$owner" = "$CURRENT_UID" ] || fail 'managed file has an unexpected owner'
+	links=$(/usr/bin/stat -f '%l' "$1" 2>/dev/null) || fail 'cannot inspect managed file links'
+	[ "$links" = 1 ] || fail 'managed file has an unexpected hard link'
+	safe_mode "$1"
+	mode_number=$((0$mode_value))
+	[ $((mode_number & 0400)) -ne 0 ] || fail 'managed file is not owner-readable'
+}
+
+private_file() {
+	safe_file "$1"
+	mode_number=$((0$mode_value))
+	[ $((mode_number & 0077)) -eq 0 ] || fail 'managed private file is accessible to group or world'
+}
+
+sha256_stdin() {
+	/usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
+
+payload_digest() {
+	generation_dir=$1
+	safe_dir "$generation_dir"
+	[ -x "$generation_dir/bin/forgepilot" ] && [ ! -L "$generation_dir/bin/forgepilot" ] || fail 'generation CLI is missing or unsafe'
+	[ -x "$generation_dir/libexec/forgepilot-bootstrap" ] && [ ! -L "$generation_dir/libexec/forgepilot-bootstrap" ] || fail 'generation helper is missing or unsafe'
+	[ -f "$generation_dir/skills/codex/forgepilot-onboarding/SKILL.md" ] && [ ! -L "$generation_dir/skills/codex/forgepilot-onboarding/SKILL.md" ] || fail 'generation skill is missing or unsafe'
+	[ -f "$generation_dir/docs/release/onboarding.md" ] && [ ! -L "$generation_dir/docs/release/onboarding.md" ] || fail 'generation onboarding procedure is missing or unsafe'
+
+	canonical=$TEMP_DIR/canonical
+	find_list=$TEMP_DIR/find-list
+	: >"$canonical"
+	mode_value=$(/usr/bin/stat -f '%Lp' "$generation_dir") || fail 'cannot inspect generation root mode'
+	printf 'forgepilot-payload-v1\nD\t%s\t.\n' "$mode_value" >"$canonical"
+	/usr/bin/find -s "$generation_dir" -mindepth 1 -print >"$find_list" || fail 'cannot enumerate generation payload'
+	last_relative=''
+	while IFS= read -r item; do
+		relative=${item#"$generation_dir"/}
+		case "$relative" in *[!A-Za-z0-9._/-]*) fail 'generation payload has an unsupported path' ;; esac
+		case "/$relative/" in */../*|*/./*|*//*) fail 'generation payload path escapes its root' ;; esac
+		[ "$relative" != "$last_relative" ] || fail 'generation payload has an ambiguous path inventory'
+		last_relative=$relative
+		case "$relative" in
+			bin|bin/forgepilot|libexec|libexec/forgepilot-bootstrap|docs|docs/release|docs/release/onboarding.md|skills|skills/codex|skills/codex/forgepilot-onboarding|skills/codex/forgepilot-onboarding/*) ;;
+			*) fail 'generation payload contains an unexpected path' ;;
+		esac
+		[ ! -L "$item" ] || fail 'generation payload contains a symbolic link'
+		owner=$(/usr/bin/stat -f '%u' "$item" 2>/dev/null) || fail 'cannot inspect generation payload owner'
+		[ "$owner" = "$CURRENT_UID" ] || fail 'generation payload has an unexpected owner'
+		mode_value=$(/usr/bin/stat -f '%Lp' "$item" 2>/dev/null) || fail 'cannot inspect generation payload mode'
+		case "$mode_value" in ''|*[!01234567]*) fail 'generation payload has an invalid mode' ;; esac
+		mode_number=$((0$mode_value))
+		[ $((mode_number & 0022)) -eq 0 ] || fail 'generation payload is group- or world-writable'
+		if [ -d "$item" ]; then
+			[ $((mode_number & 0700)) -eq $((0700)) ] || fail 'generation directory is not owner-accessible'
+			printf 'D\t%s\t%s\n' "$mode_value" "$relative" >>"$canonical"
+		elif [ -f "$item" ]; then
+			links=$(/usr/bin/stat -f '%l' "$item" 2>/dev/null) || fail 'cannot inspect generation file links'
+			[ "$links" = 1 ] || fail 'generation payload contains a hard link'
+			[ $((mode_number & 0400)) -ne 0 ] || fail 'generation file is not owner-readable'
+			file_digest=$(/usr/bin/shasum -a 256 <"$item" | /usr/bin/awk '{print $1}') || fail 'cannot hash generation payload'
+			printf 'F\t%s\t%s\t%s\n' "$mode_value" "$relative" "$file_digest" >>"$canonical"
+		else
+			fail 'generation payload contains a special file'
+		fi
+	done <"$find_list"
+	digest=$(sha256_stdin <"$canonical") || fail 'cannot hash generation inventory'
+	printf 'sha256:%s' "$digest"
+}
+
+pointer_commit() {
+	pointer_path=$1
+	safe_symlink "$pointer_path"
+	target=$(/usr/bin/readlink "$pointer_path") || fail 'cannot read managed generation pointer'
+	case "$target" in versions/*) pointer_id=${target#versions/} ;; *) fail 'managed generation pointer has an unexpected target' ;; esac
+	valid_sha "$pointer_id" || fail 'managed generation pointer has an invalid identity'
+}
+
+safe_symlink() {
+	[ -L "$1" ] || fail 'managed symbolic link is missing or unsafe'
+	owner=$(/usr/bin/stat -f '%u' "$1" 2>/dev/null) || fail 'cannot inspect managed symbolic link owner'
+	[ "$owner" = "$CURRENT_UID" ] || fail 'managed symbolic link has an unexpected owner'
+}
+
+stable_link() {
+	link_path=$1
+	expected_target=$2
+	safe_symlink "$link_path"
+	link_target=$(/usr/bin/readlink "$link_path") || fail 'cannot inspect stable Bootstrap entrypoint'
+	[ "$link_target" = "$expected_target" ] || fail 'stable Bootstrap entrypoint has drifted'
+}
+
+verify_lock_path() {
+	[ -n "${LOCK_IDENTITY:-}" ] || fail 'Bootstrap lock identity is unavailable'
+	lock_identity=$(/usr/bin/stat -f '%i:%v' "$LOCK" 2>/dev/null) || fail 'managed Bootstrap lock marker changed'
+	[ "$lock_identity" = "$LOCK_IDENTITY" ] || fail 'managed Bootstrap lock marker changed'
+}
+
+setup_paths() {
+	[ -n "${HOME:-}" ] || fail 'HOME is required'
+	case "$HOME" in /*) ;; *) fail 'HOME must be absolute' ;; esac
+	CURRENT_UID=$(/usr/bin/id -u) || fail 'cannot determine current user'
+	ROOT=$HOME/.local/share/forgepilot
+	VERSIONS=$ROOT/versions
+	RETENTION_DIR=$ROOT/retention/v1
+	MANIFEST=$ROOT/manifest.json
+	LOCK=$ROOT/lock
+}
+
+setup_temp() {
+	TEMP_DIR=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/forgepilot-bootstrap.XXXXXX") || fail 'cannot create private temporary directory'
+	/bin/chmod 700 "$TEMP_DIR" || fail 'cannot secure temporary directory'
+}
+
+cleanup() {
+	if [ -n "${PENDING_MARKER:-}" ] && [ -e "$PENDING_MARKER" ]; then /bin/rm -f "$PENDING_MARKER"; fi
+	if [ -n "${TEMP_DIR:-}" ] && [ -d "$TEMP_DIR" ]; then /bin/rm -rf "$TEMP_DIR"; fi
+}
+
+generation_manifest() {
+	current_path_commit=$CURRENT_COMMIT
+	previous_path_commit=$PREVIOUS_COMMIT
+	manifest_expected=$TEMP_DIR/manifest.expected
+	versions_list=$TEMP_DIR/versions-list
+	printf '{"schema_version":1,"generations":{' >"$manifest_expected"
+	/usr/bin/find -s "$VERSIONS" -mindepth 1 -maxdepth 1 -print >"$versions_list" || fail 'cannot enumerate managed generations'
+	first_generation=1
+	GENERATION_COUNT=0
+	while IFS= read -r generation_path; do
+		[ -d "$generation_path" ] && [ ! -L "$generation_path" ] || fail 'versions contains an unexpected entry'
+		generation_id=${generation_path##*/}
+		valid_sha "$generation_id" || fail 'versions contains an invalid generation identity'
+		safe_dir "$generation_path"
+		generation_digest=$(payload_digest "$generation_path") || fail 'cannot verify a managed generation'
+		if [ "$first_generation" -eq 1 ]; then first_generation=0; else printf ',' >>"$manifest_expected"; fi
+		printf '"%s":{"payload_digest":"%s","path":"versions/%s"}' \
+			"$generation_id" "$generation_digest" "$generation_id" >>"$manifest_expected"
+		GENERATION_COUNT=$((GENERATION_COUNT + 1))
+	done <"$versions_list"
+	[ "$first_generation" -eq 0 ] || fail 'no managed generation is installed'
+	printf '},"current":"%s","previous":' "$current_path_commit" >>"$manifest_expected"
+	if [ -n "$previous_path_commit" ]; then printf '"%s"' "$previous_path_commit" >>"$manifest_expected"; else printf 'null' >>"$manifest_expected"; fi
+	printf '}\n' >>"$manifest_expected"
+	/usr/bin/cmp -s "$manifest_expected" "$MANIFEST" || fail 'managed manifest does not match the verified generation layout'
+}
+
+status() {
+	setup_paths
+	setup_temp
+	trap cleanup EXIT HUP INT TERM
+	validate_layout
+	manifest_before=$(sha256_stdin <"$MANIFEST") || fail 'cannot snapshot managed manifest'
+	current_before=$CURRENT_COMMIT
+	previous_before=$PREVIOUS_COMMIT
+	retention_before=$RETENTION_DIGEST
+	retention_count_before=$RETENTION_COUNT
+	generation_count_before=$GENERATION_COUNT
+	validate_layout
+	manifest_after=$(sha256_stdin <"$MANIFEST") || fail 'cannot recheck managed manifest'
+	[ "$manifest_before" = "$manifest_after" ] &&
+		[ "$current_before" = "$CURRENT_COMMIT" ] &&
+		[ "$previous_before" = "$PREVIOUS_COMMIT" ] &&
+		[ "$retention_before" = "$RETENTION_DIGEST" ] &&
+		[ "$retention_count_before" -eq "$RETENTION_COUNT" ] &&
+		[ "$generation_count_before" -eq "$GENERATION_COUNT" ] || fail 'managed state changed during status inspection'
+	previous_display=${PREVIOUS_COMMIT:-none}
+	printf 'Bootstrap status: idle; generations=%s; current=%s; previous=%s; retention_refs=%s\n' \
+		"$GENERATION_COUNT" "$CURRENT_COMMIT" "$previous_display" "$RETENTION_COUNT"
+}
+
+read_retention_marker() {
+	marker_path=$1
+	marker_name=${marker_path##*/}
+	valid_reference "$marker_name" || fail 'retention store contains an unknown entry'
+	private_file "$marker_path"
+	{
+		IFS= read -r marker_version || fail 'retention marker is incomplete'
+		IFS= read -r marker_generation_line || fail 'retention marker is incomplete'
+		IFS= read -r marker_digest_line || fail 'retention marker is incomplete'
+		if IFS= read -r marker_extra; then
+			case "$marker_extra" in '') fail 'retention marker has unexpected records' ;; *) fail 'retention marker has unexpected records' ;; esac
+		fi
+	} <"$marker_path"
+	[ "$marker_version" = forgepilot-retention-v1 ] || fail 'retention marker has an unknown version'
+	case "$marker_generation_line" in generation=*) marker_generation=${marker_generation_line#generation=} ;; *) fail 'retention marker is malformed' ;; esac
+	case "$marker_digest_line" in payload_digest=*) marker_digest=${marker_digest_line#payload_digest=} ;; *) fail 'retention marker is malformed' ;; esac
+	valid_sha "$marker_generation" || fail 'retention marker has an invalid generation identity'
+	valid_digest "$marker_digest" || fail 'retention marker has an invalid payload digest'
+	grep_pattern="\"$marker_generation\":{\"payload_digest\":\"$marker_digest\",\"path\":\"versions/$marker_generation\"}"
+	/usr/bin/grep -F -- "$grep_pattern" "$MANIFEST" >/dev/null || fail 'retention marker references an unknown generation tuple'
+}
+
+validate_retention_store() {
+	store_list=$TEMP_DIR/retention-list
+	store_canonical=$TEMP_DIR/retention-canonical
+	: >"$store_canonical"
+	RETENTION_COUNT=0
+	/usr/bin/find -s "$RETENTION_DIR" -mindepth 1 -maxdepth 1 -print >"$store_list" || fail 'cannot enumerate retention store'
+	while IFS= read -r marker_path; do
+		read_retention_marker "$marker_path"
+		printf '%s\t%s\t%s\n' "$marker_name" "$marker_generation" "$marker_digest" >>"$store_canonical"
+		RETENTION_COUNT=$((RETENTION_COUNT + 1))
+	done <"$store_list"
+	RETENTION_DIGEST=$(sha256_stdin <"$store_canonical") || fail 'cannot hash retention store'
+}
+
+validate_layout() {
+	safe_dir "$HOME"
+	safe_dir "$HOME/.local"
+	safe_dir "$HOME/.local/share"
+	safe_dir "$HOME/.local/bin"
+	safe_dir "$HOME/.agents"
+	safe_dir "$HOME/.agents/skills"
+	private_dir "$ROOT"
+	private_dir "$VERSIONS"
+	private_dir "$ROOT/retention"
+	private_dir "$RETENTION_DIR"
+	[ ! -e "$ROOT/transaction.json" ] && [ ! -L "$ROOT/transaction.json" ] || fail 'a Bootstrap transaction requires recovery'
+	private_file "$LOCK"
+	private_file "$MANIFEST"
+	pointer_commit "$ROOT/current"
+	CURRENT_COMMIT=$pointer_id
+	if [ -e "$ROOT/previous" ] || [ -L "$ROOT/previous" ]; then
+		pointer_commit "$ROOT/previous"
+		PREVIOUS_COMMIT=$pointer_id
+		[ "$PREVIOUS_COMMIT" != "$CURRENT_COMMIT" ] || fail 'current and previous point to the same generation'
+	else
+		PREVIOUS_COMMIT=''
+	fi
+	[ -d "$VERSIONS/$CURRENT_COMMIT" ] && [ ! -L "$VERSIONS/$CURRENT_COMMIT" ] || fail 'current generation is missing'
+	if [ -n "$PREVIOUS_COMMIT" ]; then [ -d "$VERSIONS/$PREVIOUS_COMMIT" ] && [ ! -L "$VERSIONS/$PREVIOUS_COMMIT" ] || fail 'previous generation is missing'; fi
+	stable_link "$HOME/.local/bin/forgepilot" "$ROOT/current/bin/forgepilot"
+	stable_link "$HOME/.local/bin/forgepilot-bootstrap" "$ROOT/current/libexec/forgepilot-bootstrap"
+	stable_link "$HOME/.agents/skills/forgepilot-onboarding" "$ROOT/current/skills/codex/forgepilot-onboarding"
+	generation_manifest
+	validate_retention_store
+}
+
+emit_result() {
+	result=$1
+	printf '{"protocol_version":1,"result":"%s","generation_id":"%s","payload_digest":"%s"}\n' \
+		"$result" "$REQUEST_GENERATION" "$REQUEST_DIGEST"
+}
+
+retention_locked() {
+	operation=$1
+	REQUEST_GENERATION=$2
+	REQUEST_DIGEST=$3
+	REQUEST_REFERENCE=$4
+	REQUEST_HASH=$(printf '%s' "$REQUEST_REFERENCE" | sha256_stdin) || fail 'cannot hash retention reference'
+	setup_paths
+	setup_temp
+	trap cleanup EXIT HUP INT TERM
+	verify_lock_path
+	validate_layout
+	verify_lock_path
+	grep_pattern="\"$REQUEST_GENERATION\":{\"payload_digest\":\"$REQUEST_DIGEST\",\"path\":\"versions/$REQUEST_GENERATION\"}"
+	/usr/bin/grep -F -- "$grep_pattern" "$MANIFEST" >/dev/null || fail 'generation tuple is not installed and verified'
+	marker_path=$RETENTION_DIR/$REQUEST_HASH
+	if [ "$operation" = acquire ]; then
+		if [ -e "$marker_path" ] || [ -L "$marker_path" ]; then
+			read_retention_marker "$marker_path"
+			[ "$marker_generation" = "$REQUEST_GENERATION" ] && [ "$marker_digest" = "$REQUEST_DIGEST" ] || fail 'retention reference is already bound to another generation'
+			emit_result already_acquired
+			return
+		fi
+		PENDING_MARKER=$(/usr/bin/mktemp "$RETENTION_DIR/.pending.XXXXXX") || fail 'cannot stage retention marker'
+		printf 'forgepilot-retention-v1\ngeneration=%s\npayload_digest=%s\n' \
+			"$REQUEST_GENERATION" "$REQUEST_DIGEST" >"$PENDING_MARKER"
+		/bin/chmod 600 "$PENDING_MARKER" || fail 'cannot secure retention marker'
+		verify_lock_path
+		/bin/mv "$PENDING_MARKER" "$marker_path" || fail 'cannot publish retention marker'
+		PENDING_MARKER=''
+		validate_retention_store
+		verify_lock_path
+		emit_result acquired
+	else
+		if [ ! -e "$marker_path" ] && [ ! -L "$marker_path" ]; then
+			emit_result already_released
+			return
+		fi
+		read_retention_marker "$marker_path"
+		[ "$marker_generation" = "$REQUEST_GENERATION" ] && [ "$marker_digest" = "$REQUEST_DIGEST" ] || fail 'retention reference does not match the requested generation tuple'
+		verify_lock_path
+		/bin/rm -f "$marker_path" || fail 'cannot release retention marker'
+		validate_retention_store
+		verify_lock_path
+		emit_result released
+	fi
+}
+
+run_retention_protocol() {
+	[ "$#" -eq 7 ] || fail 'retention-v1 requires exactly one operation and three named values'
+	operation=$1
+	case "$operation" in acquire|release) ;; *) fail 'retention-v1 operation must be acquire or release' ;; esac
+	[ "$2" = --generation ] && [ "$4" = --payload-digest ] && [ "$6" = --reference ] || fail 'retention-v1 arguments are malformed'
+	generation=$3
+	digest=$5
+	reference=$7
+	valid_sha "$generation" || fail 'generation must be a lowercase full 40-character SHA'
+	valid_digest "$digest" || fail 'payload digest must be sha256 followed by 64 lowercase hexadecimal characters'
+	valid_reference "$reference" || fail 'reference must be 64 lowercase hexadecimal characters'
+	setup_paths
+	private_file "$LOCK"
+	LOCK_IDENTITY=$(/usr/bin/stat -f '%i:%v' "$LOCK" 2>/dev/null) || fail 'cannot inspect managed Bootstrap lock'
+	(
+		fd_identity=$(/usr/bin/stat -L -f '%i:%v' /dev/fd/9 2>/dev/null) || fail 'cannot inspect opened Bootstrap lock'
+		[ "$fd_identity" = "$LOCK_IDENTITY" ] || fail 'Bootstrap lock changed while it was opened'
+		/usr/bin/lockf -s -t 30 9 || fail 'retention operation could not obtain the Bootstrap lock'
+		verify_lock_path
+		fd_identity=$(/usr/bin/stat -L -f '%i:%v' /dev/fd/9 2>/dev/null) || fail 'cannot recheck opened Bootstrap lock'
+		[ "$fd_identity" = "$LOCK_IDENTITY" ] || fail 'opened Bootstrap lock changed'
+		retention_locked "$operation" "$generation" "$digest" "$reference"
+	) 9<"$LOCK" || fail 'retention operation could not use the existing Bootstrap lock marker'
+}
+
+main() {
+	case "${1:-}" in
+		-h|--help) usage; return 0 ;;
+		retention-v1)
+			shift
+			run_retention_protocol "$@"
+			;;
+		status)
+			[ "$#" -eq 1 ] || fail 'status accepts no options'
+			status
+			;;
+		plan|install|upgrade|uninstall|prune)
+			fail 'Bootstrap lifecycle operations are not implemented in this development slice'
+			;;
+		*) usage >&2; exit 2 ;;
+	esac
+}
+
+main "$@"

@@ -16,6 +16,12 @@ _Avoid_：Repository Onboarding transaction、partial upgrade、best-effort inst
 **Bootstrap Source**：Bootstrap Transaction 以絕對本機 Git `--source` 與完整 40-character commit SHA 指定、由 installer 在 staging 取得 detached checkout 的 ForgePilot source identity；執行 installer 的工作樹不構成被安裝版本的身分。
 _Avoid_：installer checkout、floating branch、latest release alias
 
+**Bootstrap Generation**：由一個 Bootstrap Source 建立、經驗證後不可變的安裝結果；其 identity 同時包含完整 source commit 與 staged payload digest，不能只用版本顯示字串代替。
+_Avoid_：release label、尚未驗證的 build、可覆寫的安裝目錄
+
+**Generation Retention Reference**：對一個 Bootstrap Generation 仍被授權工作引用的 opaque claim；它不表達或保存 target repository identity。
+_Avoid_：repository registry、run log、可推測的 owner name
+
 **Bootstrap Approval**：使用者對一份展示了 Bootstrap Transaction 來源、版本、路徑與效果的 action plan 所作的明確同意；它只授權使用者目錄的 CLI／skill 安裝，不授權任何 Repository Onboarding 寫入。
 _Avoid_：Repository Onboarding approval、implicit consent、blanket authorization
 

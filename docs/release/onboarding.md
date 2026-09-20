@@ -1,10 +1,11 @@
 # ForgePilot source-built onboarding procedure
 
 > **Current procedure:** this document describes the current coupled
-> source-built walkthrough. ADR-0033 accepts a future Bootstrap that installs a
-> same-version CLI and Codex skill before Repository Onboarding; it is not
-> implemented yet. Its design is [documented separately](bootstrap.md), so these
-> instructions must not claim that `scripts/forgepilot-bootstrap` exists.
+> source-built walkthrough. ADR-0033 defines a Bootstrap that will install a
+> same-version CLI and Codex skill before Repository Onboarding. Its repository
+> script currently contains only incomplete `status` and `retention-v1`
+> development paths; it is not a supported installer. See the
+> [implementation status](bootstrap.md) and do not use it to install ForgePilot.
 
 Formal onboarding builds ForgePilot from a developer-supplied, full 40-character
 commit SHA. It is not a prebuilt-binary, signing, or platform-trust promise.

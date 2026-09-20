@@ -10,8 +10,9 @@ Dogfood Goal FP-28 的導入方向是 prompt-first、fixed-source-version 本機
 inspection-only commands 檢查與展示，逐條顯示完整 commit SHA、commands、路徑與效果；使用者
 授權後才能取得 source、安裝／建置、執行 `make verify` 或切換 entrypoint。既有 Go 是正式前提，
 source-built CLI 通過啟動檢查後才進入 Story 人工檢閱；預設 `WORK_ITEM` Goal／Work Item 建立前
-必須另取 repository write 的明確授權。ADR-0033 已定案一個**尚未實作**的 Bootstrap：它同版安裝
-CLI 與 Codex skill、但不取得 Repository Onboarding 權限；完整 contract 在
+必須另取 repository write 的明確授權。ADR-0033 已定案 Bootstrap，實作目前只有 `status` 與
+`retention-v1` 開發切片，尚不能安裝 ForgePilot：完成後會同版安裝 CLI 與 Codex skill、但不取得
+Repository Onboarding 權限；完整 contract 在
 [docs/specs/source-built-bootstrap.md](specs/source-built-bootstrap.md)。unsigned binary 只可作 maintainer
 trial，不宣稱正式導入或 macOS execution trust。Apple signing、notarization 與 no-Go prebuilt release
 留作未來獨立工作；具體邊界見 [architecture.md](architecture.md#distribution-and-onboarding-boundary)、
@@ -478,6 +479,7 @@ Schema 升至 v8：Goal 加入必填 `review_policy`；v7 與更舊 state migrat
 | 非執行文件（Markdown、README、一般 HTML／CSS） | `git diff --check`；核對已改引用、指令與相對 `href`／`src`；HTML／CSS 於本機瀏覽器開啟已改頁面，確認版面與已改連結可用 | Story／acceptance 明定、release／整合交付，或同次改動也觸及其他列 |
 | `docs/diagrams/` 的圖規格與產物 | 依 [圖的重新產生程序](diagrams/README.md#怎麼重新產生) render 與 visual-check | 同上 |
 | Go、module metadata、Makefile 或 canonical verification 行為 | `make verify` | integration／Human final acceptance 時另跑 `go test -race -count=1 ./...`；Story 也可明定 race gate |
+| `scripts/forgepilot-bootstrap` 與其 test | `sh -n scripts/forgepilot-bootstrap`、`sh scripts/forgepilot-bootstrap_test.sh` | FP-61 integration/final acceptance 另依 Story 執行原生 Apple Silicon disposable-home acceptance；不因純 shell 變更重跑 Go race gate |
 | `scripts/release/`、`scripts/onboarding/` 或 `scripts/skills/` | 分別跑 `sh scripts/release/build_trial_assets_test.sh`、`sh scripts/onboarding/onboarding_test.sh`、`sh scripts/skills/check_adapters_test.sh` 與／或 `sh scripts/skills/short_prompt_regression_test.sh` 中受影響者 | release、跨面整合，或同次變更碰到 Go／Makefile 時跑 `make verify`；final acceptance 另跑 race gate |
 
 報告每一項實跑命令、結果，以及沒有跑的 full gate 與理由。不得把未跑的必要 check 寫成 PASS；若必需 check 被阻擋，交付仍是 partial。這份矩陣不改變 ForgePilot 對受管理 repository 的 canonical `make verify` contract。
