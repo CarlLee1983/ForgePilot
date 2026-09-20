@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "1.0.0",
+  "plan": { "id": "goal-plan-fixture", "revision": 1 },
+  "declaration": {
+    "path": "specs/plans/example-goal.json",
+    "sha256": "e41ddb71ae9921d289028a1ba2d45b741b0e9f2678803a0b9f85941380422441"
+  },
+  "nodes": [
+    {
+      "nodeRef": "node-001",
+      "storyRef": "specs/stories/EX-001-first",
+      "readinessContract": {
+        "path": "specs/stories/EX-001-first/readiness.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependsOn": []
+    },
+    {
+      "nodeRef": "node-002",
+      "storyRef": "specs/stories/EX-001-first",
+      "readinessContract": {
+        "path": "specs/stories/EX-001-first/readiness.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependsOn": ["node-001"]
+    }
+  ],
+  "reviewedSources": [
+    {
+      "path": "specs/decisions/ADR-001-example.md",
+      "sha256": "24e8991b28202bc7504c511f9b0187cc55ed1d6b71bc205be1c3003c02b8e338"
+    },
+    {
+      "path": "specs/features/example/spec.md",
+      "sha256": "f88bf805c87d1a350ccac71bbdcca879e8ed0794c8af24faa39db77b70c3e64b"
+    },
+    {
+      "path": "specs/stories/EX-001-first/acceptance.md",
+      "sha256": "6440e144a1a82add639e3fb9e1befb4c7c9c0cb1f750e001e1c8e1e254c7f956"
+    },
+    {
+      "path": "specs/stories/EX-001-first/story.md",
+      "sha256": "a006ea39a37027b2963d232a187c4c034ecb699e96e115784236bd9e70d54513"
+    }
+  ],
+  "coverageIndex": {
+    "batchId": "BR-001-goal-plan-fixture",
+    "fingerprint": "3fd1339bc4b851097cf6e1e3e01877e595344b8cbec06180da14ab5033870fac"
+  }
+}

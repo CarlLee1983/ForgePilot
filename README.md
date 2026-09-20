@@ -107,6 +107,32 @@ forgepilot goal create --id dbcli-dba --title "DBA Workflow Support" --review-po
 
 接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 只改變 Work Item 間的 progression。Runner 已經實作（[`forgepilot run`](#交給-runner-連續跑)），它能把一個 `GOAL` policy 的 Goal 推進到**等待 Goal final review 為止**；跨過那條邊界的東西還沒有——Goal 最終 Human acceptance 的 command 與 Goal Evidence 尚未實作，`goal complete` 對 `GOAL` policy 仍然拒絕。
 
+### Inspecting a reviewed Goal Plan
+
+`goal preflight` inspects a supplied plan against the complete registered Work Item DAG. It checks raw-byte source digests, the coverage approval's binding to the exact Manifest bytes, and the explicit Plan Node Reference-to-Work Item mapping. It does not infer requirement coverage from Story Markdown, change state, or start Git/runtime/recovery processes.
+
+Save a request inside the repository, using repository-relative paths for the request, the Manifest, the Coverage Review, and every file bound by the Manifest. The source, declaration, and readiness paths come from the reviewed Manifest; the caller supplies only the complete node-to-Work-Item mapping:
+
+```json
+{
+  "formatVersion": "forgepilot.goal-preflight-request/v1",
+  "goalId": "dbcli-dba",
+  "manifestPath": "plans/goal-plan.json",
+  "coverageReviewPath": "plans/coverage-review.json",
+  "nodeMappings": [
+    { "planNodeRef": "DBCLI-001", "workItemId": "WI-001" }
+  ]
+}
+```
+
+Run the projection with:
+
+```bash
+forgepilot goal preflight --request goal-preflight.json --json
+```
+
+The result is one `forgepilot.goal-preflight/v1` JSON projection. Each fact is `observed`, `unprobed`, or `unavailable`: directly validated inputs are observed, inputs not reached because of an earlier failure remain unprobed, and missing or invalid required inputs are unavailable. Candidate freshness, worker liveness, and the domain next action remain unprobed; runtime state is unavailable. Validation defects appear in `diagnostics`; they do not create adoption, Evidence, or lifecycle changes.
+
 `--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 PraxisBound 執行工程工作。
 
 若 `work add` 發現該 Story 尚未提交，它會在成功輸出後提供兩條下一步：使用剛配發的 Work Item ID 執行 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行不帶 flag 的 commit-mode verification。

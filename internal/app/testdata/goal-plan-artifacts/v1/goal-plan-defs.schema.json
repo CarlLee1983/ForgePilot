@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:praxisbound:goal-plan-artifacts:defs:1",
+  "title": "PraxisBound Goal Plan artifact v1 shared definitions",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "batchId": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[0-9]+(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$",
+      "maxLength": 128
+    },
+    "planId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "nodeRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "repoPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\/$)(?!.*\\\\)(?!.*[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]).+$"
+    },
+    "sourceDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/repoPath"
+        },
+        "sha256": {
+          "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/sha256"
+        }
+      }
+    },
+    "planIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision"],
+      "properties": {
+        "id": {
+          "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/planId"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "coverageIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["batchId", "fingerprint"],
+      "properties": {
+        "batchId": {
+          "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/batchId"
+        },
+        "fingerprint": {
+          "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

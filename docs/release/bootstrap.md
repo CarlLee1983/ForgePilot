@@ -1,10 +1,11 @@
-# Planned source-built Bootstrap
+# Source-built Bootstrap development status
 
-> **Not implemented yet.** This document records an accepted future interface.
-> Today, use the source-built onboarding procedure and short prompt in this
-> directory.
+> **Not a supported installer yet.** The repository contains an incomplete
+> development slice for `status` and `retention-v1`; lifecycle commands such as
+> `plan`, `install`, `upgrade`, `prune`, and `uninstall` are unavailable. Today,
+> use the source-built onboarding procedure and short prompt in this directory.
 
-The future Bootstrap makes a developer-obtained ForgePilot source version
+The intended Bootstrap makes a developer-obtained ForgePilot source version
 available to a Codex user without inspecting or initializing any repository. It
 remains source-built: the user supplies an absolute local source checkout and a
 complete 40-character commit SHA, and it requires an already-installed

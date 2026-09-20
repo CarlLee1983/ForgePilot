@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:praxisbound:goal-plan-artifacts:coverage-review:1",
+  "title": "PraxisBound Plan Coverage Review v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "reviewId",
+    "manifestSha256",
+    "reviewedSources",
+    "coverageIndex",
+    "conclusion",
+    "reviewer",
+    "reviewedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "reviewId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "manifestSha256": {
+      "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/sha256"
+    },
+    "reviewedSources": {
+      "type": "array",
+      "maxItems": 4000,
+      "items": {
+        "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/sourceDigest"
+      }
+    },
+    "coverageIndex": {
+      "$ref": "urn:praxisbound:goal-plan-artifacts:defs:1#/$defs/coverageIndex"
+    },
+    "conclusion": { "const": "approved" },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "assurance"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?!.*[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff])\\S(?:[\\s\\S]*\\S)?$"
+        },
+        "assurance": { "const": "self-asserted" }
+      }
+    },
+    "reviewedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
+  }
+}

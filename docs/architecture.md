@@ -41,14 +41,21 @@ Breaking change、architecture trade-off、security-sensitive decision、product
 Onboarding procedure、可選 Codex／Claude adapters 與任何安裝 helper 都是 repository 內的分發
 表面，不是 ForgePilot 核心治理命令。正式 macOS 支援面只包含 Apple Silicon；完成乾淨原生
 Apple Silicon Mac 的固定 source commit 驗收前，不得宣稱正式支援，Intel Mac 不在支援範圍內。
-預定的 supported path 是使用者明確授權的 fixed-source-version 本機建置。已接受但尚未實作的
-Bootstrap（ADR-0033）以使用者提供的絕對本機 source checkout 與完整 commit SHA 建立 detached
+預定的 supported path 是使用者明確授權的 fixed-source-version 本機建置。Bootstrap（ADR-0033）
+目前只有 `status` 與 `retention-v1` 開發切片；install、upgrade、plan、prune、uninstall 尚未完成，
+因此整體 Bootstrap 尚非可用或 supported path。完整設計以使用者提供的絕對本機 source checkout 與完整 commit SHA 建立 detached
 staging checkout，以已安裝的 Go 建置、跑 `make verify`、確認 staged CLI，然後透過一個 user-home
 managed current pointer 同版切換 CLI 與 Codex skill。它不下載 ForgePilot binary、不持有或呼叫
 credential helper、不改 shell profile，也不檢查或寫入 target repository。Bootstrap 之後的
 Repository Onboarding 才以 inspection-only commands 確認目標 Candidate 與 `make verify` 是否存在，
 不執行 repository-defined target；Story 人工檢閱與 repository writes 仍需獨立的明確授權。缺少 Go
 或需使用 package manager 時，Agent 只能展示行動並等待新的授權，不能安裝它。
+
+每個 Bootstrap Generation 以完整 source commit 與 staged CLI、Codex skill/procedure、同版
+Bootstrap helper 的 canonical payload SHA-256 共同識別。安裝的 `forgepilot-bootstrap` 是第三個
+stable entrypoint，也經 `current` 切換；`retention-v1` 由 helper 在同一 exclusive lock 下管理 opaque
+generation references，prune approval 綁定 retention store 摘要與筆數。generation removal 仍須另外
+fresh approval。細節見 [ADR-0038](adr/0038-versioned-bootstrap-generation-retention.md)。
 
 未簽署 prebuilt binary（包含 `amd64` trial asset）僅可作 maintainer trial，不是一般使用者或 agent 的預設入口；不教使用者
 移除 quarantine 或繞過 Gatekeeper。Developer ID 簽署、notarization 與 immutable publication
@@ -412,6 +419,19 @@ Schema v4 相對 v3 只有新增：`schema_version` 改為 4、Evidence 加入�
 `status` 在顯示最新一筆 Human Review 時，若該筆帶有 PR Reference 就一併顯示，沒有就什麼都不印。它是描述而非警告，不因缺少 PR 而提示任何事——缺 PR 是合法狀態，不是問題。[ADR-0008](adr/0008-approval-completes-work.md) 要求 `status` 不對未完成的原因沉默，而 PR 不是完成條件之一，因此不在該要求的範圍內。
 
 ## Long-running Runner：`forgepilot run`
+
+**已定案，尚未實作：** 長任務設計採用 PraxisBound 的完整計畫與人工覆蓋核准，以
+Plan Node Reference 對應 Work Item；同 Goal 修訂保留既有節點／Story reference／依賴。
+Execution Authorization 的歷史與消耗跨 run／修訂保留，各版本綁定計畫、Worker Profile、
+固定 ForgePilot 引擎、顯式總額度與到期時間；只在單 run steps／duration 用完且條件仍有效時自動續接。
+授權層明確續接與 exact-run resume 分開；所有 Runner 入口共用授權，既有 run 經明確切換後保留為歷史。
+背景執行獨立於 Main Agent Session，使用者暫停必須持久化並明確 resume。
+CLI、主 Session 與首版唯讀 TUI 共用進度判定來源，inspection 不啟動 subprocess；
+actual probes 由正式啟動管理，未重新確認的 freshness 顯示歷史觀察或未知。
+引擎升級須暫停並修訂授權，受引用版本不能被分發清理；無法以相符備份恢復的總帳不提供重設。
+完整契約見
+[accepted ADR-0035](adr/0035-supervised-goal-execution-with-bounded-rollover.md)。
+下文仍描述既有 Runner；不得把新方向當成目前的存活或續跑保證。
 
 Runner 由使用者明確啟動，對單一 Goal 循序執行：取得下一個合法動作、必要時開一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續。範圍與驗收見 [specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)。
 

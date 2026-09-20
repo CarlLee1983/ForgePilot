@@ -135,9 +135,11 @@ func migrate(args []string, root string, output io.Writer) error {
 
 func goal(args []string, root string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot goal <create|block|unblock|complete|cancel>")
+		return errors.New("usage: forgepilot goal <create|block|unblock|complete|cancel|preflight>")
 	}
 	switch args[0] {
+	case "preflight":
+		return goalPreflight(args[1:], root, output)
 	case "create":
 		return createGoal(args[1:], root, output)
 	case "block":

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "story_ref": "specs/stories/EX-001-first",
+  "story_md_digest": "sha256:a006ea39a37027b2963d232a187c4c034ecb699e96e115784236bd9e70d54513",
+  "acceptance_md_digest": "sha256:6440e144a1a82add639e3fb9e1befb4c7c9c0cb1f750e001e1c8e1e254c7f956",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "operations": ["plan", "modify"],
+      "owner": "runner_worker",
+      "future_identities": []
+    }
+  ],
+  "inputs": [],
+  "outputs": [],
+  "decision_follow_ups": []
+}

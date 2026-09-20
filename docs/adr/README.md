@@ -39,6 +39,8 @@
 | [0031](0031-goal-scoped-external-work-reference.md) | External Work Reference 是 Goal-scoped 的 immutable idempotency key；machine JSON 是狹窄 public projection | accepted |
 | [0032](0032-formal-macos-onboarding-is-apple-silicon-only.md) | 正式 macOS onboarding 僅支援 Apple Silicon；Intel trial asset 不構成支援承諾 | accepted（取代 0025、0030 的雙架構前提） |
 | [0033](0033-source-built-bootstrap-separates-distribution-from-onboarding.md) | Source-built Bootstrap 同版安裝 CLI 與 Codex skill；Repository Onboarding 仍獨立核准 | accepted（部分取代 0024、0030） |
+| [0035](0035-supervised-goal-execution-with-bounded-rollover.md) | 長任務採 upstream 計畫／覆蓋核准、持久化有界授權、固定引擎背景執行與共用唯讀進度（待實作） | accepted |
+| [0038](0038-versioned-bootstrap-generation-retention.md) | Bootstrap generation 綁定 source commit 與 payload digest；版本化 retention protocol 與 installer 共用鎖及狀態 | accepted |
 
 ## 什麼時候該加一份
 

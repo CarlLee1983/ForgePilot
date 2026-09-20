@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0.0",
+  "batchId": "BR-001-goal-plan-fixture",
+  "sources": {
+    "adrs": ["specs/decisions/ADR-001-example.md"],
+    "specs": ["specs/features/example/spec.md"],
+    "stories": ["specs/stories/EX-001-first"]
+  },
+  "requirements": [
+    {
+      "spec": "specs/features/example/spec.md",
+      "anchor": "R-001",
+      "stories": ["EX-001"]
+    }
+  ],
+  "dependencies": []
+}
