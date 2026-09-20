@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0.0",
+  "sha256": {
+    "goal-plan-declaration.schema.json": "0d5d2789b40a7d34c8d9be57b1ec5764482db9594d8742ae51b11e01117c963e",
+    "goal-plan-defs.schema.json": "fe5e19019c8ec4185868729f8e3bc46625faabfda6909da0bc351d7b8e146ddd",
+    "goal-plan-manifest.schema.json": "d3bc09579f9a231c8b6c68d2f7761c11a3e6793e574e02aa101d356bfb457be7",
+    "invalid/cycle-goal-plan-manifest.json": "5fa7c56c93ca82bbbf69da5b9011401b5f5ccde3a9fc6c419fdce2599deaedc9",
+    "invalid/dangling-dependency-goal-plan-manifest.json": "3d87d4640dfa1c19039d6309d6df735e59464838cc2238f2eb5aa944ecd80dee",
+    "invalid/manifest-digest-mismatch-plan-coverage-review.json": "122a683e0ae01b16f6bad8760bf2080ba188fb2fb04ba8f50d6d4d99e2ebb5a4",
+    "invalid/readiness-digest-mismatch-goal-plan-manifest.json": "57c544ad1d1d6d7f147bc1f80ca0ed2b2717999db3e6c4e9656a98bc3b5f8d19",
+    "invalid/source-digest-mismatch-goal-plan-manifest.json": "7369c4b266e3acfebef45379802da9a9fa10a01ffbba1fc48151bc3585446cbb",
+    "plan-coverage-review.schema.json": "a4974cdef88559afb905031e4966f1f8a15cb3f3be85869e14da108022158129",
+    "valid/goal-plan-manifest.json": "79bd8f3511895045239653bc21f0f60714dfd3f940b1489cd173a7f3f2b481ed",
+    "valid/plan-coverage-review.json": "6858588ce72caa6bf8b338dd4e5c5fcbe4cccce3df853e1e95dc665b609dce79",
+    "valid/repository/specs/batches/BR-001-goal-plan-fixture/batch.json": "b06e546a4a1dff1115300f09f1064141353fa27047420b139746add06e03a7f2",
+    "valid/repository/specs/decisions/ADR-001-example.md": "24e8991b28202bc7504c511f9b0187cc55ed1d6b71bc205be1c3003c02b8e338",
+    "valid/repository/specs/features/example/spec.md": "f88bf805c87d1a350ccac71bbdcca879e8ed0794c8af24faa39db77b70c3e64b",
+    "valid/repository/specs/plans/example-goal.json": "e41ddb71ae9921d289028a1ba2d45b741b0e9f2678803a0b9f85941380422441",
+    "valid/repository/specs/stories/EX-001-first/acceptance.md": "6440e144a1a82add639e3fb9e1befb4c7c9c0cb1f750e001e1c8e1e254c7f956",
+    "valid/repository/specs/stories/EX-001-first/readiness.json": "bef6bbb116cb7449a4a08908a68517085c26193c45685496258567e9900e12bf",
+    "valid/repository/specs/stories/EX-001-first/story.md": "a006ea39a37027b2963d232a187c4c034ecb699e96e115784236bd9e70d54513"
+  }
+}

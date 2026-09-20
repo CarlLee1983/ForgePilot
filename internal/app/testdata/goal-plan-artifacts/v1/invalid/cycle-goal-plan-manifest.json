@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1.0.0",
+  "plan": { "id": "invalid-cycle", "revision": 1 },
+  "declaration": {
+    "path": "specs/plans/invalid.json",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "nodes": [
+    {
+      "nodeRef": "node-001",
+      "storyRef": "specs/stories/EX-001-first",
+      "readinessContract": {
+        "path": "specs/stories/EX-001-first/readiness.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependsOn": ["node-002"]
+    },
+    {
+      "nodeRef": "node-002",
+      "storyRef": "specs/stories/EX-001-first",
+      "readinessContract": {
+        "path": "specs/stories/EX-001-first/readiness.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "dependsOn": ["node-001"]
+    }
+  ],
+  "reviewedSources": [],
+  "coverageIndex": {
+    "batchId": "BR-001-goal-plan-fixture",
+    "fingerprint": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}
