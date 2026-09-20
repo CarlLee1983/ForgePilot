@@ -115,10 +115,9 @@ type GoalPlanCoverageReview struct {
 	ReviewedAt      string                  `json:"reviewedAt"`
 }
 type GoalPreflightGoal struct {
-	ID               string                `json:"id"`
-	Status           work.GoalStatus       `json:"status"`
-	ReviewPolicy     work.ReviewPolicy     `json:"reviewPolicy"`
-	CompletionPolicy work.CompletionPolicy `json:"completionPolicy"`
+	ID           string            `json:"id"`
+	Status       work.GoalStatus   `json:"status"`
+	ReviewPolicy work.ReviewPolicy `json:"reviewPolicy"`
 }
 type GoalPreflightProjection struct {
 	Version        string                       `json:"version"`
@@ -229,7 +228,7 @@ func PreflightGoalPlan(ctx context.Context, root string, request GoalPreflightRe
 		p.fail("unknown-goal", fmt.Sprintf("unknown goal %q", request.GoalID))
 		return p, nil
 	}
-	p.Goal = GoalPreflightGoal{ID: goal.ID, Status: goal.Status, ReviewPolicy: goal.ReviewPolicy, CompletionPolicy: goal.CompletionPolicy}
+	p.Goal = GoalPreflightGoal{ID: goal.ID, Status: goal.Status, ReviewPolicy: goal.ReviewPolicy}
 	setPreflightFact(&p, "goal", "observed", p.Goal)
 
 	manifestBytes, err := readContainedRegularFile(root, request.ManifestPath)

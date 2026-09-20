@@ -36,7 +36,7 @@ func TestPreflightGoalPlanValidTopologyAndFacts(t *testing.T) {
 			if projection.Version != GoalPreflightVersion || len(projection.Diagnostics) != 0 {
 				t.Fatalf("projection = %#v", projection)
 			}
-			if projection.Goal.ID != request.GoalID {
+			if projection.Goal.ID != request.GoalID || projection.Goal.Status != work.GoalActive || projection.Goal.ReviewPolicy != work.ReviewPerWorkItem {
 				t.Fatalf("goal projection = %#v", projection.Goal)
 			}
 			encoded, err := json.Marshal(projection)
