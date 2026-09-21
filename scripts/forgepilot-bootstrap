@@ -294,6 +294,155 @@ validate_layout() {
 	validate_retention_store
 }
 
+append_path_fact() {
+	fact_file=$1
+	fact_path=$2
+	if [ -L "$fact_path" ]; then
+		path_kind=link
+		path_target=$(/usr/bin/readlink "$fact_path") || fail 'cannot bind a managed symbolic link'
+	elif [ -d "$fact_path" ]; then
+		path_kind=directory
+		path_target=''
+	elif [ -f "$fact_path" ]; then
+		path_kind=file
+		path_target=''
+	else
+		fail 'managed path changed while planning'
+	fi
+	path_metadata=$(/usr/bin/stat -f '%u:%Lp:%d:%i' "$fact_path" 2>/dev/null) || fail 'cannot bind managed path ownership and mode'
+	printf '%s\0%s\0%s\0%s\0' "$fact_path" "$path_kind" "$path_metadata" "$path_target" >>"$fact_file"
+}
+
+write_layout_facts() {
+	fact_file=$1
+	: >"$fact_file"
+	manifest_digest=$(sha256_stdin <"$MANIFEST") || fail 'cannot bind managed manifest'
+	printf '%s\0' "$CURRENT_COMMIT" "${PREVIOUS_COMMIT:-none}" "$manifest_digest" "$RETENTION_COUNT" "$RETENTION_DIGEST" >>"$fact_file"
+	/bin/cat "$TEMP_DIR/manifest.expected" >>"$fact_file" || fail 'cannot bind verified generation tuples'
+	for managed_path in \
+		"$HOME" "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" \
+		"$HOME/.agents" "$HOME/.agents/skills" "$ROOT" "$VERSIONS" \
+		"$ROOT/retention" "$RETENTION_DIR" "$LOCK" "$MANIFEST" "$ROOT/current" \
+		"$HOME/.local/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" \
+		"$HOME/.agents/skills/forgepilot-onboarding"; do
+		append_path_fact "$fact_file" "$managed_path"
+	done
+	if [ -e "$ROOT/previous" ] || [ -L "$ROOT/previous" ]; then
+		append_path_fact "$fact_file" "$ROOT/previous"
+	else
+		printf '%s\0absent\0' "$ROOT/previous" >>"$fact_file"
+	fi
+	managed_list=$TEMP_DIR/fact-generations
+	/usr/bin/find -s "$VERSIONS" -mindepth 1 -maxdepth 1 -print >"$managed_list" || fail 'cannot recheck managed generations'
+	while IFS= read -r managed_path; do
+		append_path_fact "$fact_file" "$managed_path"
+	done <"$managed_list"
+	retention_list=$TEMP_DIR/fact-retention
+	/usr/bin/find -s "$RETENTION_DIR" -mindepth 1 -maxdepth 1 -print >"$retention_list" || fail 'cannot recheck retention markers'
+	while IFS= read -r managed_path; do
+		append_path_fact "$fact_file" "$managed_path"
+	done <"$retention_list"
+	printf '%s\0absent\0' "$ROOT/transaction.json" >>"$fact_file"
+}
+
+collect_prune_candidates() {
+	candidate_file=$1
+	: >"$candidate_file"
+	versions_list=$TEMP_DIR/prune-generations
+	/usr/bin/find -s "$VERSIONS" -mindepth 1 -maxdepth 1 -print >"$versions_list" || fail 'cannot enumerate prune candidates'
+	while IFS= read -r generation_path; do
+		generation_id=${generation_path##*/}
+		valid_sha "$generation_id" || fail 'managed generation has an invalid identity'
+		if [ "$generation_id" = "$CURRENT_COMMIT" ] || [ "$generation_id" = "$PREVIOUS_COMMIT" ]; then
+			continue
+		fi
+		candidate_digest=$(payload_digest "$generation_path") || fail 'cannot verify a prune candidate'
+		retained_generation=0
+		for marker_path in "$RETENTION_DIR"/*; do
+			if [ ! -e "$marker_path" ] && [ ! -L "$marker_path" ]; then continue; fi
+			if /usr/bin/grep -F -x "generation=$generation_id" "$marker_path" >/dev/null; then
+				retained_generation=1
+				break
+			fi
+		done
+		if [ "$retained_generation" -eq 0 ]; then
+			printf '%s\t%s\n' "$generation_id" "$candidate_digest" >>"$candidate_file"
+		fi
+	done <"$versions_list"
+}
+
+append_plan_action() {
+	action_file=$1
+	phase=$2
+	action_id=$3
+	working_directory=$4
+	effect=$5
+	shift 5
+	argument_count=$#
+	{
+		printf '%s\0' "$phase" "$action_id" "$working_directory" "$effect" "$argument_count"
+		for action_argument in "$@"; do printf '%s\0' "$action_argument"; done
+	} >>"$action_file"
+}
+
+build_prune_actions() {
+	PLAN_ACTIONS=$TEMP_DIR/prune-actions
+	printf '%s\0' forgepilot-bootstrap-plan-v1 >"$PLAN_ACTIONS"
+	append_plan_action "$PLAN_ACTIONS" inspect validate-managed-layout "$ROOT" read-managed-state
+	append_plan_action "$PLAN_ACTIONS" lock acquire-bootstrap-lock "$ROOT" exclusive-bootstrap-lock "$LOCK"
+	while IFS="$TAB" read -r generation_id candidate_digest; do
+		[ -n "$generation_id" ] || continue
+		append_plan_action "$PLAN_ACTIONS" remove "remove-generation-$generation_id" "$ROOT" remove-generation "versions/$generation_id"
+	done <"$PRUNE_CANDIDATES"
+	append_plan_action "$PLAN_ACTIONS" publish publish-manifest "$ROOT" atomic-manifest-replacement "$MANIFEST"
+	append_plan_action "$PLAN_ACTIONS" finalize remove-transaction "$ROOT" remove-transaction "$ROOT/transaction.json"
+}
+
+build_prune_plan() {
+	TAB=$(printf '\t')
+	validate_layout
+	write_layout_facts "$TEMP_DIR/prune-facts.before"
+	collect_prune_candidates "$TEMP_DIR/prune-candidates.before"
+	PRUNE_CANDIDATES=$TEMP_DIR/prune-candidates.after
+	validate_layout
+	write_layout_facts "$TEMP_DIR/prune-facts.after"
+	collect_prune_candidates "$PRUNE_CANDIDATES"
+	/usr/bin/cmp -s "$TEMP_DIR/prune-facts.before" "$TEMP_DIR/prune-facts.after" || fail 'managed state changed during prune planning'
+	/usr/bin/cmp -s "$TEMP_DIR/prune-candidates.before" "$PRUNE_CANDIDATES" || fail 'retention changed during prune planning'
+	build_prune_actions
+	plan_material=$TEMP_DIR/prune-plan-material
+	{
+		printf '%s\0' forgepilot-bootstrap-plan-id-v1 prune
+		/bin/cat "$TEMP_DIR/prune-facts.after" "$PLAN_ACTIONS"
+	} >"$plan_material"
+	plan_digest=$(sha256_stdin <"$plan_material") || fail 'cannot identify prune plan'
+	PLAN_ID=sha256:$plan_digest
+}
+
+plan_prune() {
+	setup_paths
+	setup_temp
+	trap cleanup EXIT HUP INT TERM
+	build_prune_plan
+	printf 'Plan ID: %s\n' "$PLAN_ID"
+	printf 'Operation: prune\n'
+	printf 'Current generation: %s\n' "$CURRENT_COMMIT"
+	if [ -n "$PREVIOUS_COMMIT" ]; then
+		printf 'Previous generation: %s\n' "$PREVIOUS_COMMIT"
+	else
+		printf 'Previous generation: none\n'
+	fi
+	printf 'Retention references: %s (sha256:%s)\n' "$RETENTION_COUNT" "$RETENTION_DIGEST"
+	if [ -s "$PRUNE_CANDIDATES" ]; then
+		while IFS="$TAB" read -r generation_id candidate_digest; do
+			[ -n "$generation_id" ] || continue
+			printf 'Action: remove versions/%s (payload %s)\n' "$generation_id" "$candidate_digest"
+		done <"$PRUNE_CANDIDATES"
+	else
+		printf 'Action: no inactive generation is eligible for removal\n'
+	fi
+}
+
 emit_result() {
 	result=$1
 	printf '{"protocol_version":1,"result":"%s","generation_id":"%s","payload_digest":"%s"}\n' \
@@ -375,6 +524,11 @@ run_retention_protocol() {
 main() {
 	case "${1:-}" in
 		-h|--help) usage; return 0 ;;
+		plan)
+			shift
+			[ "$#" -eq 1 ] && [ "$1" = --prune ] || fail 'this plan mode accepts only --prune in the current development slice'
+			plan_prune
+			;;
 		retention-v1)
 			shift
 			run_retention_protocol "$@"
@@ -383,7 +537,7 @@ main() {
 			[ "$#" -eq 1 ] || fail 'status accepts no options'
 			status
 			;;
-		plan|install|upgrade|uninstall|prune)
+		install|upgrade|uninstall|prune)
 			fail 'Bootstrap lifecycle operations are not implemented in this development slice'
 			;;
 		*) usage >&2; exit 2 ;;

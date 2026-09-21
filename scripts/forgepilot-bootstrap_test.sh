@@ -75,6 +75,29 @@ assert_output "$output" 'generations=2'
 assert_output "$output" 'retention_refs=1'
 case "$output" in *"$reference_a"*) fail 'status exposed the raw retention reference' ;; esac
 
+# Prune planning binds the exact inactive generation and is inspection-only.
+plan_paths_before=$(/usr/bin/find -s "$root" -print | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+plan_contents_before=$(/usr/bin/find -s "$root" -type f -exec /usr/bin/shasum -a 256 '{}' \; | /usr/bin/sort | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+plan_current_before=$(/usr/bin/readlink "$root/current")
+plan=$(HOME="$home" "$bootstrap" plan --prune) || fail 'prune planning failed'
+assert_output "$plan" 'Operation: prune'
+assert_output "$plan" 'Plan ID: sha256:'
+assert_output "$plan" "Action: remove versions/$generation_b"
+case "$plan" in *"Action: remove versions/$generation_a"*) fail 'prune plan selected the current generation' ;; esac
+plan_id=$(printf '%s\n' "$plan" | /usr/bin/awk -F': ' '$1 == "Plan ID" { print $2 }')
+case "$plan_id" in sha256:*) ;; *) fail 'prune plan ID is not a SHA-256 digest' ;; esac
+[ "${#plan_id}" -eq 71 ] || fail 'prune plan ID is not a complete SHA-256 digest'
+repeat_plan=$(HOME="$home" "$bootstrap" plan --prune) || fail 'repeat prune planning failed'
+repeat_plan_id=$(printf '%s\n' "$repeat_plan" | /usr/bin/awk -F': ' '$1 == "Plan ID" { print $2 }')
+[ "$repeat_plan_id" = "$plan_id" ] || fail 'unchanged prune facts produced a different plan ID'
+plan_paths_after=$(/usr/bin/find -s "$root" -print | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+plan_contents_after=$(/usr/bin/find -s "$root" -type f -exec /usr/bin/shasum -a 256 '{}' \; | /usr/bin/sort | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+plan_current_after=$(/usr/bin/readlink "$root/current")
+[ "$plan_paths_after" = "$plan_paths_before" ] || fail 'prune planning changed the managed path set'
+[ "$plan_contents_after" = "$plan_contents_before" ] || fail 'prune planning changed managed file content'
+[ "$plan_current_after" = "$plan_current_before" ] || fail 'prune planning changed the current pointer'
+assert_not_file "$root/transaction.json"
+
 # External entrypoint parents are managed paths too; unsafe modes and symlinked parents fail closed.
 chmod g+w "$home/.agents/skills"
 if HOME="$home" "$bootstrap" status >/dev/null 2>&1; then fail 'status accepted a group-writable entrypoint directory'; fi
