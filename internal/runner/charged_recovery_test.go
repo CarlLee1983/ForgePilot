@@ -14,97 +14,66 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/app"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
-func TestLegacyStartAndExactResumeRemainUncharged(t *testing.T) {
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	completionRecoveryGit(t, root, "init", "-q")
-	completionRecoveryGit(t, root, "config", "user.name", "ForgePilot test")
-	completionRecoveryGit(t, root, "config", "user.email", "forgepilot-test@example.invalid")
-	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("baseline\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	completionRecoveryGit(t, root, "add", "tracked.txt")
-	completionRecoveryGit(t, root, "commit", "-m", "baseline")
-	if err := storage.Init(root); err != nil {
-		t.Fatal(err)
-	}
-	writeReadyStory(t, root, "legacy")
-
-	now := time.Date(2026, 9, 21, 8, 0, 0, 0, time.UTC)
+func TestUnauthorisedGoalRefusesDirectAndLegacyExactRunBeforeWorkerLaunch(t *testing.T) {
+	root, runtimeCommand, sentinel, now, execution := newUnresolvedExecutionRunnerFixture(t)
 	if err := storage.Update(root, func(state *work.State) error {
-		if err := state.AddGoalWithPolicies("g", "Goal", "", root, work.ReviewPerGoal, work.CompletionVerified, now); err != nil {
-			return err
+		for index := range state.Goals {
+			if state.Goals[index].ID == execution.GoalID {
+				state.Goals[index].Execution = nil
+				return nil
+			}
 		}
-		_, err := state.AddWork("g", "specs/stories/legacy", nil, now)
-		return err
+		return errors.New("unmanaged fixture Goal is missing")
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	budget := testBudget()
-	budget.MaxSteps = 1
-	options := Options{Root: root, GoalID: "g", RuntimeName: "fake", RuntimeCommand: os.Args[0], Snapshot: true,
-		Budget: budget, Limits: testLimits(), Now: func() time.Time { return now }}
-	unsettled := Record{RunID: "run-unsettled", Workspace: root, GoalID: "g", GoalTitle: "Goal", RuntimeName: "fake",
-		Snapshot: true, Budget: testBudget(), Limits: testLimits(), StartedAt: now, Deadline: now.Add(time.Hour),
-		Attempts: map[string]int{}, HumanWaits: map[string]int{}, PendingSeq: 1,
-		Pending: []PendingExecution{{ID: "pending-1", Kind: KindAgentSession, Phase: PhaseRunning, Location: root,
-			Identity: agent.ProcessIdentity{PGID: 99999999}, ObservedAt: now}}}
-	if err := unsettled.save(root, unsettled.Limits, now); err != nil {
-		t.Fatal(err)
-	}
-	beforeUnsettled, err := os.ReadFile(filepath.Join(root, ".forgepilot", "runs", unsettled.RunID, recordName))
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, app.RunnerIdentity{})
+	before, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
-	}
-	invalidArtifacts := options
-	invalidArtifacts.Budget.MaxHandoffBytes = 0
-	if _, err := Start(invalidArtifacts); err == nil || !strings.Contains(err.Error(), "max-handoff-bytes") {
-		t.Fatalf("legacy start accepted invalid caller artifact caps: %v", err)
-	}
-	afterUnsettled, err := os.ReadFile(filepath.Join(root, ".forgepilot", "runs", unsettled.RunID, recordName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(afterUnsettled, beforeUnsettled) {
-		t.Fatal("invalid legacy artifact caps triggered workspace recovery")
-	}
-	started, err := Start(options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if started.Stop == nil || started.Stop.Reason != StopMaxSteps || started.Steps != 1 {
-		t.Fatalf("legacy start = stop %#v, steps %d; want one bounded START step", started.Stop, started.Steps)
-	}
-	if started.ExecutionAuthorizationDigest != "" || started.RunReservationID != "" {
-		t.Fatalf("legacy run acquired charge metadata: %#v", started)
 	}
 
-	resumed, err := Resume(options, started.RunID)
+	if _, err := Start(options); err == nil || !strings.Contains(err.Error(), "no current execution authorization") {
+		t.Fatalf("unmanaged direct run = %v; want authorization refusal", err)
+	}
+	if runIDs, err := storage.ListRuns(root); err != nil || len(runIDs) != 0 {
+		t.Fatalf("unmanaged direct run created Run Records: ids=%v err=%v", runIDs, err)
+	}
+	legacy := Record{RunID: "run-legacy", Workspace: root, GoalID: execution.GoalID, GoalTitle: "Goal",
+		RuntimeName: "codex", RuntimeExecutable: runtimeCommand, RuntimeVersion: "test-codex 1", RuntimeCommand: runtimeCommand,
+		Snapshot: true, Budget: testBudget(), Limits: testLimits(), StartedAt: now, Deadline: now.Add(testBudget().MaxDuration),
+		Attempts: map[string]int{}, HumanWaits: map[string]int{}, Stop: &Stop{Reason: StopInterrupted, At: now}}
+	if err := legacy.save(root, legacy.Limits, now); err != nil {
+		t.Fatal(err)
+	}
+	beforeLegacy, err := os.ReadFile(filepath.Join(root, ".forgepilot", "runs", legacy.RunID, recordName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumed.Stop == nil || resumed.Stop.Reason != StopMaxSteps || resumed.Steps != started.Steps {
-		t.Fatalf("legacy exact resume = stop %#v, steps %d; want the original exhausted budget", resumed.Stop, resumed.Steps)
+	if _, err := Resume(options, legacy.RunID); err == nil || !strings.Contains(err.Error(), "no current execution authorization") {
+		t.Fatalf("legacy exact resume = %v; want authorization refusal", err)
 	}
-	if resumed.ExecutionAuthorizationDigest != "" || resumed.RunReservationID != "" {
-		t.Fatalf("legacy resume acquired charge metadata: %#v", resumed)
-	}
-	state, err := storage.Load(root)
+	afterLegacy, err := os.ReadFile(filepath.Join(root, ".forgepilot", "runs", legacy.RunID, recordName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	goal, ok := state.GoalByID("g")
-	if !ok || goal.Execution != nil {
-		t.Fatalf("legacy run changed Goal authorization state: %#v", goal.Execution)
+	if !bytes.Equal(beforeLegacy, afterLegacy) {
+		t.Fatal("unauthorised exact resume rewrote its legacy Run Record")
+	}
+	after, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalJSON(t, before, after) {
+		t.Fatal("unauthorised Runner admission mutated execution state")
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("unauthorised Runner admission launched a worker: %v", err)
 	}
 }
 
@@ -121,21 +90,12 @@ func TestLegacyRunIntentDoesNotAdoptAuthorizationAddedAfterCrash(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	options := chargedRunnerTestOptions(root, runtimeCommand, now, app.RunnerIdentity{})
-	options.Budget.MaxSteps = 1
-	runCrashHelper(t, root, runtimeCommand, sentinel, now, "after-run-intent", 1, true)
-
-	runIDs, err := storage.ListRuns(root)
-	if err != nil || len(runIDs) != 1 {
-		t.Fatalf("legacy Run Record after subprocess crash: ids=%v err=%v", runIDs, err)
-	}
-	pending, err := LoadRecord(root, runIDs[0])
-	if err != nil {
+	pending := Record{RunID: "run-legacy-intent", Workspace: root, GoalID: execution.GoalID, GoalTitle: "Goal",
+		RuntimeName: "codex", RuntimeExecutable: runtimeCommand, RuntimeVersion: "test-codex 1", RuntimeCommand: runtimeCommand,
+		Snapshot: true, RunPreparationState: RunPreparationPendingClassification, Budget: testBudget(), Limits: testLimits(),
+		StartedAt: now, Deadline: now.Add(testBudget().MaxDuration), Attempts: map[string]int{}, HumanWaits: map[string]int{}}
+	if err := pending.save(root, pending.Limits, now); err != nil {
 		t.Fatal(err)
-	}
-	if pending.RunPreparationState != RunPreparationPendingClassification || pending.ExecutionAuthorizationDigest != "" ||
-		pending.RunReservationID != "" || len(pending.ReservationReceipts) != 0 {
-		t.Fatalf("legacy crash did not preserve its unclassified intent: %#v", pending)
 	}
 
 	if err := storage.Update(root, func(state *work.State) error {
@@ -143,23 +103,30 @@ func TestLegacyRunIntentDoesNotAdoptAuthorizationAddedAfterCrash(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("add authorization after legacy Run intent: %v", err)
 	}
+	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	options.Budget.MaxSteps = 1
 	before, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for label, run := range map[string]func() (Record, error){
-		"direct start": func() (Record, error) { return Start(options) },
-		"exact resume": func() (Record, error) { return Resume(options, pending.RunID) },
+	for _, test := range []struct {
+		label string
+		run   func() (Record, error)
+		want  string
+	}{
+		{"direct start", func() (Record, error) { return Start(options) }, "unfinished preparation"},
+		{"exact resume", func() (Record, error) { return Resume(options, pending.RunID) }, "execution authorization changed after the Run Record intent was saved"},
 	} {
-		if _, err := run(); err == nil || !strings.Contains(err.Error(), "execution authorization changed after the Run Record intent was saved") {
-			t.Fatalf("%s error = %v; want refusal because authorization changed after intent", label, err)
+		if _, err := test.run(); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("%s error = %v; want refusal containing %q", test.label, err, test.want)
 		}
 		after, err := storage.Load(root)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !equalJSON(t, before, after) {
-			t.Fatalf("%s mutated authorization or charged ledger after refusing stale intent", label)
+			t.Fatalf("%s mutated authorization or charged ledger after refusing stale intent", test.label)
 		}
 	}
 	remainingRuns, err := storage.ListRuns(root)
@@ -451,6 +418,98 @@ func TestChargedExactResumeAfterRunRecordDoesNotSpendAnotherRun(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Fatalf("worker launched before the one-step run stopped: %v", err)
+	}
+}
+
+// AC-001: direct execution and exact-run recovery share the same durable
+// authorization. The first run starts a real worker; its exact resume keeps
+// that run's immutable contract and does not create a replacement RUN charge.
+func TestChargedDirectRunAndExactResumeUseTheSameAuthorization(t *testing.T) {
+	root, runtimeCommand, sentinel, now, execution := newUnresolvedExecutionRunnerFixture(t)
+	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	options.Budget.MaxSteps = 4
+	t.Setenv("FORGEPILOT_TEST_CODEX_RESULT", `{"outcome":"needs_human","summary":"Need a decision","needs_human":{"question":"Choose an option","options":["one"],"context":""}}`)
+
+	started, err := Start(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Stop == nil || started.Stop.Reason != StopNeedsHuman || started.Steps != 2 {
+		t.Fatalf("direct charged run = stop %#v, steps %d; want a real worker followed by needs_human", started.Stop, started.Steps)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("direct charged run did not launch the real worker: %v", err)
+	}
+	if started.ExecutionAuthorizationDigest == "" || started.RunReservationID != started.RunID+":run" {
+		t.Fatalf("direct charged run has no durable authorization binding: %#v", started)
+	}
+
+	resumed, err := Resume(options, started.RunID)
+	if err != nil {
+		t.Fatalf("exact resume: %v", err)
+	}
+	if resumed.RunID != started.RunID || resumed.ExecutionAuthorizationDigest != started.ExecutionAuthorizationDigest ||
+		resumed.Deadline != started.Deadline || resumed.Budget != started.Budget {
+		t.Fatalf("exact resume rewrote its authorization or run contract: started=%#v resumed=%#v", started, resumed)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal, ok := state.GoalByID(execution.GoalID)
+	if !ok || goal.Execution == nil || goal.Execution.Ledger.RunsConsumed != 1 ||
+		goal.Execution.Ledger.StepsConsumed != 3 || countReservations(goal.Execution.Ledger, work.ExecutionReservationAction) != 2 {
+		t.Fatalf("direct run and exact resume did not retain one durable charged history: %#v", goal.Execution)
+	}
+}
+
+// AC-003: a Run Record that was already charged cannot be resumed as a legacy
+// run if its current authorization disappears. The earlier direct worker is
+// removed from the observation point so this assertion proves resume itself
+// did not start another process.
+func TestChargedExactResumeRefusesWhenCurrentAuthorizationIsMissing(t *testing.T) {
+	root, runtimeCommand, sentinel, now, execution := newUnresolvedExecutionRunnerFixture(t)
+	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	options.Budget.MaxSteps = 4
+	t.Setenv("FORGEPILOT_TEST_CODEX_RESULT", `{"outcome":"needs_human","summary":"Need a decision","needs_human":{"question":"Choose an option","options":["one"],"context":""}}`)
+
+	started, err := Start(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(sentinel); err != nil {
+		t.Fatalf("remove direct-worker observation: %v", err)
+	}
+	if err := storage.Update(root, func(state *work.State) error {
+		for index := range state.Goals {
+			if state.Goals[index].ID == execution.GoalID {
+				state.Goals[index].Execution = nil
+				return nil
+			}
+		}
+		return errors.New("charged fixture Goal is missing")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Resume(options, started.RunID); err == nil || !strings.Contains(err.Error(), "execution authorization") {
+		t.Fatalf("charged exact resume without an authorization = %v; want refusal", err)
+	}
+	after, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalJSON(t, before, after) {
+		t.Fatal("missing-authorization refusal rewrote the execution state")
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("missing-authorization resume launched a worker: %v", err)
 	}
 }
 

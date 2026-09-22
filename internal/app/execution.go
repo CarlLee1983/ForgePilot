@@ -470,19 +470,28 @@ func (projection *ExecutionPlanProjection) fail(code, message string) {
 // AuthorizeExecutionFile rechecks the current preview under the storage
 // transaction lock and publishes one complete revision-one aggregate.
 func AuthorizeExecutionFile(ctx context.Context, root, requestPath, approvalToken, approver string) (work.GoalExecution, error) {
-	return authorizeExecutionAt(ctx, root, requestPath, approvalToken, approver, time.Now().UTC())
+	return authorizeExecutionAt(ctx, root, requestPath, approvalToken, approver, time.Now)
 }
 
-func authorizeExecutionAt(ctx context.Context, root, requestPath, approvalToken, approver string, now time.Time) (work.GoalExecution, error) {
+func authorizeExecutionAt(ctx context.Context, root, requestPath, approvalToken, approver string, clock func() time.Time) (work.GoalExecution, error) {
+	return authorizeExecutionBeforeStateLock(ctx, root, requestPath, approvalToken, approver, clock, nil)
+}
+
+// authorizeExecutionBeforeStateLock has a test-only sequencing callback so the
+// authorization transaction can be exercised while another writer holds the
+// state lock. Production calls always pass nil.
+func authorizeExecutionBeforeStateLock(ctx context.Context, root, requestPath, approvalToken, approver string, clock func() time.Time, beforeStateLock func()) (work.GoalExecution, error) {
 	if strings.TrimSpace(approvalToken) == "" || strings.TrimSpace(approver) == "" || approver != strings.TrimSpace(approver) {
 		return work.GoalExecution{}, errors.New("approval token and self-declared approver are required")
 	}
-	body, err := readContainedRegularFileLimit(root, requestPath, maxExecutionRequestBytes)
-	if err != nil {
-		return work.GoalExecution{}, fmt.Errorf("read execution request: %w", err)
+	if clock == nil {
+		return work.GoalExecution{}, errors.New("authorization clock is required")
+	}
+	if beforeStateLock != nil {
+		beforeStateLock()
 	}
 	var committed work.GoalExecution
-	err = storage.Update(root, func(state *work.State) error {
+	err := storage.Update(root, func(state *work.State) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -493,6 +502,14 @@ func authorizeExecutionAt(ctx context.Context, root, requestPath, approvalToken,
 		if storage.RunnerRunning(root) {
 			return errors.New("execution authorization cannot be adopted while a Runner owns the workspace")
 		}
+		// Request bytes and expiry are authorization inputs, so acquire both only
+		// after the state lock is held. Otherwise a writer waiting on this lock
+		// could commit an old request or one that expired while it was waiting.
+		body, err := readContainedRegularFileLimit(root, requestPath, maxExecutionRequestBytes)
+		if err != nil {
+			return fmt.Errorf("read execution request: %w", err)
+		}
+		now := clock().UTC()
 		projection, err := planExecutionBytes(ctx, root, body, now)
 		if err != nil {
 			return err
@@ -512,15 +529,23 @@ func authorizeExecutionAt(ctx context.Context, root, requestPath, approvalToken,
 		if err != nil {
 			return err
 		}
-		binding.AdoptedAt = now.UTC()
+		// The preview establishes a bounded observation point, but authorization
+		// is not allowed to publish after its fixed expiry merely because work in
+		// this transaction consumed the remaining time.
+		authorizedAt := clock().UTC()
+		expiresAt, err := parseExecutionExpiry(request.ExpiresAt, authorizedAt)
+		if err != nil {
+			return fmt.Errorf("execution plan is no longer authorizable (invalid-expiry): %w", err)
+		}
+		binding.AdoptedAt = authorizedAt
 		execution := work.GoalExecution{
 			GoalID: request.GoalPlanRequest.GoalID, Workspace: projection.Workspace,
 			PlanBindings: []work.GoalPlanBinding{binding},
 			Authorizations: []work.ExecutionAuthorization{{
 				Revision: 1, RequestSHA256: projection.RequestSHA256, ApprovalToken: projection.ApprovalToken,
 				GoalID: request.GoalPlanRequest.GoalID, Workspace: projection.Workspace,
-				Approver: approver, AuthorizedAt: now.UTC(),
-				ExpiresAt: mustExecutionExpiry(request.ExpiresAt), Caps: projection.Caps, WorkerProfile: projection.WorkerProfile,
+				Approver: approver, AuthorizedAt: authorizedAt,
+				ExpiresAt: expiresAt, Caps: projection.Caps, WorkerProfile: projection.WorkerProfile,
 			}},
 			Ledger: work.ExecutionLedger{
 				Revision: 1, AuthorizationRevision: 1,
@@ -743,14 +768,17 @@ func ReviseExecutionFile(ctx context.Context, root, requestPath, approvalToken, 
 	if strings.TrimSpace(approvalToken) == "" || strings.TrimSpace(approver) == "" || approver != strings.TrimSpace(approver) {
 		return work.GoalExecution{}, errors.New("approval token and self-declared approver are required")
 	}
-	body, err := readContainedRegularFileLimit(root, requestPath, maxExecutionRequestBytes)
-	if err != nil {
-		return work.GoalExecution{}, fmt.Errorf("read execution revision request: %w", err)
-	}
 	var committed work.GoalExecution
-	err = storage.WithWorkspaceLock(root, func() error {
+	err := storage.WithWorkspaceLock(root, func() error {
 		return storage.Update(root, func(state *work.State) error {
-			projection, err := planExecutionRevisionForState(ctx, root, body, *state, time.Now().UTC())
+			// This is the same authorization boundary as initial adoption: read the
+			// reviewed request only after the locks that serialize publication.
+			body, err := readContainedRegularFileLimit(root, requestPath, maxExecutionRequestBytes)
+			if err != nil {
+				return fmt.Errorf("read execution revision request: %w", err)
+			}
+			now := time.Now().UTC()
+			projection, err := planExecutionRevisionForState(ctx, root, body, *state, now)
 			if err != nil {
 				return err
 			}
@@ -799,7 +827,7 @@ func ReviseExecutionFile(ctx context.Context, root, requestPath, approvalToken, 
 					if !ready {
 						continue
 					}
-					item, err := state.AddWork(request.GoalPlanRequest.GoalID, binding.Nodes[i].StoryRef, dependencies, time.Now().UTC())
+					item, err := state.AddWork(request.GoalPlanRequest.GoalID, binding.Nodes[i].StoryRef, dependencies, now)
 					if err != nil {
 						return err
 					}
@@ -811,10 +839,15 @@ func ReviseExecutionFile(ctx context.Context, root, requestPath, approvalToken, 
 					return errors.New("new Plan Nodes have unresolved dependencies")
 				}
 			}
-			binding.Revision, binding.AdoptedAt = current.Revision+1, time.Now().UTC()
+			authorizedAt := time.Now().UTC()
+			expiresAt, err := parseExecutionExpiry(request.ExpiresAt, authorizedAt)
+			if err != nil {
+				return fmt.Errorf("execution revision is no longer authorizable (invalid-expiry): %w", err)
+			}
+			binding.Revision, binding.AdoptedAt = current.Revision+1, authorizedAt
 			authorization := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
 			authorization.Revision, authorization.RequestSHA256, authorization.ApprovalToken = binding.Revision, binding.RequestSHA256, approvalToken
-			authorization.AuthorizedAt, authorization.ExpiresAt, authorization.Caps, authorization.WorkerProfile = binding.AdoptedAt, mustExecutionExpiry(request.ExpiresAt), projection.Caps, projection.WorkerProfile
+			authorization.AuthorizedAt, authorization.ExpiresAt, authorization.Caps, authorization.WorkerProfile = binding.AdoptedAt, expiresAt, projection.Caps, projection.WorkerProfile
 			authorization.Approver = approver
 			authorization.WorkerIdentity, authorization.EngineGeneration = nil, nil
 			if err := state.ReviseExecution(goal.ID, binding, authorization); err != nil {

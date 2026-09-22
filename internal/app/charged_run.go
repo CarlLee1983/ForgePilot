@@ -29,20 +29,15 @@ type RunnerIdentity struct {
 	EngineGeneration *work.ExecutionEngineGeneration
 }
 
-// RunnerRunAdmission distinguishes the pinned legacy Runner path from a
-// charged run. A nil Reservation is returned only when the Goal has no
-// execution authorization; partial charged metadata is never treated as
-// legacy.
+// RunnerRunAdmission is the durable authorization and RUN reservation a
+// Runner must hold before it can launch any worker.
 type RunnerRunAdmission struct {
 	AuthorizationDigest string
 	Reservation         *work.ExecutionReservation
 }
 
-var errLegacyRunnerAdmission = errors.New("goal has no execution authorization")
-
-// PrepareRunnerRun atomically chooses the legacy or charged direct-run path.
-// The state transaction is the classification point: authorization cannot be
-// adopted between deciding that this is legacy and preparing a charge.
+// PrepareRunnerRun atomically validates current authorization and prepares a
+// charged direct run.
 func PrepareRunnerRun(root, goalID, runID string, identity RunnerIdentity, now time.Time) (RunnerRunAdmission, error) {
 	return prepareRunnerRun(root, goalID, runID, nil, identity, now)
 }
@@ -68,10 +63,7 @@ func prepareRunnerRun(root, goalID, runID string, expectedAuthorizationDigest *s
 			return fmt.Errorf("unknown goal %q", goalID)
 		}
 		if goal.Execution == nil {
-			if expectedAuthorizationDigest != nil && *expectedAuthorizationDigest != "" {
-				return errors.New("execution authorization disappeared after the Run Record intent was saved")
-			}
-			return errLegacyRunnerAdmission
+			return fmt.Errorf("goal %q has no current execution authorization", goalID)
 		}
 		if len(goal.Execution.Authorizations) == 0 {
 			return fmt.Errorf("goal %q has inconsistent execution authorization state", goalID)
@@ -123,9 +115,6 @@ func prepareRunnerRun(root, goalID, runID string, expectedAuthorizationDigest *s
 		admission = RunnerRunAdmission{AuthorizationDigest: authorization.Digest, Reservation: &prepared}
 		return nil
 	})
-	if errors.Is(err, errLegacyRunnerAdmission) {
-		return RunnerRunAdmission{}, nil
-	}
 	return admission, err
 }
 
@@ -206,8 +195,7 @@ func ReconcileRunnerReservationReceipts(root, goalID, runID, runReservationID st
 }
 
 // ValidateRunnerResume proves the exact run still belongs to the current
-// authorization. It returns false only for an unchanged legacy Run Record and
-// Goal with no charge metadata.
+// authorization.
 func ValidateRunnerResume(root, goalID, runID, authorizationDigest, runReservationID string,
 	receipts []work.ExecutionReservationReceipt, artifacts work.ExecutionArtifactLimits,
 	identity RunnerIdentity, now time.Time) (bool, error) {
@@ -417,39 +405,6 @@ func ValidateChargedRunAuthorization(root, goalID string, identity RunnerIdentit
 	}
 	goal, _ := state.GoalByID(goalID)
 	return goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1], nil
-}
-
-// PrepareChargedAction reserves one cumulative technical attempt. Runner step
-// consumption is a separate reservation so a confirmed needs_human wait can
-// spend another step without spending another technical attempt.
-func PrepareChargedAction(root, goalID, runID, actionKind, workItemID string, attempt int, authorizationDigest string, identity RunnerIdentity, now time.Time) (work.ExecutionReservation, error) {
-	if attempt < 1 {
-		return work.ExecutionReservation{}, fmt.Errorf("technical attempt must be positive")
-	}
-	if actionKind != string(work.NextActionResume) && actionKind != string(work.NextActionRepair) {
-		return work.ExecutionReservation{}, fmt.Errorf("unsupported charged worker action %q", actionKind)
-	}
-	var reservation work.ExecutionReservation
-	err := storage.Update(root, func(state *work.State) error {
-		node, err := state.ExecutionPlanNodeRef(goalID, workItemID)
-		if err != nil {
-			return err
-		}
-		reservation = work.ExecutionReservation{
-			ID:   fmt.Sprintf("%s:action:%s:%s:%d", runID, actionKind, node, attempt),
-			Kind: work.ExecutionReservationAction, RunID: runID, PlanNodeRef: node, CreatedAt: now.UTC(),
-		}
-		if err := validateRunnerAuthorization(state, goalID, authorizationDigest, identity, now); err != nil {
-			return err
-		}
-		prepared, err := state.PrepareExecutionReservation(goalID, reservation)
-		if err != nil {
-			return err
-		}
-		reservation = prepared
-		return nil
-	})
-	return reservation, err
 }
 
 // PrepareChargedWorker atomically reserves the technical attempt and the

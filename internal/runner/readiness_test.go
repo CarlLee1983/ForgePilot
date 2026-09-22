@@ -56,7 +56,7 @@ func TestDryRunRefusesReadinessMismatchBeforeRuntimeResolution(t *testing.T) {
 	}
 }
 
-func TestResumeStopsLegacyRunBeforeRuntimeResolution(t *testing.T) {
+func TestResumeRefusesLegacyRunBeforeRuntimeResolution(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,8 @@ func TestResumeStopsLegacyRunBeforeRuntimeResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A regular, flat Story is valid historic ForgePilot state but has no v1
-	// readiness sidecar. Resuming it must fail closed before the runtime lookup.
+	// readiness sidecar. Its old uncharged Run Record must fail closed before
+	// either readiness or runtime resolution.
 	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "legacy"), []byte("# Legacy\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -94,15 +95,9 @@ func TestResumeStopsLegacyRunBeforeRuntimeResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resumed, err := Resume(Options{Root: root, Now: func() time.Time { return now }}, runID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resumed.Stop == nil || resumed.Stop.Reason != StopReadinessPreflight {
-		t.Fatalf("resume stop = %#v, want readiness preflight", resumed.Stop)
-	}
-	if !strings.Contains(resumed.Stop.Detail, string(readiness.MissingContract)) {
-		t.Fatalf("resume detail = %q, want missing readiness contract", resumed.Stop.Detail)
+	if _, err := Resume(Options{Root: root, Now: func() time.Time { return now }}, runID); err == nil ||
+		!strings.Contains(err.Error(), "no current execution authorization") {
+		t.Fatalf("legacy resume error = %v; want authorization refusal before runtime resolution", err)
 	}
 }
 
