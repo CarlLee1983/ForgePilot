@@ -2,21 +2,21 @@
 
 ## Happy Path
 
-* [ ] AC-001: `execution revise` previews and atomically commits an explicitly approved additive reviewed revision while preserving prior nodes, Story references, edges, Evidence, authorization history, and cumulative consumption.
-* [ ] AC-002: A confirmed-cleanup run stopped only by `MAX_STEPS` or `MAX_DURATION` auto-rolls over only when current authorization/bindings remain valid and cumulative caps permit it.
+* [x] AC-001: `execution revise` previews and atomically commits an explicitly approved additive reviewed revision while preserving prior nodes, Story references, edges, Evidence, authorization history, and cumulative consumption.
+* [x] AC-002: A confirmed-cleanup run stopped only by `MAX_STEPS` or `MAX_DURATION` auto-rolls over only when current authorization/bindings remain valid and cumulative caps permit it.
 
 ## Business Rules
 
-* [ ] AC-003: Explicit authorization resume and exact-run resume preserve their distinct contracts; neither resets total caps nor changes an old run's deadline, budget, or stop history.
+* [x] AC-003: Explicit authorization resume and exact-run resume preserve their distinct contracts; neither resets total caps nor changes an old run's deadline, budget, or stop history.
 
 ## Failure Cases
 
-* [ ] AC-004: Delete/replace node or alter an existing dependency requires a new Goal, and attempts/no-progress, agent/verification timeout, capacity, waits, drift, expiry, or recovery block never auto-roll over.
-* [ ] AC-005: Plan or authorization drift after session completion prevents a new action or rollover; verification lawfully started before drift retains honest immutable Candidate Evidence then stops.
+* [x] AC-004: Delete/replace node or alter an existing dependency requires a new Goal, and attempts/no-progress, agent/verification timeout, capacity, waits, drift, expiry, or recovery block never auto-roll over.
+* [x] AC-005: Plan or authorization drift after session completion prevents a new action or rollover; verification lawfully started before drift retains honest immutable Candidate Evidence then stops.
 
 ## Regression Requirements
 
-* [ ] AC-006: Existing freshness rules decide reused Evidence, DONE remains terminal, and machine verification is not presented as Human final acceptance.
+* [x] AC-006: Existing freshness rules decide reused Evidence, DONE remains terminal, and machine verification is not presented as Human final acceptance.
 
 ## Acceptance Evidence
 

@@ -56,3 +56,48 @@ func TestVerificationBindingDriftAfterCheckRetainsEvidenceAndStopsContinuation(t
 		t.Fatal("drifted execution binding still admitted a subsequent action")
 	}
 }
+
+func TestRunnerVerificationBindingDriftPersistsScopeChangedStop(t *testing.T) {
+	root, runtimeCommand, _, now, execution := newUnresolvedExecutionRunnerFixture(t)
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@printf 'drift' > "+filepath.Join(root, "manifest.json")+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var itemID string
+	if err := storage.Update(root, func(state *work.State) error {
+		itemID = state.WorkItems[0].ID
+		return state.Start(itemID, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	options.Output = io.Discard
+	runner, err := newRunner(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.verify(itemID, "VERIFY"); err != nil {
+		t.Fatal(err)
+	}
+	if runner.record.Stop == nil || runner.record.Stop.Reason != StopScopeChanged {
+		t.Fatalf("Runner verification stop = %#v; want SCOPE_CHANGED", runner.record.Stop)
+	}
+	stored, err := LoadRecord(root, runner.record.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Stop == nil || stored.Stop.Reason != StopScopeChanged {
+		t.Fatalf("durable Runner stop = %#v; want SCOPE_CHANGED", stored.Stop)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, ok := state.LatestVerification(itemID)
+	if !ok || evidence.Result != work.Pass {
+		t.Fatalf("Runner verification Evidence = %#v; want retained PASS", evidence)
+	}
+	if err := app.ValidateCurrentExecutionBindings(root, execution.GoalID, runner.record.ExecutionAuthorizationDigest); err == nil {
+		t.Fatal("drifted execution binding still admitted a subsequent Runner action")
+	}
+}

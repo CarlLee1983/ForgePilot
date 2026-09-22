@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,11 +23,32 @@ func TestExecutionRevisionAtomicallyAddsWorkAndPreservesAuthorizationHistory(t *
 	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", initial.ApprovalToken, "operator"); err != nil {
 		t.Fatal(err)
 	}
+	const priorRevision = "prior-revision"
+	if err := storage.Update(fixture.root, func(state *work.State) error {
+		// Seed both kinds of historical state the additive revision must carry
+		// forward: an immutable PASS Evidence record and a consumed STEP charge.
+		state.WorkItems[0].Status = work.Running
+		if err := state.BeginVerification(state.WorkItems[0].ID, priorRevision, fixture.root, "", time.Now().UTC()); err != nil {
+			return err
+		}
+		if _, err := state.RecordVerification(state.WorkItems[0].ID, priorRevision, "make verify", 0, time.Now().UTC()); err != nil {
+			return err
+		}
+		_, err := state.PrepareExecutionReservation("goal", work.ExecutionReservation{
+			ID: "run-001:step:001", Kind: work.ExecutionReservationStep, RunID: "run-001", CreatedAt: time.Now().UTC(),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	rewriteExecutionFixtureAsAdditiveRevision(t, fixture.root)
 	state, err := storage.Load(fixture.root)
 	if err != nil {
 		t.Fatal(err)
 	}
+	priorEvidence := append([]work.Evidence(nil), state.Evidence...)
+	priorReservations := append([]work.ExecutionReservation(nil), state.Goals[0].Execution.Ledger.Reservations...)
+	priorSteps := state.Goals[0].Execution.Ledger.StepsConsumed
 	fixture.request.ExpectedAuthorizationDigest = state.Goals[0].Execution.Authorizations[0].Digest
 	fixture.request.GoalPlanRequest.NodeMappings = append(fixture.request.GoalPlanRequest.NodeMappings, GoalPlanNodeMapping{PlanNodeRef: "c"})
 	writeExecutionTestRequest(t, fixture.requestPath, fixture.request)
@@ -44,6 +66,9 @@ func TestExecutionRevisionAtomicallyAddsWorkAndPreservesAuthorizationHistory(t *
 	got := state.Goals[0].Execution
 	if len(state.WorkItems) != 3 || len(got.PlanBindings) != 2 || len(got.Authorizations) != 2 || got.Ledger.AuthorizationRevision != 2 {
 		t.Fatalf("atomic revision state = %#v", state)
+	}
+	if !reflect.DeepEqual(state.Evidence, priorEvidence) || !reflect.DeepEqual(got.Ledger.Reservations, priorReservations) || got.Ledger.StepsConsumed != priorSteps {
+		t.Fatalf("revision did not preserve prior Evidence and cumulative consumption: evidence=%#v ledger=%#v", state.Evidence, got.Ledger)
 	}
 	if got.Authorizations[0].Approver != "operator" || got.Authorizations[1].Approver != "revision-operator" {
 		t.Fatalf("authorization approvers = %#v; revision must retain its new self-declared approver", got.Authorizations)

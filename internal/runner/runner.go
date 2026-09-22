@@ -201,6 +201,15 @@ func effectiveNewRunOptions(goal work.Goal, options Options) (Options, error) {
 // execution, so a second Runner — including one reaching the same repository
 // through a symlinked path — is refused rather than allowed to overlap.
 func Start(options Options) (Record, error) {
+	return startWithWorkspaceLock(options, false)
+}
+
+// startWithWorkspaceLock runs Start's admission and execution body either with
+// the workspace lock acquired by this helper or while a caller-owned lock is
+// already held. The latter is used by authorization-level continuation so its
+// exact-versus-successor decision and the resulting admission share one
+// linearization point.
+func startWithWorkspaceLock(options Options, lockHeld bool) (Record, error) {
 	if err := validateNonArtifactBudget(options.Budget); err != nil {
 		return Record{}, err
 	}
@@ -212,7 +221,7 @@ func Start(options Options) (Record, error) {
 	if options.testNewRunner != nil {
 		makeRunner = options.testNewRunner
 	}
-	err := storage.WithWorkspaceLock(options.Root, func() error {
+	operation := func() error {
 		// Validate the effective artifact contract before recovery can inspect or
 		// rewrite another Run Record. newRunner repeats this immediately before
 		// persistence so a concurrent authorization revision cannot be bypassed.
@@ -264,7 +273,13 @@ func Start(options Options) (Record, error) {
 			}
 			runner = nextRunner
 		}
-	})
+	}
+	var err error
+	if lockHeld {
+		err = operation()
+	} else {
+		err = storage.WithWorkspaceLock(options.Root, operation)
+	}
 	return record, err
 }
 
@@ -346,8 +361,15 @@ func blockedRecord(options Options, runID, detail string) *Record {
 // runtime and consumed budget: a resume that reset either would turn every
 // limit into a suggestion.
 func Resume(options Options, runID string) (Record, error) {
+	return resumeWithWorkspaceLock(options, runID, false)
+}
+
+// resumeWithWorkspaceLock is the lock-aware body of Resume. Authorization
+// continuation uses it while holding the same workspace lock in which it
+// rechecked the anchor, preventing a stale exact-resume decision.
+func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Record, error) {
 	var record Record
-	err := storage.WithWorkspaceLock(options.Root, func() error {
+	operation := func() error {
 		existing, err := LoadRecord(options.Root, runID)
 		if err != nil {
 			return err
@@ -529,7 +551,13 @@ func Resume(options Options, runID string) (Record, error) {
 			}
 		}
 		return runner.loop()
-	})
+	}
+	var err error
+	if lockHeld {
+		err = operation()
+	} else {
+		err = storage.WithWorkspaceLock(options.Root, operation)
+	}
 	return record, err
 }
 
@@ -539,41 +567,61 @@ func Resume(options Options, runID string) (Record, error) {
 // expired run creates a separately charged successor; the anchor's immutable
 // budget, deadline, and stop history remain in its Run Record.
 func ResumeAuthorization(options Options, anchorRunID string) (Record, error) {
-	anchor, err := LoadRecord(options.Root, anchorRunID)
-	if err != nil {
-		return Record{}, err
-	}
-	root, err := filepath.EvalSymlinks(options.Root)
-	if err != nil {
-		return Record{}, err
-	}
-	if anchor.Workspace != root {
-		return Record{}, fmt.Errorf("run %s belongs to workspace %s, not %s", anchorRunID, anchor.Workspace, root)
-	}
-	if anchor.ExecutionAuthorizationDigest == "" {
-		return Record{}, fmt.Errorf("run %s is not bound to an execution authorization; resume that exact run", anchorRunID)
-	}
-	state, err := storage.Load(options.Root)
-	if err != nil {
-		return Record{}, err
-	}
-	goal, ok := state.GoalByID(anchor.GoalID)
-	if !ok || goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
-		return Record{}, fmt.Errorf("run %s has no current execution authorization", anchorRunID)
-	}
-	current := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
-	now := time.Now().UTC()
-	if options.Now != nil {
-		now = options.Now().UTC()
-	}
-	if exactAuthorizationResumeReusable(anchor, current.Digest, now) {
-		return Resume(options, anchorRunID)
-	}
-	if anchor.Stop == nil {
-		return Record{}, fmt.Errorf("run %s is not stopped; resume that exact run before authorizing a successor", anchorRunID)
-	}
+	return resumeAuthorizationWithWorkspaceLock(options, anchorRunID, false)
+}
 
-	return startAuthorizationSuccessor(options, anchor, current)
+func resumeAuthorizationWithWorkspaceLock(options Options, anchorRunID string, lockHeld bool) (Record, error) {
+	var record Record
+	operation := func() error {
+		// Load the anchor and current authorization while holding the same
+		// workspace lock that will admit the exact resume or successor. A read
+		// before this lock can become stale when another Runner finishes and
+		// records a bounded stop between the decision and admission.
+		anchor, err := LoadRecord(options.Root, anchorRunID)
+		if err != nil {
+			return err
+		}
+		root, err := filepath.EvalSymlinks(options.Root)
+		if err != nil {
+			return err
+		}
+		if anchor.Workspace != root {
+			return fmt.Errorf("run %s belongs to workspace %s, not %s", anchorRunID, anchor.Workspace, root)
+		}
+		if anchor.ExecutionAuthorizationDigest == "" {
+			return fmt.Errorf("run %s is not bound to an execution authorization; resume that exact run", anchorRunID)
+		}
+		state, err := storage.Load(options.Root)
+		if err != nil {
+			return err
+		}
+		goal, ok := state.GoalByID(anchor.GoalID)
+		if !ok || goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
+			return fmt.Errorf("run %s has no current execution authorization", anchorRunID)
+		}
+		current := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
+		now := time.Now().UTC()
+		if options.Now != nil {
+			now = options.Now().UTC()
+		}
+		if exactAuthorizationResumeReusable(anchor, current.Digest, now) {
+			record, err = resumeWithWorkspaceLock(options, anchorRunID, true)
+			return err
+		}
+		if anchor.Stop == nil {
+			return fmt.Errorf("run %s is not stopped; resume that exact run before authorizing a successor", anchorRunID)
+		}
+
+		record, err = startAuthorizationSuccessorWithLock(options, anchor, current, true)
+		return err
+	}
+	var err error
+	if lockHeld {
+		err = operation()
+	} else {
+		err = storage.WithWorkspaceLock(options.Root, operation)
+	}
+	return record, err
 }
 
 // exactAuthorizationResumeReusable keeps the explicit authorization entrypoint
@@ -596,13 +644,11 @@ func exactAuthorizationResumeReusable(anchor Record, currentAuthorizationDigest 
 	}
 }
 
-// startAuthorizationSuccessor creates the separately charged run used when an
-// anchor cannot continue under its immutable run contract.
-func startAuthorizationSuccessor(options Options, anchor Record, authorization work.ExecutionAuthorization) (Record, error) {
+func startAuthorizationSuccessorWithLock(options Options, anchor Record, authorization work.ExecutionAuthorization, lockHeld bool) (Record, error) {
 	successor := resumeOptions(options, anchor)
 	successor.RuntimeName = authorization.WorkerProfile.Runtime
 	successor.RuntimeCommand = authorization.WorkerProfile.ExecutablePath
-	return Start(successor)
+	return startWithWorkspaceLock(successor, lockHeld)
 }
 
 // ResumeAuthorizationGoal is the public Goal-scoped continuation entrypoint.
@@ -614,41 +660,50 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 	if goalID == "" {
 		return Record{}, errors.New("execution authorization resume requires a Goal ID")
 	}
-	root, err := filepath.EvalSymlinks(options.Root)
-	if err != nil {
-		return Record{}, err
-	}
-	state, err := storage.Load(options.Root)
-	if err != nil {
-		return Record{}, err
-	}
-	goal, ok := state.GoalByID(goalID)
-	if !ok || goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
-		return Record{}, fmt.Errorf("goal %q has no current execution authorization", goalID)
-	}
-	runIDs, err := storage.ListRuns(options.Root)
-	if err != nil {
-		return Record{}, err
-	}
-	var selected *Record
-	for _, runID := range runIDs {
-		record, err := LoadRecord(options.Root, runID)
+	var record Record
+	operation := func() error {
+		// Selection shares the continuation lock with the anchor decision. A
+		// successor created by another Runner cannot appear after this list is
+		// read and leave this call continuing an older anchor.
+		root, err := filepath.EvalSymlinks(options.Root)
 		if err != nil {
-			return Record{}, err
+			return err
 		}
-		if record.Workspace != root || record.GoalID != goalID || record.ExecutionAuthorizationDigest == "" {
-			continue
+		state, err := storage.Load(options.Root)
+		if err != nil {
+			return err
 		}
-		if selected == nil || record.UpdatedAt.After(selected.UpdatedAt) ||
-			(record.UpdatedAt.Equal(selected.UpdatedAt) && record.RunID > selected.RunID) {
-			candidate := record
-			selected = &candidate
+		goal, ok := state.GoalByID(goalID)
+		if !ok || goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
+			return fmt.Errorf("goal %q has no current execution authorization", goalID)
 		}
+		runIDs, err := storage.ListRuns(options.Root)
+		if err != nil {
+			return err
+		}
+		var selected *Record
+		for _, runID := range runIDs {
+			candidate, err := LoadRecord(options.Root, runID)
+			if err != nil {
+				return err
+			}
+			if candidate.Workspace != root || candidate.GoalID != goalID || candidate.ExecutionAuthorizationDigest == "" {
+				continue
+			}
+			if selected == nil || candidate.UpdatedAt.After(selected.UpdatedAt) ||
+				(candidate.UpdatedAt.Equal(selected.UpdatedAt) && candidate.RunID > selected.RunID) {
+				copy := candidate
+				selected = &copy
+			}
+		}
+		if selected == nil {
+			return fmt.Errorf("goal %q has no authorization-bound run to continue", goalID)
+		}
+		record, err = resumeAuthorizationWithWorkspaceLock(options, selected.RunID, true)
+		return err
 	}
-	if selected == nil {
-		return Record{}, fmt.Errorf("goal %q has no authorization-bound run to continue", goalID)
-	}
-	return ResumeAuthorization(options, selected.RunID)
+	err := storage.WithWorkspaceLock(options.Root, operation)
+	return record, err
 }
 
 func isLegacyRunResume(root string, record Record) (bool, error) {
