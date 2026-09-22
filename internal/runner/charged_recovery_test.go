@@ -505,6 +505,8 @@ func TestChargedDirectRunAndExactResumeUseTheSameAuthorization(t *testing.T) {
 	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
 	options.Budget.MaxSteps = 4
 	t.Setenv("FORGEPILOT_TEST_CODEX_RESULT", `{"outcome":"needs_human","summary":"Need a decision","needs_human":{"question":"Choose an option","options":["one"],"context":""}}`)
+	argumentsPath := filepath.Join(root, "codex-arguments")
+	t.Setenv("FORGEPILOT_TEST_CODEX_ARGUMENTS", argumentsPath)
 
 	started, err := Start(options)
 	if err != nil {
@@ -515,6 +517,15 @@ func TestChargedDirectRunAndExactResumeUseTheSameAuthorization(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatalf("direct charged run did not launch the real worker: %v", err)
+	}
+	arguments, err := os.ReadFile(argumentsPath)
+	if err != nil {
+		t.Fatalf("direct charged run did not record Codex argv: %v", err)
+	}
+	for _, required := range []string{"--model\ntest-model\n", "--config\nmodel_reasoning_effort=\"medium\"\n"} {
+		if !strings.Contains(string(arguments), required) {
+			t.Fatalf("direct charged run omitted authorized Codex profile %q from argv:\n%s", required, arguments)
+		}
 	}
 	if started.ExecutionAuthorizationDigest == "" || started.RunReservationID != started.RunID+":run" {
 		t.Fatalf("direct charged run has no durable authorization binding: %#v", started)
@@ -1275,6 +1286,9 @@ if [ "$1" = "--version" ]; then printf 'test-codex 1\n'; exit 0; fi
 if [ "$1" = "retention-v1" ] && [ "$2" = "acquire" ] && [ "$3" = "--generation" ] && [ "$5" = "--payload-digest" ] && [ "$7" = "--reference" ]; then
   printf '{"protocol_version":1,"result":"acquired","generation_id":"%s","payload_digest":"%s"}\n' "$4" "$6"
   exit 0
+fi
+if [ -n "$FORGEPILOT_TEST_CODEX_ARGUMENTS" ]; then
+  printf '%s\n' "$@" > "$FORGEPILOT_TEST_CODEX_ARGUMENTS"
 fi
 result=""
 while [ "$#" -gt 0 ]; do

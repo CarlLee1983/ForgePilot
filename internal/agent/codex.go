@@ -63,6 +63,9 @@ func (codex Codex) Version() (string, error) {
 // conversation cannot quietly become the context for the next Work Item. See
 // docs/specs/runner-mvp/spec.md.
 func (codex Codex) Plan(request Request) (Plan, error) {
+	if err := validateCodexProfile(request.Model, request.Effort); err != nil {
+		return Plan{}, err
+	}
 	executable, err := codex.Executable()
 	if err != nil {
 		return Plan{}, err
@@ -79,6 +82,12 @@ func (codex Codex) Plan(request Request) (Plan, error) {
 		Executable: executable,
 		Args: []string{
 			"exec",
+			"--model", request.Model,
+			// Codex has a dedicated model flag. Effort is a config key, whose
+			// value is TOML rather than JSON or a shell fragment. Worker Profile
+			// validation currently permits only medium, so this is a fixed TOML
+			// literal and never interpolates untrusted text.
+			"--config", `model_reasoning_effort="medium"`,
 			"--cd", request.Workspace,
 			"--sandbox", string(codex.SessionEnvironment().Sandbox),
 			"--skip-git-repo-check",
@@ -90,6 +99,16 @@ func (codex Codex) Plan(request Request) (Plan, error) {
 		ResultPath:  resultPath,
 		HandoffPath: filepath.Join(request.ArtifactDir, "handoff.md"),
 	}, nil
+}
+
+func validateCodexProfile(model, effort string) error {
+	if strings.TrimSpace(model) == "" || model != strings.TrimSpace(model) || strings.ContainsAny(model, "\x00\r\n") {
+		return errors.New("Codex Worker Profile must provide one clean model")
+	}
+	if effort != "medium" {
+		return errors.New("Codex Worker Profile must provide supported medium effort")
+	}
+	return nil
 }
 
 // ResultSchema is the JSON Schema a runtime is given for its final message. It

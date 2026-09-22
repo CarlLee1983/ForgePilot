@@ -80,6 +80,43 @@ func TestChargedRunAdmissionRejectsUnresolvedIdentityAndProfileMismatch(t *testi
 	}
 }
 
+func TestPrepareAuthorizedAgentLaunchReturnsTheDigestMatchedWorkerProfile(t *testing.T) {
+	fixture := newExecutionTestFixture(t)
+	preview, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(preview.Diagnostics) != 0 {
+		t.Fatalf("plan = %#v, err=%v", preview, err)
+	}
+	authorized, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := state.Goals[0].Execution.Authorizations[0].WorkerProfile
+	now := time.Now().UTC()
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	identity := RunnerIdentity{Runtime: profile.Runtime, ExecutablePath: profile.ExecutablePath, Version: "codex 1.2.3",
+		Model: profile.Model, Effort: profile.Effort, Sandbox: profile.Sandbox}
+	bound, err := BindExecutionLaunchIdentity(t.Context(), fixture.root, authorized.GoalID, identity, generation,
+		&recordingGenerationRetention{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.EngineGeneration = &generation
+	launch, err := PrepareAuthorizedAgentLaunch(fixture.root, authorized.GoalID, "run-001", "run-001:artifact:RESUME:WI-001:1",
+		1024, bound.Digest, identity, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.AuthorizationDigest != bound.Digest || launch.WorkerProfile != profile ||
+		launch.ArtifactReservation.ID != "run-001:artifact:RESUME:WI-001:1" {
+		t.Fatalf("authorized agent launch = %#v; want transaction-bound profile and digest", launch)
+	}
+}
+
 func TestExecutionAuthorizationCannotBeAdoptedWhileRunnerOwnsWorkspace(t *testing.T) {
 	fixture := newExecutionTestFixture(t)
 	preview, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")

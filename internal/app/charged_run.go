@@ -36,6 +36,16 @@ type RunnerRunAdmission struct {
 	Reservation         *work.ExecutionReservation
 }
 
+// AuthorizedAgentLaunch is the final authorization fact a Runner needs to
+// construct one coding session. The artifact reservation, digest, and Worker
+// Profile are read and validated in the same state transaction so a Runner
+// cannot pair an old Run Record digest with a newer profile.
+type AuthorizedAgentLaunch struct {
+	ArtifactReservation work.ExecutionArtifactByteReservation
+	AuthorizationDigest string
+	WorkerProfile       work.WorkerProfile
+}
+
 // PrepareRunnerRun atomically validates current authorization and prepares a
 // charged direct run.
 func PrepareRunnerRun(root, goalID, runID string, identity RunnerIdentity, now time.Time) (RunnerRunAdmission, error) {
@@ -498,9 +508,19 @@ func PrepareChargedStep(root, goalID, runID string, ordinal int, actionKind, wor
 // authority for cumulative authorization usage across runs and revisions.
 func PrepareChargedArtifactBytes(root, goalID, runID, reservationID string, bytes int64,
 	authorizationDigest string, identity RunnerIdentity, now time.Time) (work.ExecutionArtifactByteReservation, error) {
+	launch, err := PrepareAuthorizedAgentLaunch(root, goalID, runID, reservationID, bytes, authorizationDigest, identity, now)
+	return launch.ArtifactReservation, err
+}
+
+// PrepareAuthorizedAgentLaunch reserves session artifact capacity and returns
+// the exact current Worker Profile from that same transaction. It is the last
+// authorization-owned step before Runner asks agent.Runtime to build argv.
+func PrepareAuthorizedAgentLaunch(root, goalID, runID, reservationID string, bytes int64,
+	authorizationDigest string, identity RunnerIdentity, now time.Time) (AuthorizedAgentLaunch, error) {
 	reservation := work.ExecutionArtifactByteReservation{
 		ID: reservationID, RunID: runID, Bytes: bytes, CreatedAt: now.UTC(),
 	}
+	var launch AuthorizedAgentLaunch
 	err := storage.Update(root, func(state *work.State) error {
 		if err := validateRunnerAuthorization(state, goalID, authorizationDigest, identity, now); err != nil {
 			return err
@@ -510,9 +530,13 @@ func PrepareChargedArtifactBytes(root, goalID, runID, reservationID string, byte
 			return err
 		}
 		reservation = prepared
+		goal, _ := state.GoalByID(goalID)
+		authorization := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
+		launch = AuthorizedAgentLaunch{ArtifactReservation: reservation, AuthorizationDigest: authorization.Digest,
+			WorkerProfile: authorization.WorkerProfile}
 		return nil
 	})
-	return reservation, err
+	return launch, err
 }
 
 // ConfirmRunnerNeedsHuman settles an already charged ACTION only after the

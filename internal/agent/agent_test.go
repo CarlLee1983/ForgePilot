@@ -280,7 +280,7 @@ func TestRuntimeSessionEnvironmentMatchesCodexPlanAndHandoff(t *testing.T) {
 	if environment.Sandbox != SandboxWorkspaceWrite {
 		t.Fatalf("Codex environment = %#v", environment)
 	}
-	plan, err := codex.Plan(Request{Workspace: t.TempDir(), ArtifactDir: t.TempDir()})
+	plan, err := codex.Plan(Request{Workspace: t.TempDir(), ArtifactDir: t.TempDir(), Model: "pinned-model", Effort: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,6 +303,63 @@ func TestRuntimeSessionEnvironmentMatchesCodexPlanAndHandoff(t *testing.T) {
 	}
 	if (Fake{}).SessionEnvironment().Sandbox != SandboxNotConfiguredByForgePilot {
 		t.Fatalf("fake environment = %#v", (Fake{}).SessionEnvironment())
+	}
+}
+
+func TestCodexPlanUsesOnlyTheExplicitAuthorizedModelAndEffort(t *testing.T) {
+	codex := Codex{Command: writeScript(t, "#!/bin/sh\nexit 0\n")}
+	plan, err := codex.Plan(Request{Workspace: t.TempDir(), ArtifactDir: t.TempDir(), Model: "pinned-model", Effort: "medium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"exec", "--model", "pinned-model", "--config", `model_reasoning_effort="medium"`}
+	for index := 0; index < len(plan.Args); index++ {
+		if index+len(want) > len(plan.Args) {
+			break
+		}
+		matched := true
+		for offset := range want {
+			if plan.Args[index+offset] != want[offset] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return
+		}
+	}
+	t.Fatalf("Codex plan lacks the exact authorized model and effort: %#v", plan.Args)
+}
+
+func TestCodexPlanRefusesMissingOrUnsupportedAuthorizedProfile(t *testing.T) {
+	command := writeScript(t, "#!/bin/sh\nexit 0\n")
+	for name, request := range map[string]Request{
+		"missing model":        {Effort: "medium"},
+		"missing effort":       {Model: "pinned-model"},
+		"unsupported effort":   {Model: "pinned-model", Effort: "high"},
+		"model with a newline": {Model: "pinned\nmodel", Effort: "medium"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request.Workspace, request.ArtifactDir = t.TempDir(), t.TempDir()
+			if _, err := (Codex{Command: command}).Plan(request); err == nil {
+				t.Fatal("Codex plan accepted an incomplete or unsupported Worker Profile")
+			}
+		})
+	}
+}
+
+func TestFakePlanIgnoresAuthorizedCodexProfile(t *testing.T) {
+	command := writeScript(t, "#!/bin/sh\nexit 0\n")
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	plan, err := (Fake{Command: command}).Plan(Request{Workspace: workspace, ArtifactDir: artifacts,
+		Model: "pinned-model", Effort: "medium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--workspace", workspace, "--result", filepath.Join(artifacts, "result.json"),
+		"--handoff", filepath.Join(artifacts, "handoff.md")}
+	if strings.Join(plan.Args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("Fake argv = %#v, want %#v", plan.Args, want)
 	}
 }
 

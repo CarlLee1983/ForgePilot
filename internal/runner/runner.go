@@ -75,6 +75,11 @@ type Runner struct {
 	options Options
 	runtime agent.Runtime
 	record  *Record
+	// launchIdentity is the digest-matched identity returned by app admission.
+	// Later per-session checks re-observe the executable and version, but retain
+	// the authorized model, effort, and generation rather than recreating an
+	// incomplete identity from the Runtime interface.
+	launchIdentity *app.RunnerIdentity
 	// saveRecord is an instance-scoped fault-injection seam for crash-boundary
 	// recovery tests. Production runners always persist through Record.save.
 	saveRecord func() error
@@ -485,6 +490,7 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 					return errors.New("execution authorization changed while reacquiring its managed generation")
 				}
 				identity = ensuredIdentity
+				runner.launchIdentity = &identity
 			}
 			if err := runner.finishPendingRunPreparation(identity, expectedDigest); err != nil {
 				return err
@@ -568,6 +574,7 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		if bound.Digest != existing.ExecutionAuthorizationDigest {
 			return errors.New("execution authorization changed while reacquiring its managed generation")
 		}
+		runner.launchIdentity = &identity
 		_, err = app.ValidateRunnerResume(options.Root, existing.GoalID, existing.RunID,
 			existing.ExecutionAuthorizationDigest, existing.RunReservationID, existing.ReservationReceipts,
 			work.ExecutionArtifactLimits{MaxHandoffBytes: existing.Budget.MaxHandoffBytes,
@@ -842,6 +849,7 @@ func newRunner(options Options) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	runner.launchIdentity = &identity
 	goal, err = app.RunnableGoal(options.Root, options.GoalID)
 	if err != nil {
 		return nil, err
@@ -1032,8 +1040,14 @@ func (runner *Runner) runnerIdentity() (app.RunnerIdentity, error) {
 	if err != nil {
 		return app.RunnerIdentity{}, err
 	}
-	return runner.identityWithTestFacts(app.RunnerIdentity{Runtime: runner.runtime.Name(), ExecutablePath: executable, Version: version,
-		Sandbox: string(runner.runtime.SessionEnvironment().Sandbox)}), nil
+	identity := app.RunnerIdentity{Runtime: runner.runtime.Name(), ExecutablePath: executable, Version: version,
+		Sandbox: string(runner.runtime.SessionEnvironment().Sandbox)}
+	if runner.launchIdentity != nil {
+		identity.Model = runner.launchIdentity.Model
+		identity.Effort = runner.launchIdentity.Effort
+		identity.EngineGeneration = runner.launchIdentity.EngineGeneration
+	}
+	return runner.identityWithTestFacts(identity), nil
 }
 
 func (runner *Runner) identityWithTestFacts(identity app.RunnerIdentity) app.RunnerIdentity {
@@ -1710,7 +1724,7 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 			}
 			return err
 		}
-		_, err = app.PrepareChargedArtifactBytes(runner.options.Root, runner.record.GoalID, runner.record.RunID,
+		launch, err := app.PrepareAuthorizedAgentLaunch(runner.options.Root, runner.record.GoalID, runner.record.RunID,
 			fmt.Sprintf("%s:artifact:%s:%s:%d", runner.record.RunID, action.Kind, itemID, attempt),
 			sessionReservation(len(handoff), runner.options.Limits.MaxWriteBytes),
 			runner.record.ExecutionAuthorizationDigest, identity, runner.now())
@@ -1723,6 +1737,13 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 			}
 			return err
 		}
+		if launch.AuthorizationDigest != runner.record.ExecutionAuthorizationDigest {
+			if saveErr := runner.withdrawUnstartedWorker(pendingID); saveErr != nil {
+				return saveErr
+			}
+			return errors.New("execution authorization changed while preparing the agent launch")
+		}
+		request.Model, request.Effort = launch.WorkerProfile.Model, launch.WorkerProfile.Effort
 		runner.crashAt("after-artifact-charge")
 		// The authorization ledger write above is ForgePilot's own durable
 		// pre-launch charge. It becomes the new baseline for detecting an

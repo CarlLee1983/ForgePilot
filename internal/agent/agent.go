@@ -194,7 +194,12 @@ type Request struct {
 	Workspace   string
 	ArtifactDir string
 	Handoff     string
-	Timeout     time.Duration
+	// Model and Effort come from the exact Worker Profile returned by the final
+	// authorization transaction before session launch. Runtimes must never
+	// substitute their own defaults for these selections.
+	Model   string
+	Effort  string
+	Timeout time.Duration
 	// MaxOutputBytes bounds the session's console log. Zero means unbounded,
 	// which the Runner never uses.
 	MaxOutputBytes int64
