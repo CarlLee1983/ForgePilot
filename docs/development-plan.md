@@ -711,6 +711,8 @@ FP-53 adds two explicit commands:
 | `forgepilot execution revise plan --request <path> --json` | Read-only preview of an additive reviewed revision. Existing Plan Node mappings must name their existing Work Item; each new node explicitly uses an empty `workItemId`. |
 | `forgepilot execution revise authorize --request <path> --approval-token <token> --by <name> --json` | Rechecks the preview under workspace and state locks, atomically creates the explicit new Work Items, and appends the plan binding and authorization without resetting cumulative consumption. |
 | `forgepilot execution resume --goal <goal-id> [--json]` | Rechecks recovery, the current Goal authorization, and current bindings. It resumes only a run that still satisfies its exact contract; otherwise it creates at most one newly charged run. It accepts no run ID, runtime, budget, or artifact-cap override. |
+| `forgepilot execution stop --goal <goal-id> --by <name> --reason <reason> [--json]` | Persists one user-requested pause for the Goal's current run before it asks the owned worker process group to stop. It never clears a pending execution, edits lifecycle state, Evidence, Gate, or authorization, and it fails closed when worker ownership cannot be proved. |
+| `forgepilot execution declare --request <path> --json` | Validates and records one named External Fulfillment Declaration against an existing external wait. The strict `forgepilot.external-fulfillment-declaration/v1` request supplies `goalId`, `waitId`, `fact`, and `declaredBy`; ForgePilot derives and records the exact node, plan binding, and authorization revision from the durable wait. Recording a declaration never resumes a run. |
 
 The request is strict JSON with `formatVersion: "forgepilot.execution-plan-request/v1"`, an embedded `goalPlanRequest` using `forgepilot.goal-preflight-request/v1`, an explicit `workerProfile`, explicit `caps`, and an absolute `expiresAt` in UTC RFC 3339 form. `workerProfile` supplies the Codex executable path, fixed model, `effort: "medium"`, and `sandbox: "workspace-write"`; no value is inferred from an earlier Gate or a local runtime default. The executable path must resolve to a regular executable file and its file digest is rechecked at authorization. `caps` explicitly supplies `maxSteps`, `maxTechnicalAttemptsPerNode`, `maxRuns`, `maxRecoveries`, `maxHandoffBytes`, `maxWriteBytes`, `maxRunBytes`, and `maxTotalBytes`. Every value must be positive and artifact bounds must be ordered. The exact expiry must be in the future and no more than fourteen days from the operation; it is never recomputed or extended during authorization.
 
@@ -719,3 +721,31 @@ The preview token is a domain-separated digest, not a credential. It binds exact
 FP-53 records the explicitly requested Worker Profile and executable file digest, but does not claim an executable-reported version or managed ForgePilot engine generation. Since preview is read-only and may not launch a subprocess, the initial authorization is a plan/profile/caps binding, not a launchable worker authorization. FP-58 owns pinned engine-generation and selected executable identity validation; FP-54/58 admission must remain fail-closed until those checks pass. No mutable `launchable` flag is stored.
 
 State schema advances to v16 with an optional Goal-owned execution aggregate containing the initial plan binding, authorization, zero-use ledger, witness, and append-only stable-ID artifact-byte reservations. `migrate` backs up the prior snapshot before advancing; it does not infer or adopt a plan for existing Goals. A migrated v15 authorization has unknown historical artifact consumption, which fail-closes new execution and revision cap validation until explicit reauthorization; migration never scans run records or logs to manufacture that fact. Rollback remains manual restoration of the backup.
+
+### FP-56 Execution Control and waits
+
+State schema v17 fences the versioned `.forgepilot/execution-control.json`
+sidecar from older binaries. The sidecar is execution-control history only: it
+contains the active pause, the active human or external wait, and append-only
+External Fulfillment Declarations; it never contains a Work Item state,
+Evidence, Gate decision, review, or completion fact. Its own short-lived
+`execution-control.lock` serializes pause requests with the Runner's narrow
+worker-launch admission window. The long-lived workspace Runner lock remains
+the single-writer lock for Runner loops and is not reused for a stop request.
+
+An agent's `needs_human` result may name an `externalFact`. ForgePilot creates
+an external wait only after the result, its charged ACTION receipt, and the
+one-time needs-human disposition are durably confirmed. A result with no named
+external fact remains a human wait. Both consume the already-reserved action,
+step, duration, and artifact capacity; only the confirmed disposition removes
+the technical-attempt charge. Missing, malformed, or crashed results create no
+wait and retain that charge.
+
+Every Runner admission reads control while holding the control lock. A persisted
+pause or wait stops it before any new process; after a worker is launched its
+identity is saved before the lock is released. `execution stop` obtains that
+same lock, writes the pause atomically, then stops only an identity that passes
+the existing ownership check. Resume first settles pending cleanup, rechecks
+current plan and authorization, verifies an external declaration when one is
+required, and explicitly acknowledges/clears the control block only when it is
+safe to admit a new action. No declaration or restart resumes work implicitly.

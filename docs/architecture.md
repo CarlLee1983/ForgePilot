@@ -452,9 +452,20 @@ Runner 由使用者明確啟動，對單一 Goal 循序執行：取得下一個�
 | `internal/app` | CLI 與 Runner 共用的 orchestration：Goal-scoped typed 查詢、start、reconcile、verification、Gate 開立 |
 | `internal/agent` | Agent runtime 邊界：啟動本機 coding CLI、交接內容、結果驗證、程序群組控制 |
 | `internal/runner` | 執行迴圈、session 邊界、預算、期限與停止判定、execution history |
+| `internal/control` | `.forgepilot/execution-control.json` 的 pause／wait／declaration 記錄與短暫 control lock；不讀寫 Work Item lifecycle 或 Evidence |
 | `internal/process` | 受管理程序群組的啟動、有界終止與清理確認，`agent` 與 `repository` 共用 |
 
 `internal/work` 仍是純狀態機，沒有新增 interface；Git 仍只在 `internal/repository`；原子保存與鎖仍只在 `internal/storage`。verification orchestration 從 `internal/cli/verify.go` 搬到 `internal/app`，CLI 的 `verify` 變成薄殼，輸出文字與退出碼不變——Runner 使用的是同一段程式，不是複製品。
+
+FP-56 的 Execution Control 是另一份 versioned sidecar，不放進 `state.json`
+或 `run.json`：前者會把一個使用者控制操作誤判為 governance-state
+tampering，後者由活著的 Runner 重複整檔替換，會遺失並行 stop。Runner
+只在「讀取 control 為 clear → 保存 pending → 啟動 worker → 保存 identity」
+的窄窗口持有 control lock；stop 取得同一把鎖後先保存 pause，再依既有
+fail-closed ownership 規則要求 worker 停止。lock 釋放後的 worker 等待不
+佔用 control lock。外部 declaration 是 append-only 的具名自述，對 exact
+wait/node/plan binding/authorization revision 有效；它不等於 Evidence、Gate
+resolution 或 resume。
 
 Agent runtime（Codex 等 coding CLI）與 Verification toolchain（Candidate checkout 宣告的 Go／Node／Python）是兩個不同的邊界。agent adapter 不進入 [P1-004](#p1-004-deterministic-runtime-resolution-與-schema-v7) 的 runtime resolution。
 

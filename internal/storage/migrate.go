@@ -293,6 +293,11 @@ func upgrade(contents []byte, from int) (work.State, error) {
 			return work.State{}, err
 		}
 	}
+	// v16 → v17 fences the independently versioned execution-control sidecar.
+	// The state has no new control fields: advancing this header is what makes
+	// a v16 binary fail closed rather than ignore a durable pause or wait it
+	// cannot understand. The sidecar itself is strict and remains absent until
+	// the first control operation.
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

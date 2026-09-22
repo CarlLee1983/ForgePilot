@@ -233,6 +233,17 @@ func startWithWorkspaceLock(options Options, lockHeld bool) (Record, error) {
 		if err != nil {
 			return err
 		}
+		if pause, err := pauseFor(options.Root, options.GoalID, ""); err != nil {
+			return err
+		} else if pause != nil {
+			at := time.Now().UTC()
+			if effectiveOptions.Now != nil {
+				at = effectiveOptions.Now().UTC()
+			}
+			record = Record{GoalID: options.GoalID, Stop: &Stop{Reason: StopUserPaused,
+				Detail: fmt.Sprintf("paused by %s: %s", pause.RequestedBy, pause.Reason), At: at}}
+			return nil
+		}
 		// The workspace lock proves no Runner is live. It proves nothing about the
 		// workers a dead Runner launched: a SIGKILLed Runner releases its lock
 		// while its coding CLI keeps writing this tree. Settling those before
@@ -395,6 +406,10 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		// still a writer here, and the workspace lock says nothing about it.
 		// This run's own worker is left to recover() below.
 		runner := &Runner{options: resumeOptions(options, existing), record: &existing}
+		defer func() { record = *runner.record }()
+		if stopped, err := runner.honorPause(); stopped || err != nil {
+			return err
+		}
 		blocked, err := settleWorkspace(runner.options, runID)
 		if err != nil {
 			return err
@@ -403,7 +418,6 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 			record = *blocked
 			return nil
 		}
-		defer func() { record = *runner.record }()
 		if existing.RunPreparationState != "" {
 			if err := validatePendingRunPreparationRecord(existing); err != nil {
 				return err
@@ -1121,6 +1135,9 @@ func (runner *Runner) beforeAction() (bool, error) {
 		return true, runner.stopNow(runner.stopSignal(), "stopped on signal; resume this run to continue")
 	default:
 	}
+	if stopped, err := runner.honorPause(); stopped || err != nil {
+		return stopped, err
+	}
 	if !runner.now().Before(runner.record.Deadline) {
 		return true, runner.stopNow(StopMaxDuration,
 			fmt.Sprintf("the run passed its deadline of %s; resuming does not extend it", runner.record.Deadline.Format(time.RFC3339)))
@@ -1814,6 +1831,12 @@ func (runner *Runner) withdrawUnstartedWorker(pendingID string) error {
 
 func (runner *Runner) afterSession(itemID string, attempt int, result agent.Result, waitErr error, cause stopCause,
 	actionReceipt *work.ExecutionReservationReceipt) error {
+	// A control stop deliberately wins over the agent's exit status. RequestStop
+	// makes the pause durable before it terminates the group, so an externally
+	// stopped worker must never be reported as an execution failure.
+	if stopped, err := runner.honorPause(); stopped || err != nil {
+		return err
+	}
 	switch {
 	case errors.Is(waitErr, agent.ErrStopped):
 		reason, ok := runner.stopReasonFor(cause, StopAgentTimeout)

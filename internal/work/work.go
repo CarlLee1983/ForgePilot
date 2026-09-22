@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 )
 
-const SchemaVersion = 16
+const SchemaVersion = 17
 
 type GoalStatus string
 

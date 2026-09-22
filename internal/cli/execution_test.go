@@ -124,6 +124,28 @@ func TestExecutionPlanEmitsVersionedReadOnlyPreview(t *testing.T) {
 		authorization.GoalExecution.Authorizations[0].Approver != "operator" {
 		t.Fatalf("authorization output = %#v", authorization)
 	}
+
+	request["expectedAuthorizationDigest"] = authorization.GoalExecution.Authorizations[0].Digest
+	requestBytes, err = json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "execution-request.json"), requestBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Execute([]string{"execution", "revise", "plan", "--request", "execution-request.json", "--json"}, root, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("revision plan exit=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	var revision app.ExecutionPlanProjection
+	if err := json.Unmarshal(stdout.Bytes(), &revision); err != nil {
+		t.Fatalf("revision plan stdout is not one JSON projection: %v; output=%q", err, stdout.String())
+	}
+	if revision.RevisionDiff == nil {
+		t.Fatalf("revision plan JSON omitted revisionDiff: %#v", revision)
+	}
 }
 
 func TestExecutionResumeUsesGoalScopedContract(t *testing.T) {

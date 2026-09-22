@@ -66,7 +66,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":17,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":18,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -763,7 +763,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 16`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 17`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -1198,8 +1198,8 @@ func TestUpgradeV9AddsEmptyExternalReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upgrade = %v", err)
 	}
-	if upgraded.SchemaVersion != 16 {
-		t.Fatalf("schema version = %d, want 16", upgraded.SchemaVersion)
+	if upgraded.SchemaVersion != 17 {
+		t.Fatalf("schema version = %d, want 17", upgraded.SchemaVersion)
 	}
 	if got := upgraded.WorkItems[0].ExternalRef; got != "" {
 		t.Fatalf("migrated external reference = %q, want empty", got)
@@ -1381,7 +1381,7 @@ func TestMigrateRefusesV7HeaderThatUnderstatesReviewPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 16`, `"schema_version": 7`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 17`, `"schema_version": 7`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}

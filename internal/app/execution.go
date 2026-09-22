@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -65,7 +66,65 @@ type ExecutionPlanProjection struct {
 	Artifacts                  []work.ExecutionArtifactBinding `json:"artifacts,omitempty"`
 	WorkerProfile              work.WorkerProfile              `json:"workerProfile"`
 	Caps                       work.ExecutionCaps              `json:"caps"`
+	RevisionDiff               *ExecutionRevisionDiff          `json:"revisionDiff,omitempty"`
 	Diagnostics                []GoalPreflightDiagnostic       `json:"diagnostics"`
+}
+
+// ExecutionRevisionDiff is the operator-facing comparison between the active
+// execution contract and a proposed revision. It exists only for a valid
+// revision preview; authorization continues to bind the complete projection.
+type ExecutionRevisionDiff struct {
+	AddedNodes    []ExecutionRevisionAddedNode          `json:"addedNodes"`
+	Contract      *ExecutionRevisionContractChange      `json:"contract,omitempty"`
+	Caps          *ExecutionRevisionCapsChange          `json:"caps,omitempty"`
+	WorkerProfile *ExecutionRevisionWorkerProfileChange `json:"workerProfile,omitempty"`
+	ExpiresAt     *ExecutionRevisionExpiryChange        `json:"expiresAt,omitempty"`
+}
+
+type ExecutionRevisionAddedNode struct {
+	PlanNodeRef       string                        `json:"planNodeRef"`
+	StoryRef          string                        `json:"storyRef"`
+	ReadinessContract work.ExecutionArtifactBinding `json:"readinessContract"`
+	DependsOn         []string                      `json:"dependsOn"`
+}
+
+type ExecutionRevisionContractChange struct {
+	Previous ExecutionRevisionContract `json:"previous"`
+	Proposed ExecutionRevisionContract `json:"proposed"`
+}
+
+type ExecutionRevisionContract struct {
+	PlanID           string                          `json:"planId"`
+	PlanRevision     int64                           `json:"planRevision"`
+	ManifestSHA256   string                          `json:"manifestSha256"`
+	CoverageReviewID string                          `json:"coverageReviewId"`
+	Manifest         work.ExecutionArtifactBinding   `json:"manifest"`
+	CoverageReview   work.ExecutionArtifactBinding   `json:"coverageReview"`
+	Declaration      work.ExecutionArtifactBinding   `json:"declaration"`
+	ReviewedSources  []work.ExecutionArtifactBinding `json:"reviewedSources"`
+	Nodes            []ExecutionRevisionContractNode `json:"nodes"`
+}
+
+type ExecutionRevisionContractNode struct {
+	PlanNodeRef       string                        `json:"planNodeRef"`
+	StoryRef          string                        `json:"storyRef"`
+	ReadinessContract work.ExecutionArtifactBinding `json:"readinessContract"`
+	DependsOn         []string                      `json:"dependsOn"`
+}
+
+type ExecutionRevisionCapsChange struct {
+	Previous work.ExecutionCaps `json:"previous"`
+	Proposed work.ExecutionCaps `json:"proposed"`
+}
+
+type ExecutionRevisionWorkerProfileChange struct {
+	Previous work.WorkerProfile `json:"previous"`
+	Proposed work.WorkerProfile `json:"proposed"`
+}
+
+type ExecutionRevisionExpiryChange struct {
+	Previous string `json:"previous"`
+	Proposed string `json:"proposed"`
 }
 
 func newExecutionPlanProjection() ExecutionPlanProjection {
@@ -569,6 +628,10 @@ func planExecutionRevisionForState(ctx context.Context, root string, body []byte
 		return projection, err
 	}
 	projection.Artifacts = executionArtifactDigests(goalPlan, request.GoalPlanRequest)
+	projection.RevisionDiff = executionRevisionDiff(
+		goal.Execution.PlanBindings[len(goal.Execution.PlanBindings)-1], currentAuthorization,
+		binding, profile, caps, projection.ExpiresAt,
+	)
 	tokenInput := executionApprovalInput{RequestSHA256: projection.RequestSHA256, Workspace: canonicalRoot, GoalID: goal.ID,
 		RegistrationSHA256: projection.RegistrationSHA256, AuthorizationPresent: true, ExpiresAt: projection.ExpiresAt,
 		Artifacts: projection.Artifacts, WorkerProfile: profile, Caps: caps}
@@ -579,6 +642,55 @@ func planExecutionRevisionForState(ctx context.Context, root string, body []byte
 	}{tokenInput, currentAuthorization.Digest, goal.Execution.Ledger.Digest})
 	_ = binding
 	return projection, err
+}
+
+func executionRevisionDiff(current work.GoalPlanBinding, currentAuthorization work.ExecutionAuthorization, proposed work.GoalPlanBinding, profile work.WorkerProfile, caps work.ExecutionCaps, expiresAt string) *ExecutionRevisionDiff {
+	diff := &ExecutionRevisionDiff{AddedNodes: make([]ExecutionRevisionAddedNode, 0)}
+	currentByRef := make(map[string]bool, len(current.Nodes))
+	for _, node := range current.Nodes {
+		currentByRef[node.PlanNodeRef] = true
+	}
+	for _, node := range proposed.Nodes {
+		if currentByRef[node.PlanNodeRef] {
+			continue
+		}
+		diff.AddedNodes = append(diff.AddedNodes, ExecutionRevisionAddedNode{
+			PlanNodeRef: node.PlanNodeRef, StoryRef: node.StoryRef,
+			ReadinessContract: node.ReadinessContract, DependsOn: append([]string(nil), node.DependsOn...),
+		})
+	}
+	previousContract, proposedContract := executionRevisionContract(current), executionRevisionContract(proposed)
+	if !reflect.DeepEqual(previousContract, proposedContract) {
+		diff.Contract = &ExecutionRevisionContractChange{Previous: previousContract, Proposed: proposedContract}
+	}
+	if !reflect.DeepEqual(currentAuthorization.Caps, caps) {
+		diff.Caps = &ExecutionRevisionCapsChange{Previous: currentAuthorization.Caps, Proposed: caps}
+	}
+	if !reflect.DeepEqual(currentAuthorization.WorkerProfile, profile) {
+		diff.WorkerProfile = &ExecutionRevisionWorkerProfileChange{Previous: currentAuthorization.WorkerProfile, Proposed: profile}
+	}
+	previousExpiry := currentAuthorization.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	if previousExpiry != expiresAt {
+		diff.ExpiresAt = &ExecutionRevisionExpiryChange{Previous: previousExpiry, Proposed: expiresAt}
+	}
+	return diff
+}
+
+func executionRevisionContract(binding work.GoalPlanBinding) ExecutionRevisionContract {
+	contract := ExecutionRevisionContract{
+		PlanID: binding.PlanID, PlanRevision: binding.PlanRevision, ManifestSHA256: binding.ManifestSHA256,
+		CoverageReviewID: binding.CoverageReviewID, Manifest: binding.Manifest, CoverageReview: binding.CoverageReview,
+		Declaration:     binding.Declaration,
+		ReviewedSources: append([]work.ExecutionArtifactBinding(nil), binding.ReviewedSources...),
+		Nodes:           make([]ExecutionRevisionContractNode, 0, len(binding.Nodes)),
+	}
+	for _, node := range binding.Nodes {
+		contract.Nodes = append(contract.Nodes, ExecutionRevisionContractNode{
+			PlanNodeRef: node.PlanNodeRef, StoryRef: node.StoryRef,
+			ReadinessContract: node.ReadinessContract, DependsOn: append([]string(nil), node.DependsOn...),
+		})
+	}
+	return contract
 }
 
 func validateRevisionMapping(current work.GoalPlanBinding, manifest GoalPlanManifest, mappings []GoalPlanNodeMapping) error {

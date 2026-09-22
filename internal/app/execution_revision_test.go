@@ -51,10 +51,26 @@ func TestExecutionRevisionAtomicallyAddsWorkAndPreservesAuthorizationHistory(t *
 	priorSteps := state.Goals[0].Execution.Ledger.StepsConsumed
 	fixture.request.ExpectedAuthorizationDigest = state.Goals[0].Execution.Authorizations[0].Digest
 	fixture.request.GoalPlanRequest.NodeMappings = append(fixture.request.GoalPlanRequest.NodeMappings, GoalPlanNodeMapping{PlanNodeRef: "c"})
+	fixture.request.Caps.MaxSteps++
+	fixture.request.WorkerProfile.Model = "revised-model"
+	fixture.request.ExpiresAt = time.Now().UTC().Add(8 * 24 * time.Hour).Truncate(time.Second).Format(time.RFC3339)
 	writeExecutionTestRequest(t, fixture.requestPath, fixture.request)
 	preview, err := PlanExecutionRevisionFile(t.Context(), fixture.root, "execution-request.json")
 	if err != nil || len(preview.Diagnostics) != 0 {
 		t.Fatalf("revision plan = %#v, %v", preview, err)
+	}
+	if preview.RevisionDiff == nil || len(preview.RevisionDiff.AddedNodes) != 1 || preview.RevisionDiff.AddedNodes[0].PlanNodeRef != "c" ||
+		preview.RevisionDiff.Contract == nil || preview.RevisionDiff.Caps == nil || preview.RevisionDiff.WorkerProfile == nil || preview.RevisionDiff.ExpiresAt == nil {
+		t.Fatalf("revision diff = %#v", preview.RevisionDiff)
+	}
+	if preview.RevisionDiff.Caps.Proposed.MaxSteps != preview.RevisionDiff.Caps.Previous.MaxSteps+1 ||
+		preview.RevisionDiff.WorkerProfile.Proposed.Model != "revised-model" ||
+		preview.RevisionDiff.ExpiresAt.Proposed != preview.ExpiresAt {
+		t.Fatalf("revision diff changes = %#v", preview.RevisionDiff)
+	}
+	encodedPreview, err := json.Marshal(preview)
+	if err != nil || !bytes.Contains(encodedPreview, []byte(`"revisionDiff"`)) {
+		t.Fatalf("revision preview JSON omits diff: %q, %v", encodedPreview, err)
 	}
 	if _, err := ReviseExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "revision-operator"); err != nil {
 		t.Fatal(err)
