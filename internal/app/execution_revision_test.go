@@ -3,7 +3,10 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -127,6 +130,74 @@ func TestExecutionRevisionApprovalTokenBindsArtifactByteLedger(t *testing.T) {
 	if after.ApprovalToken == before.ApprovalToken {
 		t.Fatal("revision approval token did not bind the changed artifact-byte ledger")
 	}
+}
+
+func TestExecutionRevisionCannotCommitWhileRunnerOwnsWorkspace(t *testing.T) {
+	fixture := newExecutionTestFixture(t)
+	initial, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(initial.Diagnostics) != 0 {
+		t.Fatalf("initial plan = %#v, %v", initial, err)
+	}
+	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", initial.ApprovalToken, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	rewriteExecutionFixtureAsAdditiveRevision(t, fixture.root)
+	state, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.request.ExpectedAuthorizationDigest = state.Goals[0].Execution.Authorizations[0].Digest
+	fixture.request.GoalPlanRequest.NodeMappings = append(fixture.request.GoalPlanRequest.NodeMappings, GoalPlanNodeMapping{PlanNodeRef: "c"})
+	writeExecutionTestRequest(t, fixture.requestPath, fixture.request)
+	preview, err := PlanExecutionRevisionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(preview.Diagnostics) != 0 {
+		t.Fatalf("revision plan = %#v, %v", preview, err)
+	}
+	before, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = storage.WithWorkspaceLock(fixture.root, func() error {
+		command := exec.Command(os.Args[0], "-test.run=^TestExecutionRevisionLockHelper$", "-test.v")
+		command.Env = append(os.Environ(),
+			"FORGEPILOT_TEST_REVISION_LOCK_ROOT="+fixture.root,
+			"FORGEPILOT_TEST_REVISION_LOCK_TOKEN="+preview.ApprovalToken,
+		)
+		output, commandErr := command.CombinedOutput()
+		if commandErr != nil {
+			return fmt.Errorf("revision lock helper failed: %s: %w", output, commandErr)
+		}
+		if !bytes.Contains(output, []byte("revision-lock-helper-executed")) {
+			return fmt.Errorf("revision lock helper did not execute its assertion: %s", output)
+		}
+		after, loadErr := storage.Load(fixture.root)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !bytes.Equal(marshalState(t, before), marshalState(t, after)) {
+			return errors.New("revision changed state while a Runner held the workspace lock")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionRevisionLockHelper(t *testing.T) {
+	root := os.Getenv("FORGEPILOT_TEST_REVISION_LOCK_ROOT")
+	if root == "" {
+		return
+	}
+	token := os.Getenv("FORGEPILOT_TEST_REVISION_LOCK_TOKEN")
+	if token == "" {
+		t.Fatal("revision lock helper did not receive the approval token")
+	}
+	_, err := ReviseExecutionFile(t.Context(), root, "execution-request.json", token, "operator")
+	if err == nil || !errors.Is(err, storage.ErrRunnerInFlight) {
+		t.Fatalf("cross-process revision error = %v; want live Runner ownership refusal", err)
+	}
+	t.Log("revision-lock-helper-executed")
 }
 
 func TestExecutionRevisionRefusesArtifactTotalCapBelowPreservedReservations(t *testing.T) {
