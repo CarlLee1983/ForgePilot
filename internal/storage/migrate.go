@@ -194,6 +194,105 @@ func upgrade(contents []byte, from int) (work.State, error) {
 			}
 		}
 	}
+	if from < 11 {
+		// v10 → v11 adds an explicit Goal completion policy and immutable
+		// aggregate completion evidence. GOAL-policy execution now completes a
+		// Goal after current verification by default, so old GOAL records are
+		// upgraded to VERIFIED. WORK_ITEM records retain their existing human
+		// approval semantics. Completion fields under a v10 header are rejected
+		// as evidence that the header understates the snapshot.
+		if state.NextGoalCompletionEvidenceID != 0 || len(state.GoalCompletionEvidence) > 0 {
+			return work.State{}, fmt.Errorf("state declares schema version %d but already carries Goal completion evidence; refusing to migrate over it", from)
+		}
+		for i := range state.Goals {
+			if state.Goals[i].LegacyCompletion != nil {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries legacy completion provenance; refusing to migrate over it", from, state.Goals[i].ID)
+			}
+			if state.Goals[i].CompletionPolicy != "" {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries completion policy; refusing to migrate over it", from, state.Goals[i].ID)
+			}
+			state.Goals[i].CompletionPolicy = work.CompletionHuman
+			if state.Goals[i].ReviewPolicy == work.ReviewPerGoal {
+				state.Goals[i].CompletionPolicy = work.CompletionVerified
+			}
+		}
+		state.NextGoalCompletionEvidenceID = 1
+		state.GoalCompletionEvidence = nil
+	}
+	if from < 12 {
+		// v11 → v12 removes the configurable HUMAN final-review boundary from
+		// GOAL policy. Active records adopt the sole GOAL completion policy. A
+		// completed HUMAN record preserves its terminal lifecycle with separate
+		// legacy provenance; it must not be mistaken for current Candidate proof.
+		for i := range state.Goals {
+			goal := &state.Goals[i]
+			if goal.LegacyCompletion != nil {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries v12 legacy completion provenance; refusing to migrate over it", from, goal.ID)
+			}
+			if goal.ReviewPolicy != work.ReviewPerGoal || goal.CompletionPolicy != work.CompletionHuman {
+				continue
+			}
+			if _, hasEvidence := state.GoalCompletionEvidenceFor(goal.ID); hasEvidence {
+				return work.State{}, fmt.Errorf("state declares schema version %d but GOAL/HUMAN Goal %q already carries automatic completion evidence", from, goal.ID)
+			}
+			if goal.Status == work.GoalCompleted {
+				goal.LegacyCompletion = &work.LegacyGoalCompletion{
+					SourceSchemaVersion: work.LegacyHumanCompletionSourceSchemaVersion,
+					CompletionPolicy:    work.CompletionHuman,
+				}
+			}
+			goal.CompletionPolicy = work.CompletionVerified
+		}
+	}
+	if from < 13 {
+		// v12 → v13 adds an optional Goal-owned execution aggregate. Existing
+		// snapshots have no adopted plan or authorization; migration never
+		// infers one from Work Items, Story paths, or external references.
+		for _, goal := range state.Goals {
+			if goal.Execution != nil {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries execution authorization data; refusing to migrate over it", from, goal.ID)
+			}
+		}
+	}
+	if from < 14 {
+		// v13 → v14 adds durable execution reservations. Existing adopted
+		// authorizations retain their already-validated zero-use ledger; ForgePilot
+		// must not invent historical consumption from Run Records or logs.
+		for _, goal := range state.Goals {
+			if goal.Execution != nil && len(goal.Execution.Ledger.Reservations) != 0 {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries execution reservations; refusing to migrate over it", from, goal.ID)
+			}
+		}
+	}
+	if from < 15 {
+		// v14 → v15 permits append-only execution revision history. A v14
+		// header claiming more than its sole initial binding/authorization is
+		// malformed, not an early compatible revision to be laundered.
+		for _, goal := range state.Goals {
+			if goal.Execution != nil && (len(goal.Execution.PlanBindings) > 1 || len(goal.Execution.Authorizations) > 1) {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries execution revision history; refusing to migrate over it", from, goal.ID)
+			}
+		}
+	}
+	if from < 16 {
+		// v15 → v16 persists an artifact-byte accounting start revision. Older
+		// authorizations have no trustworthy artifact consumption ledger, so the
+		// zero value means unknown and blocks new output until an explicit
+		// authorization revision starts prospective accounting. A v15 header that
+		// already carries any v16 artifact accounting data understates the file.
+		for _, goal := range state.Goals {
+			if goal.Execution == nil {
+				continue
+			}
+			ledger := goal.Execution.Ledger
+			if ledger.ArtifactAccountingStartRevision != 0 || ledger.ArtifactBytesConsumed != 0 || len(ledger.ArtifactByteReservations) != 0 {
+				return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries artifact-byte accounting; refusing to migrate over it", from, goal.ID)
+			}
+		}
+		if err := state.MigrateExecutionArtifactAccountingToUnknown(); err != nil {
+			return work.State{}, err
+		}
+	}
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

@@ -380,11 +380,15 @@ func TestConsecutiveGoalWorkDefersHistoricReverificationToTheBoundary(t *testing
 		}
 		for _, line := range strings.Split(output, "\n") {
 			if strings.HasPrefix(line, "Action: ") {
-				return strings.TrimPrefix(line, "Action: ")
+				action := strings.TrimPrefix(line, "Action: ")
+				if action == "runner will complete the Goal transactionally" {
+					return "COMPLETE_GOAL"
+				}
+				return action
 			}
 		}
-		if strings.Contains(output, "Reason: goal final review required") {
-			return "WAIT_GOAL_REVIEW"
+		if strings.Contains(output, "runner will complete the Goal transactionally") {
+			return "COMPLETE_GOAL"
 		}
 		t.Fatalf("next produced no action: %q", output)
 		return ""
@@ -408,14 +412,14 @@ func TestConsecutiveGoalWorkDefersHistoricReverificationToTheBoundary(t *testing
 	}
 
 	// WI-003's repository-wide PASS also refreshes both stale VERIFIED peers in
-	// one shared run, so the Goal reaches its review boundary immediately.
-	if got := nextAction(); got != "WAIT_GOAL_REVIEW" {
+	// one shared run, so the Goal becomes ready for transactional completion.
+	if got := nextAction(); got != "COMPLETE_GOAL" {
 		t.Fatalf("after WI-003 PASS: %q", got)
 	}
-	actions = append(actions, "WAIT_GOAL_REVIEW")
+	actions = append(actions, "COMPLETE_GOAL")
 
 	want := []string{"VERIFY WI-001", "START WI-002", "VERIFY WI-002", "START WI-003",
-		"VERIFY WI-003", "WAIT_GOAL_REVIEW"}
+		"VERIFY WI-003", "COMPLETE_GOAL"}
 	if !reflect.DeepEqual(actions, want) {
 		t.Fatalf("action sequence = %v, want %v", actions, want)
 	}
@@ -444,8 +448,8 @@ func TestConsecutiveGoalWorkDefersHistoricReverificationToTheBoundary(t *testing
 		t.Fatalf("%d evidence records name the final revision, want 3", atC)
 	}
 	output, err := command(binary, root, "status")
-	if err != nil || !strings.Contains(output, "Goal review: awaiting goal final review") {
-		t.Fatalf("status at the boundary = %q, %v", output, err)
+	if err != nil || !strings.Contains(output, "Goal completion: ready for automatic completion") {
+		t.Fatalf("status at the completion boundary = %q, %v", output, err)
 	}
 }
 
@@ -482,11 +486,15 @@ func TestConsecutiveSnapshotWorkDefersReverificationWithEvolvingDigests(t *testi
 		}
 		for _, line := range strings.Split(output, "\n") {
 			if strings.HasPrefix(line, "Action: ") {
-				return strings.TrimPrefix(line, "Action: ")
+				action := strings.TrimPrefix(line, "Action: ")
+				if action == "runner will complete the Goal transactionally" {
+					return "COMPLETE_GOAL"
+				}
+				return action
 			}
 		}
-		if strings.Contains(output, "Reason: goal final review required") {
-			return "WAIT_GOAL_REVIEW"
+		if strings.Contains(output, "runner will complete the Goal transactionally") {
+			return "COMPLETE_GOAL"
 		}
 		t.Fatalf("next produced no action: %q", output)
 		return ""
@@ -501,7 +509,7 @@ func TestConsecutiveSnapshotWorkDefersReverificationWithEvolvingDigests(t *testi
 		t.Fatalf("after WI-002: %q", got)
 	}
 	step("WI-003", "third\n")
-	if got := nextAction(); got != "WAIT_GOAL_REVIEW" {
+	if got := nextAction(); got != "COMPLETE_GOAL" {
 		t.Fatalf("after WI-003: %q", got)
 	}
 	// Three distinct workspaces, one per Work Item: no step re-verified the

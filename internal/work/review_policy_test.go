@@ -22,6 +22,12 @@ func TestGoalReviewPolicyDefaultsAndValidates(t *testing.T) {
 	if got := state.Goals[1].ReviewPolicy; got != ReviewPerGoal {
 		t.Fatalf("explicit review policy = %q, want %q", got, ReviewPerGoal)
 	}
+	if got := state.Goals[1].CompletionPolicy; got != CompletionVerified {
+		t.Fatalf("GOAL completion policy = %q, want %q", got, CompletionVerified)
+	}
+	if err := state.AddGoalWithPolicies("manual", "Manual", "", "/repo", ReviewPerGoal, CompletionHuman, now); err == nil {
+		t.Fatal("created a GOAL-policy Goal with manual final review")
+	}
 	if err := state.AddGoalWithReviewPolicy("invalid", "Invalid", "", "/repo", ReviewPolicy("BYPASS"), now); err == nil {
 		t.Fatal("created a Goal with an invalid review policy")
 	}
@@ -68,7 +74,7 @@ func TestGoalReviewPolicyDefaultsAndValidates(t *testing.T) {
 	completed.Goals = append([]Goal(nil), state.Goals...)
 	completed.Goals[1].Status = GoalCompleted
 	if err := completed.Validate(); err == nil {
-		t.Fatal("validated a completed GOAL-policy Goal without final-review evidence")
+		t.Fatal("validated a completed GOAL-policy Goal without completion evidence")
 	}
 
 	withReviewEvidence := state
@@ -317,7 +323,7 @@ func TestGoalReviewPolicyBlockedGoalStopsProgressionUntilUnblocked(t *testing.T)
 	}
 }
 
-func TestGoalReviewProjectionWaitsForFinalReviewOnlyWhenEveryPassIsFresh(t *testing.T) {
+func TestGoalReviewProjectionOffersCompletionOnlyWhenEveryPassIsFresh(t *testing.T) {
 	state, now, first, second, revision := goalReviewDependencyFixture(t)
 	if _, err := state.RecordVerificationWithRepository(first.ID, revision, "make verify", 0, RepositoryState{Revision: revision}, now); err != nil {
 		t.Fatal(err)
@@ -336,11 +342,11 @@ func TestGoalReviewProjectionWaitsForFinalReviewOnlyWhenEveryPassIsFresh(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh.Completion != GoalAwaitingFinalReview {
-		t.Fatalf("fresh Goal completion = %q, want %q", fresh.Completion, GoalAwaitingFinalReview)
+	if fresh.Completion != GoalReadyToComplete {
+		t.Fatalf("fresh Goal completion = %q, want %q", fresh.Completion, GoalReadyToComplete)
 	}
 	if !slices.Equal(fresh.VerificationEvidenceIDs, []string{"EV-001", "EV-002"}) {
-		t.Fatalf("Goal review target = %v", fresh.VerificationEvidenceIDs)
+		t.Fatalf("Goal completion evidence target = %v", fresh.VerificationEvidenceIDs)
 	}
 	if err := state.BeginVerification(first.ID, revision, "/tmp/worktree-one-again", "", now); err != nil {
 		t.Fatal(err)
@@ -353,7 +359,7 @@ func TestGoalReviewProjectionWaitsForFinalReviewOnlyWhenEveryPassIsFresh(t *test
 		t.Fatal(err)
 	}
 	if !slices.Equal(refreshed.VerificationEvidenceIDs, []string{"EV-003", "EV-002"}) {
-		t.Fatalf("reverified Goal review target = %v", refreshed.VerificationEvidenceIDs)
+		t.Fatalf("reverified Goal completion target = %v", refreshed.VerificationEvidenceIDs)
 	}
 	if _, err := state.AddWork("goal", "specs/stories/three", nil, now); err != nil {
 		t.Fatal(err)
@@ -363,10 +369,10 @@ func TestGoalReviewProjectionWaitsForFinalReviewOnlyWhenEveryPassIsFresh(t *test
 		t.Fatal(err)
 	}
 	if withNewWork.Completion != GoalInProgress || len(withNewWork.VerificationEvidenceIDs) != 0 {
-		t.Fatalf("new work did not invalidate Goal review target: %#v", withNewWork)
+		t.Fatalf("new work did not invalidate Goal completion target: %#v", withNewWork)
 	}
 	if err := state.CompleteGoal("goal", now); err == nil {
-		t.Fatal("all VERIFIED Work Items completed the Goal without final review")
+		t.Fatal("generic completion bypassed the verified Goal transaction")
 	}
 
 	stale, err := state.GoalSummary("goal", RepositoryState{Revision: "2222222222222222222222222222222222222222"})
@@ -396,7 +402,7 @@ func TestActionableNextReverifiesAStaleVerifiedDependency(t *testing.T) {
 	}
 }
 
-func TestActionableNextWaitsAtTheGoalFinalReviewBoundary(t *testing.T) {
+func TestActionableNextOffersAutomaticGoalCompletion(t *testing.T) {
 	state, now, first, second, revision := goalReviewDependencyFixture(t)
 	if _, err := state.RecordVerificationWithRepository(first.ID, revision, "make verify", 0, RepositoryState{Revision: revision}, now); err != nil {
 		t.Fatal(err)
@@ -411,8 +417,8 @@ func TestActionableNextWaitsAtTheGoalFinalReviewBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	action := state.ActionableNext(RepositoryState{Revision: revision})
-	if action.Kind != NextActionWaitGoalReview || action.Goal.ID != "goal" || action.Item.ID != "" {
-		t.Fatalf("action at final review boundary = %#v", action)
+	if action.Kind != NextActionCompleteGoal || action.Goal.ID != "goal" || action.Item.ID != "" {
+		t.Fatalf("action at Goal completion boundary = %#v", action)
 	}
 }
 
@@ -432,8 +438,8 @@ func TestGoalReviewPolicyRejectsWorkItemReviewAndDirectGoalCompletion(t *testing
 	}
 	state.WorkItems[1].Status = Verified
 	if err := state.CompleteGoal("goal", now); err == nil {
-		t.Fatal("completed a GOAL-policy Goal without final-review Evidence")
-	} else if !strings.Contains(err.Error(), "final review") {
+		t.Fatal("completed a GOAL-policy Goal outside the current-verification transaction")
+	} else if !strings.Contains(err.Error(), "current verification") {
 		t.Fatalf("Goal completion error = %q", err)
 	}
 }
@@ -501,7 +507,7 @@ func TestWorkSummaryDistinguishesVerifiedFromHumanAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh.Completion != CompletionVerifiedForGoalReview || fresh.HasReview {
+	if fresh.Completion != CompletionVerifiedForGoalCompletion || fresh.HasReview {
 		t.Fatalf("fresh VERIFIED summary = %#v", fresh)
 	}
 	stale, err := state.WorkSummary(first.ID, RepositoryState{Revision: "2222222222222222222222222222222222222222"})
@@ -536,7 +542,7 @@ func TestGoalReviewProjectionUsesSnapshotCandidateFreshness(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh, err := state.GoalSummary("goal", RepositoryState{SnapshotDigest: candidate.Digest})
-	if err != nil || fresh.Completion != GoalAwaitingFinalReview {
+	if err != nil || fresh.Completion != GoalReadyToComplete {
 		t.Fatalf("fresh snapshot Goal summary = %#v, %v", fresh, err)
 	}
 	stale, err := state.GoalSummary("goal", RepositoryState{SnapshotDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})
@@ -705,7 +711,7 @@ func TestGoalReviewProjectionFailsClosedForBoundaryBlockers(t *testing.T) {
 	if _, err := state.RecordVerificationWithRepository(first.ID, revision, "make verify", 0, RepositoryState{Revision: revision}, now); err != nil {
 		t.Fatal(err)
 	}
-	if summary, err := state.GoalSummary("boundary", RepositoryState{Revision: revision}); err != nil || summary.Completion != GoalAwaitingFinalReview {
+	if summary, err := state.GoalSummary("boundary", RepositoryState{Revision: revision}); err != nil || summary.Completion != GoalReadyToComplete {
 		t.Fatalf("fresh boundary Goal summary = %#v, %v", summary, err)
 	}
 	gate, err := state.OpenGate(first.ID, "Which path?", []string{"one", "two"}, "", now)

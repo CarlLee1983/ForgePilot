@@ -155,7 +155,7 @@ func TestValidateRejectsDuplicateExternalReferenceWithinGoal(t *testing.T) {
 
 func TestRefreshAndValidation(t *testing.T) {
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	state := State{SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}}, WorkItems: []Item{
+	state := State{SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1, Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem, CompletionPolicy: CompletionHuman}}, WorkItems: []Item{
 		{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Done},
 		{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Pending, DependsOn: []string{"WI-001"}},
 	}}
@@ -185,7 +185,7 @@ func TestRefreshAndValidation(t *testing.T) {
 
 func TestSelectionUsesTimestampThenID(t *testing.T) {
 	old, same := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	state := State{SchemaVersion: SchemaVersion, NextWorkID: 4, NextEvidenceID: 1, NextGateID: 1, Goals: []Goal{{ID: "active", Title: "Active", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}, {ID: "blocked", Title: "Blocked", Repository: "/repo", Status: GoalBlocked, ReviewPolicy: ReviewPerWorkItem}}, WorkItems: []Item{
+	state := State{SchemaVersion: SchemaVersion, NextWorkID: 4, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1, Goals: []Goal{{ID: "active", Title: "Active", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem, CompletionPolicy: CompletionHuman}, {ID: "blocked", Title: "Blocked", Repository: "/repo", Status: GoalBlocked, ReviewPolicy: ReviewPerWorkItem, CompletionPolicy: CompletionHuman}}, WorkItems: []Item{
 		{ID: "WI-003", GoalID: "active", StoryRef: "specs/stories/c", Status: Ready, CreatedAt: same},
 		{ID: "WI-002", GoalID: "active", StoryRef: "specs/stories/b", Status: Ready, CreatedAt: same},
 		{ID: "WI-001", GoalID: "active", StoryRef: "specs/stories/a", Status: Ready, CreatedAt: old},
@@ -199,12 +199,15 @@ func TestSelectionUsesTimestampThenID(t *testing.T) {
 }
 
 func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
-	if SchemaVersion != 10 {
-		t.Fatalf("SchemaVersion = %d, want 10", SchemaVersion)
+	if SchemaVersion != 16 {
+		t.Fatalf("SchemaVersion = %d, want 16", SchemaVersion)
 	}
 	fresh := NewState()
 	if fresh.NextEvidenceID != 1 || fresh.NextGateID != 1 {
 		t.Fatalf("fresh counters = %d, %d, want 1, 1", fresh.NextEvidenceID, fresh.NextGateID)
+	}
+	if fresh.NextGoalCompletionEvidenceID != 1 {
+		t.Fatalf("fresh Goal completion counter = %d, want 1", fresh.NextGoalCompletionEvidenceID)
 	}
 	if len(fresh.Evidence) != 0 || len(fresh.Gates) != 0 {
 		t.Fatalf("fresh state carries %d evidence and %d gates", len(fresh.Evidence), len(fresh.Gates))
@@ -219,7 +222,7 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 		t.Fatalf("older-version error %q does not tell the user to migrate", err)
 	}
 	newer := fresh
-	newer.SchemaVersion = 11
+	newer.SchemaVersion = 17
 	err = newer.Validate()
 	if err == nil {
 		t.Fatal("accepted a newer schema version")
@@ -229,13 +232,28 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 	}
 }
 
+func TestSchemaV12RequiresCompletionPolicyAndCounter(t *testing.T) {
+	now := time.Date(2026, 9, 19, 4, 0, 0, 0, time.UTC)
+	missingPolicy := NewState()
+	missingPolicy.Goals = []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerGoal, CreatedAt: now, UpdatedAt: now}}
+	if err := missingPolicy.Validate(); err == nil || !strings.Contains(err.Error(), "completion policy") {
+		t.Fatalf("missing completion policy validation = %v", err)
+	}
+
+	missingCounter := NewState()
+	missingCounter.NextGoalCompletionEvidenceID = 0
+	if err := missingCounter.Validate(); err == nil || !strings.Contains(err.Error(), "next_goal_completion_evidence_id") {
+		t.Fatalf("missing completion counter validation = %v", err)
+	}
+}
+
 // TestRemovedStatusesAreRejected pins the status set to the six that survived
 // M3's decision that blocking is not a status: a snapshot naming WAITING_HUMAN
 // or a Work Item BLOCKED must be refused rather than quietly carried forward.
 func TestRemovedStatusesAreRejected(t *testing.T) {
 	for _, removed := range []Status{"WAITING_HUMAN", "BLOCKED"} {
-		state := State{SchemaVersion: SchemaVersion, NextWorkID: 2, NextEvidenceID: 1, NextGateID: 1,
-			Goals:     []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}},
+		state := State{SchemaVersion: SchemaVersion, NextWorkID: 2, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1,
+			Goals:     []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem, CompletionPolicy: CompletionHuman}},
 			WorkItems: []Item{{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: removed}}}
 		if err := state.Validate(); err == nil {
 			t.Fatalf("accepted removed status %q", removed)

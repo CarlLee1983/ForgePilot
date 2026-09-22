@@ -210,7 +210,7 @@ func (s *State) RequestReviewWithRepository(id, expectedVerificationID string, r
 		return fmt.Errorf("work item %q has unknown goal", id)
 	}
 	if goal.ReviewPolicy == ReviewPerGoal {
-		return fmt.Errorf("work item %q belongs to a Goal with GOAL review policy; review happens at the Goal final-review boundary", id)
+		return fmt.Errorf("work item %q uses GOAL review policy; per-Work-Item Human Review does not apply", id)
 	}
 	if item.Status != Running {
 		return fmt.Errorf("work item %q is %s; only RUNNING work can be submitted for review", id, item.Status)
@@ -640,7 +640,7 @@ func (s *State) Reviewable(id string) error {
 		return fmt.Errorf("work item %q has unknown goal", id)
 	}
 	if goal.ReviewPolicy == ReviewPerGoal {
-		return fmt.Errorf("work item %q belongs to a Goal with GOAL review policy; review happens at the Goal final-review boundary", id)
+		return fmt.Errorf("work item %q uses GOAL review policy; per-Work-Item Human Review does not apply", id)
 	}
 	// Only verified work is up for review: reviewing anything else would let a
 	// judgement stand in for a check that never ran.

@@ -30,13 +30,13 @@ const SmokeVariable = "FORGEPILOT_CODEX_SMOKE"
 // the least dangerous half of that and keep the rest, so it is not done either.
 func smokeOptedIn(value string) bool { return value == "1" }
 
-// TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary is the only test
+// TestCodexSmokeDrivesDependentWorkToGoalCompletion is the only test
 // that talks to a model. It needs a locally installed and already-authenticated
 // Codex; ForgePilot never installs or logs in on anyone's behalf. Its three
 // Stories deliberately form a small vertical slice, so a PASS after each
 // session comes from the disposable repository's own make verify rather than
 // from an agent's completion claim.
-func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
+func TestCodexSmokeDrivesDependentWorkToGoalCompletion(t *testing.T) {
 	if !smokeOptedIn(os.Getenv(SmokeVariable)) {
 		t.Skipf("set %s=1 to drive the real Codex CLI", SmokeVariable)
 	}
@@ -73,8 +73,8 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	if !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
-		t.Fatal("the smoke run did not reach the goal review boundary")
+	if !strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatal("the smoke run did not complete the Goal after verification")
 	}
 	state, err := storage.Load(fixture.root)
 	if err != nil {
@@ -84,12 +84,10 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		t.Fatalf("work items = %d, want 3", len(state.WorkItems))
 	}
 	for _, item := range state.WorkItems {
-		// DONE is checked first, and on its own. It is the outcome of a person
-		// approving a review, so a Runner that produced one crossed the boundary
-		// this whole round exists to prove it stops at — and reporting that as
-		// "want VERIFIED" would bury it.
+		// DONE is checked first, and on its own. It belongs to WORK_ITEM review;
+		// Goal completion must leave these items VERIFIED.
 		if item.Status == work.Done {
-			t.Fatalf("%s is DONE; the runner completed work a person had not approved", item.ID)
+			t.Fatalf("%s is DONE; Goal completion must not rewrite Work Item lifecycle", item.ID)
 		}
 		if item.Status != work.Verified {
 			t.Fatalf("%s status = %s, want VERIFIED", item.ID, item.Status)
@@ -102,16 +100,16 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 			item.ID, evidence.CandidateKind, shortCandidate(evidence), evidence.CandidateDigest, evidence.ID)
 	}
 
-	// No review may exist either. A Goal still ACTIVE with no Review Evidence is
-	// what "the machine stopped before the human boundary" looks like in state.
+	// Goal completion writes aggregate completion evidence, never Human Review
+	// Evidence; the Work Items remain VERIFIED.
 	for _, evidence := range state.Evidence {
 		if evidence.Type == work.ReviewEvidence {
 			t.Fatalf("a review was recorded without a person: %#v", evidence)
 		}
 	}
 	for _, goal := range state.Goals {
-		if goal.ID == "smoke" && goal.Status != work.GoalActive {
-			t.Fatalf("goal smoke is %s, want it still ACTIVE", goal.Status)
+		if goal.ID == "smoke" && goal.Status != work.GoalCompleted {
+			t.Fatalf("goal smoke is %s, want COMPLETED", goal.Status)
 		}
 	}
 
@@ -123,14 +121,14 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Stop == nil || record.Stop.Reason != runner.StopAwaitingGoalReview {
-		t.Fatalf("run %s stop = %#v, want AWAITING_GOAL_REVIEW", runID, record.Stop)
+	if record.Stop == nil || record.Stop.Reason != runner.StopGoalCompleted {
+		t.Fatalf("run %s stop = %#v, want GOAL_COMPLETED", runID, record.Stop)
 	}
 	if record.Stop.Reason.ExitCode() != code {
 		t.Fatalf("exit = %d but %s is documented as %d", code, record.Stop.Reason, record.Stop.Reason.ExitCode())
 	}
-	if len(record.Stop.EvidenceIDs) != 3 {
-		t.Fatalf("run %s final-review Evidence = %#v, want three current PASS records", runID, record.Stop.EvidenceIDs)
+	if len(record.Stop.EvidenceIDs) != 4 || record.Stop.EvidenceIDs[0] != "GC-001" {
+		t.Fatalf("run %s completion Evidence = %#v, want aggregate proof and three current PASS records", runID, record.Stop.EvidenceIDs)
 	}
 	// Nothing may still be recorded as executing. A worker or an unresolved
 	// pending execution would mean the run ended while something it started was
@@ -168,25 +166,25 @@ func TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		}
 	}
 
-	// The Goal review boundary is recomputed here, before the fixture is torn
-	// down, through the same typed query the product uses. Finding the words in
-	// the run's console output is not the same claim.
+	// Goal completion is recomputed here, before the fixture is torn down, through
+	// the same typed query the product uses. Finding the words in the run's
+	// console output is not the same claim.
 	summary, err := app.GoalReadiness(context.Background(), fixture.root, "smoke")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Completion != work.GoalAwaitingFinalReview {
-		t.Fatalf("recomputed goal readiness = %s, want %s", summary.Completion, work.GoalAwaitingFinalReview)
+	if summary.Completion != work.GoalDoneCompletion {
+		t.Fatalf("recomputed goal completion = %s, want %s", summary.Completion, work.GoalDoneCompletion)
 	}
-	if strings.Join(summary.VerificationEvidenceIDs, ",") != strings.Join(record.Stop.EvidenceIDs, ",") {
+	if strings.Join(summary.VerificationEvidenceIDs, ",") != strings.Join(record.Stop.EvidenceIDs[1:], ",") {
 		t.Fatalf("recomputed Evidence %v does not match the run's %v",
-			summary.VerificationEvidenceIDs, record.Stop.EvidenceIDs)
+			summary.VerificationEvidenceIDs, record.Stop.EvidenceIDs[1:])
 	}
 
 	// Checked last, and labelled, because it is a different kind of claim from
 	// everything above: those are ForgePilot's contract, this is an expectation
 	// about the model. A second attempt is within the budget this round was
-	// given, so the Runner reaching AWAITING_GOAL_REVIEW from one still
+	// given, so the Runner reaching GOAL_COMPLETED from one still
 	// satisfies the contract — but the expectation is not quietly dropped
 	// either. It fails the test, and the message says which of the two failed,
 	// so a red run is never ambiguous about what went wrong.

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "story_ref": "specs/stories/FP-33-onboarding-prompt",
+  "story_md_digest": "sha256:00296aebb8e9713378fba30877881cac03bca7b73d03030e31f9aafd7e455ac0",
+  "acceptance_md_digest": "sha256:180a71d86e6cd60f866ba8aadc6bd74ff4be7763b283cb09fc56080658730715",
+  "criteria": [],
+  "inputs": [
+    {
+      "id": "fp32-fixed-version-installer-contract",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp32-fixed-version-installer-contract"
+        }
+      }
+    },
+    {
+      "id": "adr-0030",
+      "source": {
+        "preexisting_artifact": {
+          "path": "docs/adr/0030-source-built-onboarding-without-apple-developer.md"
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "fp33-onboarding-procedure-contract"
+    }
+  ],
+  "decision_follow_ups": []
+}

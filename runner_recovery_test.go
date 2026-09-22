@@ -352,7 +352,7 @@ func TestResumeContinuesAfterTheBlockerIsCleared(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("resume exit = %d\n%s", code, output)
 	}
-	if !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
+	if !strings.Contains(output, "GOAL_COMPLETED") {
 		t.Fatalf("resume output:\n%s", output)
 	}
 	if sessions := fixture.sessions(t); len(sessions) != 1 {
@@ -442,8 +442,8 @@ printf '{"outcome":"implementation_finished","summary":"all done, verified"}' > 
 	if !strings.Contains(output, "AGENT_WROTE_FORGEPILOT_STATE") {
 		t.Fatalf("a session's write to state was not detected:\n%s", output)
 	}
-	if strings.Contains(output, "AWAITING_GOAL_REVIEW") {
-		t.Fatal("a forged VERIFIED was reported as readiness for final review")
+	if strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatal("a forged VERIFIED was reported as Goal completion")
 	}
 }
 
@@ -527,8 +527,8 @@ printf '{"outcome":"implementation_finished","summary":"implemented %s"}' "$item
 	if !strings.Contains(output, "AGENT_WROTE_FORGEPILOT_STATE") {
 		t.Fatalf("a write to state from inside the canonical check was not detected:\n%s", output)
 	}
-	if strings.Contains(output, "AWAITING_GOAL_REVIEW") {
-		t.Fatal("a forged VERIFIED was reported as readiness for final review")
+	if strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatal("a forged VERIFIED was reported as Goal completion")
 	}
 }
 

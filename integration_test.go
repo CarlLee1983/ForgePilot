@@ -85,16 +85,17 @@ func TestJSONOutputCreatesIdempotentWorkAndListsItByGoal(t *testing.T) {
 	var createdGoal struct {
 		FormatVersion string `json:"format_version"`
 		Goal          struct {
-			ID           string `json:"id"`
-			Title        string `json:"title"`
-			Status       string `json:"status"`
-			ReviewPolicy string `json:"review_policy"`
+			ID               string `json:"id"`
+			Title            string `json:"title"`
+			Status           string `json:"status"`
+			ReviewPolicy     string `json:"review_policy"`
+			CompletionPolicy string `json:"completion_policy"`
 		} `json:"goal"`
 	}
 	if err := json.Unmarshal([]byte(goalOutput), &createdGoal); err != nil {
 		t.Fatalf("goal output is not one JSON document: %v\n%s", err, goalOutput)
 	}
-	if createdGoal.FormatVersion != "forgepilot.cli/v1" || createdGoal.Goal.ID != "batch" || createdGoal.Goal.Title != "Batch" || createdGoal.Goal.Status != "ACTIVE" || createdGoal.Goal.ReviewPolicy != "GOAL" {
+	if createdGoal.FormatVersion != "forgepilot.cli/v1" || createdGoal.Goal.ID != "batch" || createdGoal.Goal.Title != "Batch" || createdGoal.Goal.Status != "ACTIVE" || createdGoal.Goal.ReviewPolicy != "GOAL" || createdGoal.Goal.CompletionPolicy != "VERIFIED" {
 		t.Fatalf("goal JSON = %#v", createdGoal)
 	}
 
@@ -776,7 +777,7 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	}
 }
 
-func TestGoalReviewPolicyRunsAcrossWorkItemsToFinalReviewBoundary(t *testing.T) {
+func TestGoalReviewPolicyRunsAcrossWorkItemsToAutomaticCompletion(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
 	if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", "bypass"); err == nil || !strings.Contains(output, "work-item or goal") {
@@ -786,6 +787,9 @@ func TestGoalReviewPolicyRunsAcrossWorkItemsToFinalReviewBoundary(t *testing.T) 
 		if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", unsupported); err == nil || !strings.Contains(output, "work-item or goal") {
 			t.Fatalf("unsupported review policy %q = %q, %v", unsupported, output, err)
 		}
+	}
+	if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", "goal", "--completion-policy", "human"); err == nil || !strings.Contains(output, "unknown flag") {
+		t.Fatalf("removed completion-policy flag = %q, %v", output, err)
 	}
 	if output, err := command(binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal"); err != nil {
 		t.Fatalf("create GOAL-policy Goal = %q, %v", output, err)
@@ -814,7 +818,7 @@ func TestGoalReviewPolicyRunsAcrossWorkItemsToFinalReviewBoundary(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Work Item summary = %q, %v", output, err)
 	}
-	for _, want := range []string{"Review policy: GOAL", "Review: not applicable (GOAL policy)", "Completion: verified for goal review"} {
+	for _, want := range []string{"Review policy: GOAL", "Review: not applicable (GOAL policy)", "Completion: verified for goal completion"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("Work Item summary %q does not contain %q", output, want)
 		}
@@ -832,30 +836,24 @@ func TestGoalReviewPolicyRunsAcrossWorkItemsToFinalReviewBoundary(t *testing.T) 
 	if err != nil {
 		t.Fatalf("status = %q, %v", output, err)
 	}
-	for _, want := range []string{"Review policy: GOAL", "Goal review: awaiting goal final review", "WI-001 VERIFIED", "WI-002 VERIFIED"} {
+	for _, want := range []string{"Review policy: GOAL", "Completion policy: VERIFIED", "Goal completion: ready for automatic completion", "WI-001 VERIFIED", "WI-002 VERIFIED"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("status %q does not contain %q", output, want)
 		}
 	}
 	output, err = command(binary, root, "next")
 	if err != nil {
-		t.Fatalf("next at final review boundary = %q, %v", output, err)
+		t.Fatalf("next at completion boundary = %q, %v", output, err)
 	}
-	for _, want := range []string{"No agent-actionable work.", "Waiting: Goal queue", "Reason: goal final review required"} {
+	for _, want := range []string{"Goal queue is ready for automatic completion", "Action: runner will complete the Goal transactionally"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("next output %q does not contain %q", output, want)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "unreviewable.txt"), []byte("dirty\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
 	if output, err = command(binary, root, "review", "approve", "WI-001"); err == nil || !strings.Contains(output, "GOAL review policy") {
 		t.Fatalf("Work Item review under GOAL policy = %q, %v", output, err)
 	}
-	if err := os.Remove(filepath.Join(root, "unreviewable.txt")); err != nil {
-		t.Fatal(err)
-	}
-	if output, err = command(binary, root, "goal", "complete", "queue"); err == nil || !strings.Contains(output, "final review") {
+	if output, err = command(binary, root, "goal", "complete", "queue"); err == nil || !strings.Contains(output, "completes through current verification") {
 		t.Fatalf("direct Goal completion under GOAL policy = %q, %v", output, err)
 	}
 }

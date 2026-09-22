@@ -1,4 +1,4 @@
-// Package runner drives one Goal to the point where a person must look at it.
+// Package runner drives one Goal through machine completion or a bounded stop.
 // It holds execution history and nothing else: no Work Item lifecycle, no
 // readiness of its own, no second opinion about what may happen next. Every
 // step re-asks internal/app. See
@@ -14,6 +14,7 @@ import (
 
 	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 // recordName is the one artifact recovery depends on. It is replaced
@@ -58,11 +59,12 @@ func (budget Budget) Validate() error {
 // process starts (without an identity) and again immediately after (with one),
 // so a crash in between still leaves evidence that something was launched.
 type Worker struct {
-	WorkItemID string                `json:"work_item_id"`
-	Attempt    int                   `json:"attempt"`
-	SessionDir string                `json:"session_dir"`
-	StartedAt  time.Time             `json:"started_at"`
-	Identity   agent.ProcessIdentity `json:"identity"`
+	WorkItemID          string                             `json:"work_item_id"`
+	Attempt             int                                `json:"attempt"`
+	SessionDir          string                             `json:"session_dir"`
+	StartedAt           time.Time                          `json:"started_at"`
+	Identity            agent.ProcessIdentity              `json:"identity"`
+	ReservationReceipts []work.ExecutionReservationReceipt `json:"reservation_receipts,omitempty"`
 }
 
 // The phases a pending execution can be in. They are distinguished because the
@@ -92,6 +94,8 @@ const (
 	KindGit                = "GIT"
 )
 
+const PurposeGoalCompletion = "GOAL_COMPLETION"
+
 // PendingExecution is one external execution this run started whose cleanup has
 // not been confirmed. It is the part of a run record that outlives the process
 // that wrote it: `Stop` says why the last run ended and a resume clears it,
@@ -106,6 +110,13 @@ type PendingExecution struct {
 	// Kind and Phase say what was started and how far it got.
 	Kind  string `json:"kind"`
 	Phase string `json:"phase"`
+	// Purpose distinguishes the final facts read that may commit Goal completion.
+	// Its durable marker lets recovery clear that exact read only when the Goal's
+	// aggregate completion evidence proves the transaction returned successfully.
+	Purpose string `json:"purpose,omitempty"`
+	// ReservationReceipts link a charged worker Pending to its technical attempt
+	// and Runner step in the durable ledger. Legacy Pending records omit them.
+	ReservationReceipts []work.ExecutionReservationReceipt `json:"reservation_receipts,omitempty"`
 	// WorkItemID is set when the execution belonged to one Work Item.
 	WorkItemID string `json:"work_item_id,omitempty"`
 	// Location is the checkout, worktree or session directory it worked in. It is
@@ -132,11 +143,12 @@ type PendingExecution struct {
 // what was already tried, and truncated so one verbose session cannot crowd out
 // the briefing that follows it.
 type Attempt struct {
-	WorkItemID string    `json:"work_item_id"`
-	Number     int       `json:"number"`
-	Outcome    string    `json:"outcome"`
-	Summary    string    `json:"summary"`
-	At         time.Time `json:"at"`
+	WorkItemID               string                            `json:"work_item_id"`
+	Number                   int                               `json:"number"`
+	Outcome                  string                            `json:"outcome"`
+	Summary                  string                            `json:"summary"`
+	At                       time.Time                         `json:"at"`
+	ActionReservationReceipt *work.ExecutionReservationReceipt `json:"action_reservation_receipt,omitempty"`
 }
 
 // AttemptSummaryBytes bounds one stored attempt summary.
@@ -181,32 +193,56 @@ type Stop struct {
 	Reason StopReason `json:"reason"`
 	Detail string     `json:"detail"`
 	At     time.Time  `json:"at"`
-	// EvidenceIDs holds the exact Verification Evidence a final-review wait was
-	// judged on, so a person reviewing later sees what the machine saw.
+	// EvidenceIDs holds the exact Verification Evidence a final-review wait or
+	// automatic completion was judged on. Automatic completion prefixes the
+	// aggregate Goal completion evidence ID.
 	EvidenceIDs []string `json:"evidence_ids,omitempty"`
 }
 
+// RunPreparationState makes a new Run Record nonrunnable until its durable RUN
+// reservation has either been confirmed or legacy admission has been decided.
+// Empty is the historical/ready value; it is written only for a fully prepared
+// charged run or a legacy run that needs no authorization charge.
+type RunPreparationState string
+
+const (
+	RunPreparationPendingClassification RunPreparationState = "PENDING_CLASSIFICATION"
+	RunPreparationPendingCharge         RunPreparationState = "PENDING_CHARGE"
+)
+
 // Record is one run's durable execution history.
 type Record struct {
-	RunID             string                 `json:"run_id"`
-	Workspace         string                 `json:"workspace"`
-	GoalID            string                 `json:"goal_id"`
-	GoalTitle         string                 `json:"goal_title"`
-	Scope             []string               `json:"scope"`
-	RuntimeName       string                 `json:"runtime_name"`
-	RuntimeExecutable string                 `json:"runtime_executable"`
-	RuntimeVersion    string                 `json:"runtime_version"`
-	RuntimeCommand    string                 `json:"runtime_command,omitempty"`
-	Snapshot          bool                   `json:"snapshot"`
-	Budget            Budget                 `json:"budget"`
-	Limits            storage.ArtifactLimits `json:"limits"`
-	StartedAt         time.Time              `json:"started_at"`
-	Deadline          time.Time              `json:"deadline"`
-	UpdatedAt         time.Time              `json:"updated_at"`
-	Steps             int                    `json:"steps"`
-	Attempts          map[string]int         `json:"attempts"`
-	HumanWaits        map[string]int         `json:"human_waits,omitempty"`
-	Worker            *Worker                `json:"worker,omitempty"`
+	RunID             string                `json:"run_id"`
+	Workspace         string                `json:"workspace"`
+	GoalID            string                `json:"goal_id"`
+	GoalTitle         string                `json:"goal_title"`
+	CompletionPolicy  work.CompletionPolicy `json:"completion_policy,omitempty"`
+	Scope             []string              `json:"scope"`
+	RuntimeName       string                `json:"runtime_name"`
+	RuntimeExecutable string                `json:"runtime_executable"`
+	RuntimeVersion    string                `json:"runtime_version"`
+	RuntimeCommand    string                `json:"runtime_command,omitempty"`
+	// ExecutionAuthorizationDigest and RunReservationID bind a charged run to
+	// the ledger entry that paid for it. They are not counters: ledger remains
+	// the sole cross-run budget authority.
+	ExecutionAuthorizationDigest string                             `json:"execution_authorization_digest,omitempty"`
+	RunReservationID             string                             `json:"run_reservation_id,omitempty"`
+	ReservationReceipts          []work.ExecutionReservationReceipt `json:"reservation_receipts,omitempty"`
+	// RunPreparationState keeps an initial record nonrunnable across the
+	// record/ledger transaction boundary. A retry must finish this exact intent
+	// before it can create another run or launch a worker.
+	RunPreparationState     RunPreparationState    `json:"run_preparation_state,omitempty"`
+	Snapshot                bool                   `json:"snapshot"`
+	Budget                  Budget                 `json:"budget"`
+	Limits                  storage.ArtifactLimits `json:"limits"`
+	StartedAt               time.Time              `json:"started_at"`
+	Deadline                time.Time              `json:"deadline"`
+	UpdatedAt               time.Time              `json:"updated_at"`
+	Steps                   int                    `json:"steps"`
+	Attempts                map[string]int         `json:"attempts"`
+	HumanWaits              map[string]int         `json:"human_waits,omitempty"`
+	HumanWaitReservationIDs []string               `json:"human_wait_reservation_ids,omitempty"`
+	Worker                  *Worker                `json:"worker,omitempty"`
 	// Pending holds executions whose cleanup has not been confirmed. It is
 	// additive: a record written before this field existed simply has none, which
 	// is read as "this run recorded nothing beyond its worker", not as "this

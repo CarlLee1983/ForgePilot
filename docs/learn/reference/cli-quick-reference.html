@@ -58,10 +58,10 @@
   <tbody>
     <tr><td><code>init</code></td><td>—</td><td>在目前 repository root 建立 <code>.forgepilot/</code>，並往 <code>.gitignore</code> 補上 entry。重複執行不覆寫。</td></tr>
     <tr><td><code>migrate</code></td><td>—</td><td>備份為 <code>state.json.v&lt;n&gt;.bak</code> 後升級 schema。已是最新則回報並 exit 0。備份已存在時拒絕。</td></tr>
-    <tr><td><code>goal create</code></td><td><code>--id --title [--description]</code></td><td>建立 ACTIVE Goal。ID 由你指定。</td></tr>
+    <tr><td><code>goal create</code></td><td><code>--id --title [--description] [--review-policy work-item|goal]</code></td><td>建立 ACTIVE Goal。WORK_ITEM 是預設；GOAL 在 current Candidate 全數 PASS、沒有 OPEN Gate 時自動完成，不提供人工 final-review 選項。ID 由你指定。</td></tr>
     <tr><td><code>goal block</code></td><td><code>&lt;goal-id&gt; --reason</code></td><td>轉為 BLOCKED。底下活躍工作維持原狀但無法推進。</td></tr>
     <tr><td><code>goal unblock</code></td><td><code>&lt;goal-id&gt;</code></td><td>轉回 ACTIVE。</td></tr>
-    <tr><td><code>goal complete</code></td><td><code>&lt;goal-id&gt;</code></td><td>全部 Work Item 皆 DONE 才允許。人手動宣告，系統不推斷。</td></tr>
+    <tr><td><code>goal complete</code></td><td><code>&lt;goal-id&gt;</code></td><td>WORK_ITEM policy 下全部 Work Item 皆 DONE 才允許。GOAL policy 的 VERIFIED completion 由 Runner 依驗證與 Gate 條件原子完成。</td></tr>
     <tr><td><code>goal cancel</code></td><td><code>&lt;goal-id&gt; --reason</code></td><td>轉為 CANCELLED。</td></tr>
     <tr><td><code>work add</code></td><td><code>--goal --story [--depends-on ...]</code></td><td>配發 <code>WI-nnn</code>。依賴皆 DONE 則 READY，否則 PENDING。</td></tr>
     <tr><td><code>next</code></td><td>—</td><td><strong>純查詢</strong>。不 claim、不 start、不改狀態。會說明選取理由。</td></tr>

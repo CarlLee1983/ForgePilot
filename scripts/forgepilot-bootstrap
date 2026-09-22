@@ -373,29 +373,49 @@ collect_prune_candidates() {
 
 append_plan_action() {
 	action_file=$1
-	phase=$2
-	action_id=$3
-	working_directory=$4
-	effect=$5
-	shift 5
+	human_actions_file=$2
+	phase=$3
+	action_id=$4
+	working_directory=$5
+	effect=$6
+	human_action=$7
+	shift 7
 	argument_count=$#
 	{
 		printf '%s\0' "$phase" "$action_id" "$working_directory" "$effect" "$argument_count"
 		for action_argument in "$@"; do printf '%s\0' "$action_argument"; done
 	} >>"$action_file"
+	printf '%s\n' "$human_action" >>"$human_actions_file"
 }
 
 build_prune_actions() {
 	PLAN_ACTIONS=$TEMP_DIR/prune-actions
+	PLAN_HUMAN_ACTIONS=$TEMP_DIR/prune-human-actions
 	printf '%s\0' forgepilot-bootstrap-plan-v1 >"$PLAN_ACTIONS"
-	append_plan_action "$PLAN_ACTIONS" inspect validate-managed-layout "$ROOT" read-managed-state
-	append_plan_action "$PLAN_ACTIONS" lock acquire-bootstrap-lock "$ROOT" exclusive-bootstrap-lock "$LOCK"
-	while IFS="$TAB" read -r generation_id candidate_digest; do
-		[ -n "$generation_id" ] || continue
-		append_plan_action "$PLAN_ACTIONS" remove "remove-generation-$generation_id" "$ROOT" remove-generation "versions/$generation_id"
-	done <"$PRUNE_CANDIDATES"
-	append_plan_action "$PLAN_ACTIONS" publish publish-manifest "$ROOT" atomic-manifest-replacement "$MANIFEST"
-	append_plan_action "$PLAN_ACTIONS" finalize remove-transaction "$ROOT" remove-transaction "$ROOT/transaction.json"
+	: >"$PLAN_HUMAN_ACTIONS"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" inspect validate-managed-layout "$ROOT" read-managed-state 'validate managed layout'
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" lock acquire-bootstrap-lock "$ROOT" exclusive-bootstrap-lock 'acquire Bootstrap exclusive lock' "$LOCK"
+	if [ -s "$PRUNE_CANDIDATES" ]; then
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate compare-prune-facts "$ROOT" compare-prune-state 'revalidate prune facts' "$PRUNE_FACTS_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
+		set -- prune "$MANIFEST" "$PRUNE_MANIFEST_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
+		while IFS="$TAB" read -r generation_id candidate_digest; do
+			[ -n "$generation_id" ] || continue
+			set -- "$@" "$generation_id" "$candidate_digest"
+		done <"$PRUNE_CANDIDATES"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" transaction record-removal-transaction "$ROOT" atomic-removal-transaction 'record removal transaction for exact manifest entries' "$@"
+		while IFS="$TAB" read -r generation_id candidate_digest; do
+			[ -n "$generation_id" ] || continue
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate "revalidate-generation-$generation_id" "$ROOT" verify-removable-generation "revalidate generation $generation_id" "$generation_id" "$candidate_digest" "$RETENTION_DIGEST" "$CURRENT_COMMIT" "${PREVIOUS_COMMIT:-none}"
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" remove "remove-generation-$generation_id" "$ROOT" remove-generation "remove versions/$generation_id (payload $candidate_digest)" "versions/$generation_id" "$candidate_digest"
+		done <"$PRUNE_CANDIDATES"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate revalidate-prune-manifest "$ROOT" verify-prune-manifest 'revalidate manifest before publication' "$PRUNE_MANIFEST_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-manifest "$ROOT" atomic-manifest-replacement 'publish updated manifest' "$MANIFEST" "$PRUNE_CANDIDATES_DIGEST"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate revalidate-prune-transaction "$ROOT" verify-removal-transaction 'revalidate prune transaction before finalizing' prune "$PRUNE_CANDIDATES_DIGEST"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" finalize remove-transaction "$ROOT" remove-transaction 'remove prune transaction' "$ROOT/transaction.json"
+	else
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate compare-prune-facts "$ROOT" compare-prune-state 'revalidate prune facts' "$PRUNE_FACTS_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" inspect no-removable-generations "$ROOT" no-op 'no inactive generation is eligible for removal'
+	fi
 }
 
 build_prune_plan() {
@@ -409,6 +429,9 @@ build_prune_plan() {
 	collect_prune_candidates "$PRUNE_CANDIDATES"
 	/usr/bin/cmp -s "$TEMP_DIR/prune-facts.before" "$TEMP_DIR/prune-facts.after" || fail 'managed state changed during prune planning'
 	/usr/bin/cmp -s "$TEMP_DIR/prune-candidates.before" "$PRUNE_CANDIDATES" || fail 'retention changed during prune planning'
+	PRUNE_FACTS_DIGEST=$(sha256_stdin <"$TEMP_DIR/prune-facts.after") || fail 'cannot identify inspected prune facts'
+	PRUNE_CANDIDATES_DIGEST=$(sha256_stdin <"$PRUNE_CANDIDATES") || fail 'cannot identify prune candidates'
+	PRUNE_MANIFEST_DIGEST=$(sha256_stdin <"$MANIFEST") || fail 'cannot identify the approved manifest'
 	build_prune_actions
 	plan_material=$TEMP_DIR/prune-plan-material
 	{
@@ -424,23 +447,52 @@ plan_prune() {
 	setup_temp
 	trap cleanup EXIT HUP INT TERM
 	build_prune_plan
-	printf 'Plan ID: %s\n' "$PLAN_ID"
-	printf 'Operation: prune\n'
-	printf 'Current generation: %s\n' "$CURRENT_COMMIT"
-	if [ -n "$PREVIOUS_COMMIT" ]; then
-		printf 'Previous generation: %s\n' "$PREVIOUS_COMMIT"
-	else
-		printf 'Previous generation: none\n'
-	fi
-	printf 'Retention references: %s (sha256:%s)\n' "$RETENTION_COUNT" "$RETENTION_DIGEST"
-	if [ -s "$PRUNE_CANDIDATES" ]; then
-		while IFS="$TAB" read -r generation_id candidate_digest; do
-			[ -n "$generation_id" ] || continue
-			printf 'Action: remove versions/%s (payload %s)\n' "$generation_id" "$candidate_digest"
-		done <"$PRUNE_CANDIDATES"
-	else
-		printf 'Action: no inactive generation is eligible for removal\n'
-	fi
+	case "$PLAN_FORMAT" in
+		human)
+			printf 'Plan ID: %s\n' "$PLAN_ID"
+			printf 'Operation: prune\n'
+			printf 'Current generation: %s\n' "$CURRENT_COMMIT"
+			if [ -n "$PREVIOUS_COMMIT" ]; then
+				printf 'Previous generation: %s\n' "$PREVIOUS_COMMIT"
+			else
+				printf 'Previous generation: none\n'
+			fi
+			printf 'Retention references: %s (sha256:%s)\n' "$RETENTION_COUNT" "$RETENTION_DIGEST"
+			while IFS= read -r human_action; do printf 'Action: %s\n' "$human_action"; done <"$PLAN_HUMAN_ACTIONS"
+			;;
+		actions)
+			machine_actions=$TEMP_DIR/prune-actions-output
+			/bin/cat "$PLAN_ACTIONS" >"$machine_actions"
+			printf '%s\0' metadata approval-plan-id "$ROOT" bootstrap-approval-id 1 "$PLAN_ID" >>"$machine_actions"
+			/bin/cat "$machine_actions"
+			;;
+		*) fail 'unknown plan renderer' ;;
+	esac
+}
+
+plan_command() {
+	plan_operation=''
+	PLAN_FORMAT=human
+	plan_format_set=0
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--prune)
+				[ -z "$plan_operation" ] || fail 'plan accepts exactly one lifecycle mode'
+				plan_operation=prune
+				shift
+				;;
+			--format)
+				[ "$#" -ge 2 ] || fail 'plan --format requires a renderer'
+				[ "$plan_format_set" -eq 0 ] || fail 'plan accepts only one renderer'
+				case "$2" in human|actions) PLAN_FORMAT=$2 ;; *) fail 'plan renderer must be human or actions' ;; esac
+				plan_format_set=1
+				shift 2
+				;;
+			*) fail 'this development slice supports only the prune plan mode' ;;
+		esac
+	done
+	[ "$plan_operation" = prune ] || fail 'plan requires exactly one lifecycle mode'
+	plan_prune
 }
 
 emit_result() {
@@ -526,8 +578,7 @@ main() {
 		-h|--help) usage; return 0 ;;
 		plan)
 			shift
-			[ "$#" -eq 1 ] && [ "$1" = --prune ] || fail 'this plan mode accepts only --prune in the current development slice'
-			plan_prune
+			plan_command "$@"
 			;;
 		retention-v1)
 			shift

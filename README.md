@@ -46,11 +46,11 @@ P0-003 擴充 `forgepilot next`：它優先建議續接已 RUNNING 的工作、�
 
 P1-004 讓 `verify` 先在實際 Candidate checkout 讀取 repository 的 runtime/toolchain 宣告，再以本機已安裝且版本相符的 Node、Go、Python、Rust 建立該次 subprocess environment。caller shell 的預設版本不再決定驗證結果；宣告版本不可用時會在 Verification Run 開始前拒絕，不產生假的 FAIL Evidence。實際版本會保存於 Verification Evidence。
 
-Goal 可選擇持久化的 Review Policy：`WORK_ITEM`（預設）維持既有每件工作 PASS 後 Human Review 至 DONE；`GOAL` 則讓 PASS 工作進入 `VERIFIED`，可在 Gate、Goal 狀態、verification failure／interruption 與 Candidate freshness 全數仍符合規則時推進下游依賴。`VERIFIED` 不是 Human acceptance 或 DONE。Goal 的 final-review readiness 是 fail-closed 的 read-only projection：ACTIVE Goal 的非空 Work Item 必須全為 VERIFIED、各自最新 Verification 為對應目前 Candidate 的 PASS，且沒有 OPEN Gate；projection 會保留那些 Verification Evidence IDs。現階段沒有 goal-level `review approve` 或 Goal Evidence，`goal complete` 也會拒絕 `GOAL` policy；`status` 顯示 policy／readiness，`next` 在準備好時回報等待 Goal final review。詳見 [ADR-0016](docs/adr/0016-goal-level-review-is-policy.md)。
+Goal 可選擇持久化的 Review Policy：`WORK_ITEM`（預設）維持既有每件工作 PASS 後 Human Review 至 DONE；`GOAL` 則讓 PASS 工作進入 `VERIFIED`，可在 Gate、Goal 狀態、verification failure／interruption 與 Candidate freshness 全數仍符合規則時推進下游依賴。`VERIFIED` 不是 Human acceptance 或 Work Item 的 `DONE`；當 ACTIVE Goal 的非空 Work Item 全為 VERIFIED、各自最新 Verification 是對應目前 Candidate 的 PASS、且沒有 OPEN Gate 時，typed `COMPLETE_GOAL` transaction 會寫入 aggregate completion evidence 並自動完成 Goal。GOAL 不提供人工 final-review 選項；`completion_policy` 是依 Review Policy 得出的相容性欄位，不是建立時的選擇。`goal complete` 仍只允許 WORK_ITEM Goal 的人工路徑。詳見 [ADR-0016](docs/adr/0016-goal-level-review-is-policy.md)、[ADR-0036](docs/adr/0036-explicit-verified-goal-completion.md) 與 [ADR-0037](docs/adr/0037-goal-completion-has-no-human-final-review.md)。
 
-Long-running Runner MVP 新增 `forgepilot run`：對單一 `GOAL` policy 的 Goal 循序執行——取得下一個合法動作、為每張工作（與每次修復）啟動一個**全新的** coding agent session、跑正式 snapshot verification、重新讀取狀態再繼續，直到停在等待 Goal final review、遇到需要人的條件，或撞到預算上限。Runner 只保存 execution history，判定完全交給既有 domain：它不寫 VERIFIED／DONE、不核准 review、不解除 Gate、不完成 Goal。Agent 宣稱完成、agent exit code 0、verification 命令 exit code 0 都不是 PASS——只有 Candidate checkout 上的 canonical check 算數。詳見 [ADR-0019](docs/adr/0019-runner-executes-forgepilot-decides.md)。
+Long-running Runner MVP 新增 `forgepilot run`：對單一 `GOAL` policy 的 Goal 循序執行——取得下一個合法動作、為每張工作（與每次修復）啟動一個**全新的** coding agent session、跑正式 snapshot verification、重新讀取狀態再繼續，直到自動完成 Goal、遇到需要人的條件，或撞到預算上限。Runner 只保存 execution history，判定完全交給既有 domain：它不寫 Work Item DONE、不核准 Human review、不解除 Gate；Goal completion 只走 application／domain 的 typed transaction。Agent 宣稱完成、agent exit code 0、verification 命令 exit code 0 都不是 PASS——只有 Candidate checkout 上的 canonical check 算數。詳見 [ADR-0019](docs/adr/0019-runner-executes-forgepilot-decides.md) 與 [ADR-0037](docs/adr/0037-goal-completion-has-no-human-final-review.md)。
 
-Runner MVP 這一期的交付邊界、證據對照與已知限制記在 [docs/specs/runner-mvp/closure.md](docs/specs/runner-mvp/closure.md)。它停在自動執行與 machine verification 的終點——Goal 最終人工接受不在那一期。
+Runner MVP 這一期的歷史交付邊界、證據對照與已知限制記在 [docs/specs/runner-mvp/closure.md](docs/specs/runner-mvp/closure.md)；其中舊的 `AWAITING_GOAL_REVIEW` smoke 是歷史紀錄，不代表目前可選的完成模式。
 
 這是這個產品第一次允許啟動會連線到模型服務的程序，而例外只有這一處：核心治理命令與狀態判定仍然完全離線，ForgePilot 自己沒有 HTTP client，也不持有任何憑證。見 [ADR-0018](docs/adr/0018-runner-may-launch-a-local-coding-cli.md)。
 
@@ -99,13 +99,13 @@ forgepilot start WI-001
 forgepilot status
 ```
 
-若要把例行審查邊界設在整個 Goal，建立時明確選擇：
+若要把例行審查邊界設在整個 Goal，建立時明確選擇。GOAL policy 會在所有 Work Item 的 current Candidate 驗證通過且沒有 OPEN Gate 後自動完成 Goal：
 
 ```bash
 forgepilot goal create --id dbcli-dba --title "DBA Workflow Support" --review-policy goal
 ```
 
-接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 只改變 Work Item 間的 progression。Runner 已經實作（[`forgepilot run`](#交給-runner-連續跑)），它能把一個 `GOAL` policy 的 Goal 推進到**等待 Goal final review 為止**；跨過那條邊界的東西還沒有——Goal 最終 Human acceptance 的 command 與 Goal Evidence 尚未實作，`goal complete` 對 `GOAL` policy 仍然拒絕。
+接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 讓機器驗證通過的 Work Item 推進依賴，並在整個 Goal 的 current verification 條件滿足時自動完成。GOAL 沒有人工 final-review 模式；每件工作的人工作業審查仍由 `WORK_ITEM` policy 提供。Runner 已經實作（[`forgepilot run`](#交給-runner-連續跑)），Goal 會以 `GOAL_COMPLETED` 結束並保存 aggregate completion evidence。
 
 ### Inspecting a reviewed Goal Plan
 
@@ -132,6 +132,16 @@ forgepilot goal preflight --request goal-preflight.json --json
 ```
 
 The result is one `forgepilot.goal-preflight/v1` JSON projection. Each fact is `observed`, `unprobed`, or `unavailable`: directly validated inputs are observed, inputs not reached because of an earlier failure remain unprobed, and missing or invalid required inputs are unavailable. Candidate freshness, worker liveness, and the domain next action remain unprobed; runtime state is unavailable. Validation defects appear in `diagnostics`; they do not create adoption, Evidence, or lifecycle changes.
+
+### Adopting and authorizing a Goal Plan
+
+FP-53 adds an explicit two-step flow. `forgepilot execution plan --request <path> --json` previews a complete FP-52 request, its node mapping, the selected Worker Profile, bounded caps, exact UTC expiry, and a current approval token. It only reads the request, validated artifacts, state, and the declared executable file; it writes nothing and starts no subprocess.
+
+The versioned request embeds the existing `goal-preflight-request/v1` object and must supply a Codex executable path, fixed model, `effort: "medium"`, `sandbox: "workspace-write"`, all step/attempt/run/recovery and artifact caps, and an absolute `expiresAt`. No profile, model, or cap is filled from a Gate or product default. The expiry is fixed, must be in the future, and cannot exceed fourteen days from the operation.
+
+Review the preview and pass its token to `forgepilot execution authorize --request <path> --approval-token <token> --by <name> --json`. This is the explicit, mutating approval action. ForgePilot rechecks request bytes, artifact digests, Goal/workspace and the complete registered mapping under the state lock; it commits the full mapping, authorization revision one, zero-use ledger, and Goal witness in one atomic state update. `--by` is self-declared, not authenticated. Authorization changes no Goal or Work Item lifecycle, Gate, Evidence, Human Review, or completion policy.
+
+The approval token is a freshness digest, not a credential. FP-53 records the requested Worker Profile and executable file digest but does not launch the executable to claim its reported version or claim a managed ForgePilot engine generation. The new authorization is not itself launchable: FP-54 and FP-58 must enforce charged admission and pinned-profile/engine validation before this flow enables supervised Runner execution. The existing `run` contract is unchanged by FP-53.
 
 `--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 PraxisBound 執行工程工作。
 
@@ -207,7 +217,7 @@ forgepilot run resume run-20260913t150703-983c11
 
 預設限制是 `--max-steps 100`、`--max-attempts-per-work 3`、`--max-duration 8h`、`--agent-timeout 30m`、`--verify-timeout 30m`，都不接受以 `0` 取消。`resume` 沿用原本的 workspace、Goal、runtime 與**已消耗的**預算，也不延長 deadline；需要實作時仍然開新 session，不續接上一段 Codex 對話。
 
-退出碼有四種意義：`0` 已達到等待 Goal final review 的條件（**不是**Goal 完成）、`2` 因 Gate、Goal 狀態或需要外部處理的條件停止、`3` 撞到預算或 timeout、`1` 執行錯誤。`forgepilot run status` 分開呈現「那次 run 停下來時的結論」與「現在重新計算的 Goal readiness」——workspace 動過之後這兩者就會不一樣。
+退出碼有四種意義：`0` Goal 已在同一個交易內完成；`2` 因 Gate、Goal 狀態或需要外部處理的條件停止；`3` 撞到預算或 timeout；`1` 執行錯誤。`forgepilot run status` 分開呈現「那次 run 停下來時的結論」與「現在重新計算的 Goal readiness」；已完成的 Goal 保持終態，不因 workspace 後續移動而重開。
 
 同一個 workspace 同時只能有一個 Runner，symlink 別名也算同一個。被中斷時 Runner 會停掉 worker 的整個程序群組並留下可恢復的紀錄；無法確認舊 worker 是否還在寫這個 workspace 時，它拒絕啟動新的 writer 而不是猜（[ADR-0020](docs/adr/0020-worker-ownership-is-fail-closed.md)）。
 
@@ -234,7 +244,7 @@ forgepilot goal complete dbcli-dba
 forgepilot goal cancel dbcli-dba --reason "需求已撤回"
 ```
 
-被擋住的 Goal 底下，正在進行的工作維持原狀——暫停不丟狀態，所以 `unblock` 之後一切照舊。它擋的是「開始新工作」與「到達 DONE」，不是「記錄已發生的事」：某次驗證進行中 Goal 被擋住，那次驗證跑完仍然記錄它的 Evidence。`goal complete` 是人手動宣告，且在尚有非 DONE 工作時被拒絕。
+被擋住的 Goal 底下，正在進行的工作維持原狀——暫停不丟狀態，所以 `unblock` 之後一切照舊。它擋的是「開始新工作」與「到達 DONE」，不是「記錄已發生的事」：某次驗證進行中 Goal 被擋住，那次驗證跑完仍然記錄它的 Evidence。`goal complete` 是 WORK_ITEM policy 下的人手動宣告，且在尚有非 DONE 工作時被拒絕；GOAL policy 則只會在所有 current verification 與 Gate 條件成立後自動完成。
 
 ### 升級舊版的 state
 

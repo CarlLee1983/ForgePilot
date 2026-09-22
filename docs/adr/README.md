@@ -21,7 +21,7 @@
 | [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 借用 PraxisBound 的 Story 目錄格式，不執行 bootstrap、不交出治理所有權 | accepted |
 | [0014](0014-working-tree-snapshot-is-a-candidate.md) | Working tree snapshot 是保留在 ForgePilot ref 下的 Candidate，不是 branch、stash 或 Work Item target | accepted |
 | [0015](0015-runtime-contract-belongs-to-candidate.md) | Runtime Contract 從 Candidate checkout 解析；只固定該次 subprocess environment，actual versions 隨 run 進 Evidence | accepted |
-| [0016](0016-goal-level-review-is-policy.md) | Goal-level review 是持久化 policy，不是略過 Human review 的捷徑 | accepted |
+| [0016](0016-goal-level-review-is-policy.md) | Goal-level review 是持久化 policy，不是略過 Human review 的捷徑 | accepted（Goal final-review 分支由 0037 更新） |
 | [0017](0017-readiness-is-a-projection-made-durable.md) | Readiness 由 `reconcile` 明確重算；GOAL-policy stale VERIFIED 的重驗延後到無法前進時，仍欠在總審邊界 | accepted |
 | [0018](0018-runner-may-launch-a-local-coding-cli.md) | Runner 可以啟動本機 coding CLI；核心治理命令與狀態判定仍不依賴模型服務 | accepted |
 | [0019](0019-runner-executes-forgepilot-decides.md) | Runner 只保存 execution history，每一步重新向 typed query 取得合法動作 | accepted |
@@ -39,7 +39,10 @@
 | [0031](0031-goal-scoped-external-work-reference.md) | External Work Reference 是 Goal-scoped 的 immutable idempotency key；machine JSON 是狹窄 public projection | accepted |
 | [0032](0032-formal-macos-onboarding-is-apple-silicon-only.md) | 正式 macOS onboarding 僅支援 Apple Silicon；Intel trial asset 不構成支援承諾 | accepted（取代 0025、0030 的雙架構前提） |
 | [0033](0033-source-built-bootstrap-separates-distribution-from-onboarding.md) | Source-built Bootstrap 同版安裝 CLI 與 Codex skill；Repository Onboarding 仍獨立核准 | accepted（部分取代 0024、0030） |
+| [0034](0034-ci-publishes-unsigned-trial-releases.md) | CI 僅將已驗證的 unsigned trial bundle 發佈為經人工核准的 immutable prerelease | accepted |
 | [0035](0035-supervised-goal-execution-with-bounded-rollover.md) | 長任務採 upstream 計畫／覆蓋核准、持久化有界授權、固定引擎背景執行與共用唯讀進度（待實作） | accepted |
+| [0036](0036-explicit-verified-goal-completion.md) | GOAL policy 以 current PASS Evidence 原子完成；其中可選 `HUMAN` 終審分支已由 0037 取代 | accepted（部分 superseded） |
+| [0037](0037-goal-completion-has-no-human-final-review.md) | GOAL completion 不設人工 final-review 分支；符合 current verification 條件即原子完成 | accepted |
 | [0038](0038-versioned-bootstrap-generation-retention.md) | Bootstrap generation 綁定 source commit 與 payload digest；版本化 retention protocol 與 installer 共用鎖及狀態 | accepted |
 
 ## 什麼時候該加一份

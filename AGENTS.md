@@ -10,7 +10,7 @@
 
 1. [CONTEXT.md](CONTEXT.md) — 詞彙。把 Story 與 Work Item 混用是這個 domain 最容易犯的錯
 2. [docs/architecture.md](docs/architecture.md) — 責任邊界、資料模型、狀態規則、各階段的開工前定案
-3. [docs/adr/README.md](docs/adr/README.md) — 34 份 accepted 決定與其失效條件；目前沒有 proposed 的開放問題
+3. [docs/adr/README.md](docs/adr/README.md) — 35 份 accepted 決定與其失效條件；目前沒有 proposed 的開放問題
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約表（**flag 命名以此為準**）與各階段 exit checklist
 5. `docs/specs/` — M1–M4 每個 milestone 一個 `m*/` 目錄，收 spec 與 ticket；M5 之後改以單一檔案記錄（`m5-dogfood-friction.md`），衍生的工作以 issue 追蹤
 
@@ -86,7 +86,7 @@ Commit 格式 `<type>: [ <scope> ] <subject>`，scope 用 milestone 代號（`m4
 
 **開工前自己重跑一次受影響的檢查。** 任何文件裡寫的「上次通過了」都是紀錄，不是現在的結果。
 
-**ForgePilot Runner 啟動的 Agent Session 是明列例外。** handoff 出現 Agent Session Check Profile 時，只跑 Story／變更直接相關的 focused checks；不要為了滿足 repository-wide Story AC 重跑 `make verify` 或 `go test -race -count=1 ./...`。這些 AC 是轉交、不是取消：Runner 在 `implementation_finished` 後負責正式 `make verify`，人所指揮的 primary integration/final workflow 在 `AWAITING_GOAL_REVIEW` 後、Human final acceptance 前負責 race gate，並在 final handoff 回報 command 與 exit result。Repair session 從 handoff 指定的正式 failure log 做最小重現；只有為診斷該 failure 所必需時才擴大檢查。離開 Runner Agent Session 後，前述兩個完整 gate 與開工前 baseline 規則照常適用。
+**ForgePilot Runner 啟動的 Agent Session 是明列例外。** handoff 出現 Agent Session Check Profile 時，只跑 Story／變更直接相關的 focused checks；不要為了滿足 repository-wide Story AC 重跑 `make verify` 或 `go test -race -count=1 ./...`。這些 AC 是轉交、不是取消：Runner 在 `implementation_finished` 後負責正式 `make verify`，人所指揮的 primary integration/final workflow 在 Runner 完成 Goal 後、Human final acceptance 前負責 race gate，並在 final handoff 回報 command 與 exit result。Repair session 從 handoff 指定的正式 failure log 做最小重現；只有為診斷該 failure 所必需時才擴大檢查。離開 Runner Agent Session 後，前述兩個完整 gate 與開工前 baseline 規則照常適用。
 
 ## 這個 repo 的一個細節
 

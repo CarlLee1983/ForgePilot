@@ -46,17 +46,16 @@ func (s *State) unblockGoal(id string, repository *RepositoryState, now time.Tim
 	return nil
 }
 
-// CompleteGoal declares a Goal finished. It is deliberately a person's
-// declaration rather than something the system infers: an automatic mark would
-// have to be reversible when new work arrives, and a reversible COMPLETED sits
-// badly beside a DONE that never is.
+// CompleteGoal declares a WORK_ITEM-policy Goal finished once every Work Item
+// is DONE. GOAL-policy completion needs current repository facts, so callers
+// must use CompleteVerifiedGoal instead of bypassing Candidate freshness.
 func (s *State) CompleteGoal(id string, now time.Time) error {
 	goal, err := s.goalInStatus(id, "complete", GoalActive)
 	if err != nil {
 		return err
 	}
 	if goal.ReviewPolicy == ReviewPerGoal {
-		return fmt.Errorf("goal %q uses GOAL review policy and requires final review before completion", id)
+		return fmt.Errorf("goal %q uses GOAL review policy and completes through current verification", id)
 	}
 	for _, item := range s.WorkItems {
 		if item.GoalID == id && item.Status != Done {

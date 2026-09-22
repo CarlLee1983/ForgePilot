@@ -22,8 +22,8 @@ const (
 	StallBlockedByGate           StallKind = "BLOCKED_BY_GATE"
 	StallDependenciesUnsatisfied StallKind = "DEPENDENCIES_UNSATISFIED"
 	// StallNoRemainingWork means every Work Item has reached VERIFIED or DONE.
-	// It still is not a completion: the Goal final-review projection decides
-	// that, and it is stricter than this.
+	// It still is not a completion: the Goal completion-readiness projection
+	// checks current Candidate facts and open Gates too.
 	StallNoRemainingWork StallKind = "NO_REMAINING_WORK"
 	StallUnknown         StallKind = "UNKNOWN"
 )

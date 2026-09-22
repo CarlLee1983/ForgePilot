@@ -93,8 +93,8 @@ func TestActionableNextReverifiesStaleCandidates(t *testing.T) {
 
 func TestActionableNextUsesExistingReadySelection(t *testing.T) {
 	old, same := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
-	state := State{SchemaVersion: SchemaVersion, NextWorkID: 4, NextEvidenceID: 1, NextGateID: 1,
-		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem}},
+	state := State{SchemaVersion: SchemaVersion, NextWorkID: 4, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1,
+		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem, CompletionPolicy: CompletionHuman}},
 		WorkItems: []Item{{ID: "WI-003", GoalID: "g", StoryRef: "specs/stories/three", Status: Ready, CreatedAt: same},
 			{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/two", Status: Ready, CreatedAt: same},
 			{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/one", Status: Ready, CreatedAt: old}}}
@@ -190,5 +190,42 @@ func TestActionableNextHasNoRecommendationForEmptyOrDoneState(t *testing.T) {
 	}
 	if action := state.ActionableNext(RepositoryState{Revision: revision}); action.Kind != NextActionNone {
 		t.Fatalf("done action = %#v", action)
+	}
+}
+
+func TestActionableNextDoesNotLetCompletedGoalMaskAnotherGoalCompletion(t *testing.T) {
+	now := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
+	revision := "1111111111111111111111111111111111111111"
+	repository := RepositoryState{Revision: revision}
+	candidate := Candidate{Kind: CommitCandidate, Revision: revision}
+	state := NewState()
+	if err := state.AddGoalWithPolicies("completed", "Completed", "", "/repo", ReviewPerGoal, CompletionVerified, now); err != nil {
+		t.Fatal(err)
+	}
+	completedItem, err := state.AddWork("completed", "specs/stories/completed", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passVerificationFor(t, &state, completedItem.ID, now, candidate, repository)
+	completedSummary, err := state.GoalSummary("completed", repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.CompleteVerifiedGoal("completed", repository, completedSummary.VerificationEvidenceIDs, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := state.AddGoalWithPolicies("active", "Active", "", "/repo", ReviewPerGoal, CompletionVerified, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	activeItem, err := state.AddWork("active", "specs/stories/active", nil, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	passVerificationFor(t, &state, activeItem.ID, now.Add(time.Minute), candidate, repository)
+
+	action := state.ActionableNext(repository)
+	if action.Kind != NextActionCompleteGoal || action.Goal.ID != "active" {
+		t.Fatalf("completed Goal masked the active Goal's completion action: %#v", action)
 	}
 }

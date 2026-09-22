@@ -2,13 +2,13 @@
 
 ## 這一版要做的事
 
-人類完成 Goal、Story、Work Item 與依賴的前置規劃之後，`forgepilot run --goal <goal-id>` 依 ForgePilot 的判定自動取得下一個合法動作、必要時啟動一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續下一項；因 Gate、預算或異常而停止，或在全部條件滿足時停在等待 Goal final review。
+人類完成 Goal、Story、Work Item 與依賴的前置規劃之後，`forgepilot run --goal <goal-id>` 依 ForgePilot 的判定自動取得下一個合法動作、必要時啟動一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續下一項；因 Gate、預算或異常而停止，或在全部 current verification 條件滿足時自動完成 Goal。`goal create --review-policy goal` 是唯一 Goal-level 自動完成模式，不提供人工終審選項。
 
 責任分工是這一版唯一的設計主張：**Runner 負責執行，ForgePilot 負責判定，PraxisBound 負責工程驗證規範。**細節記在 [ADR-0019](../../adr/0019-runner-executes-forgepilot-decides.md)。
 
 ## 範圍
 
-做進 ForgePilot，單一 workspace、單一 Runner、單一指定 Goal、循序執行。只接受 ACTIVE、非空、review policy 為 `GOAL` 的 Goal。只支援 snapshot verification，不自動 commit。一個真實 Codex CLI adapter，加一個不依賴網路的 fake subprocess adapter。每次實作或 repair attempt 都建立新的 Agent session。最後停在等待 Goal final review，不自行核准。
+做進 ForgePilot，單一 workspace、單一 Runner、單一指定 Goal、循序執行。只接受 ACTIVE、非空、review policy 為 `GOAL` 的 Goal。只支援 snapshot verification，不自動 commit。一個真實 Codex CLI adapter，加一個不依賴網路的 fake subprocess adapter。每次實作或 repair attempt 都建立新的 Agent session。Goal 條件滿足時由 typed transaction 自動完成，Work Item 維持 VERIFIED，不產生 Human Review。
 
 不包含：多 Agent 平行執行、多 Goal 自動切換、daemon、排程、Web UI、A2A、MCP、遠端執行、自動 merge／release、Goal 最終人工核准指令。不修改 PraxisBound，不新增通用 workflow framework。
 
@@ -43,7 +43,7 @@ Agent runtime（Codex 等 coding CLI）與 Verification toolchain（Candidate ch
 | `REPAIR` | 開新 session，附帶有限失敗摘要 |
 | `RECONCILE` | 既有 `ReconcileGoalReadiness`，再重新查詢 |
 | `REVERIFY` | 正式 verification，不重啟整段實作 |
-| `WAIT_GOAL_REVIEW` | 保存 Evidence 參照與摘要後結束，退出碼 0 |
+| `COMPLETE_GOAL` | GOAL policy 在鎖內重驗 Candidate／Evidence／Gate，寫入 Goal completion evidence 後完成，退出碼 0 |
 | `WAIT_GATE`／`WAIT_GOAL`／`WAIT_HUMAN_REVIEW` | 記錄原因並停止，不解除阻擋，退出碼 2 |
 | `NONE` | 以 `GoalStall` 分類具體原因，不視為完成 |
 
@@ -53,7 +53,7 @@ Agent runtime（Codex 等 coding CLI）與 Verification toolchain（Candidate ch
 
 **Verification 權威。** 正式 verification 沿用既有 snapshot capture、detached worktree、toolchain resolution 與 Evidence 保存。Agent exit code 0、Agent 宣稱完成、verification 命令 exit code 0 都不是 PASS。模型、認證、log 或 toolchain 問題分類為 refusal 或 operational error，不製造假的工程 FAIL。Runner 不直接寫 VERIFIED／DONE。
 
-**Candidate freshness 與總檢。** 沿用既有 dependency freshness 與排序。必要 prerequisite 已 stale 時先補足驗證。每張工作需要自己的合法 Evidence。總檢沿用既有 `GoalSummary` projection。達到等待總檢時保存引用的 Evidence IDs 並結束，不核准、不改 VERIFIED 為 DONE。
+**Candidate freshness 與完成。** 沿用既有 dependency freshness 與排序。必要 prerequisite 已 stale 時先補足驗證。每張工作需要自己的合法 Evidence。GOAL policy 的 `GoalSummary` projection 只在所有 Work Item 最新 PASS 都匹配 current Candidate 且沒有 OPEN Gate 時給出完成 action；typed transaction 會再次核對 exact IDs，寫入 aggregate evidence 後完成 Goal，不改 VERIFIED 為 DONE，也不等待 Goal-level Human Review。
 
 ## Agent session
 

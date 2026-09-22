@@ -227,7 +227,7 @@ forgepilot: work item "WI-002" does not belong to an active goal
 <b>Goal demo ACTIVE</b></code></pre>
   <p>還有工作沒完成時，Goal 不准被宣告完成，而且它會指名是哪一件卡著：</p>
 <pre class="out"><code>forgepilot: goal "demo" still has unfinished work: WI-002 is REVIEW</code></pre>
-  <p>全部 DONE 之後才過得去：</p>
+  <p>這裡示範的是預設 WORK_ITEM policy：全部 DONE 之後才過得去。選用 <code>--review-policy goal</code> 時，Goal 會在所有 Work Item 對 current Candidate 通過驗證且沒有 OPEN Gate 後由 Runner 自動完成，不會停在人工 final review。</p>
 <pre><code>forgepilot goal complete demo</code></pre>
 <pre class="out"><code><b>Goal demo COMPLETED</b></code></pre>
 </div>
