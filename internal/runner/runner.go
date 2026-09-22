@@ -582,18 +582,18 @@ func ResumeAuthorization(options Options, anchorRunID string) (Record, error) {
 // authorization digest is unchanged; authorization-level continuation must
 // create a separately charged successor instead.
 func exactAuthorizationResumeReusable(anchor Record, currentAuthorizationDigest string, now time.Time) bool {
-	if currentAuthorizationDigest == "" || currentAuthorizationDigest != anchor.ExecutionAuthorizationDigest || !now.Before(anchor.Deadline) {
+	if currentAuthorizationDigest == "" || currentAuthorizationDigest != anchor.ExecutionAuthorizationDigest {
 		return false
 	}
-	if anchor.Steps >= anchor.Budget.MaxSteps {
+	if anchor.Stop == nil {
+		return now.Before(anchor.Deadline)
+	}
+	switch anchor.Stop.Reason {
+	case StopMaxSteps, StopMaxAttempts, StopMaxDuration:
 		return false
+	default:
+		return now.Before(anchor.Deadline)
 	}
-	for _, attempts := range anchor.Attempts {
-		if attempts >= anchor.Budget.MaxAttemptsPerWork {
-			return false
-		}
-	}
-	return true
 }
 
 // startAuthorizationSuccessor creates the separately charged run used when an
@@ -606,7 +606,7 @@ func startAuthorizationSuccessor(options Options, anchor Record, authorization w
 }
 
 // ResumeAuthorizationGoal is the public Goal-scoped continuation entrypoint.
-// It selects the most recently updated stopped charged run for this Goal, then
+// It selects the most recently updated charged run for this Goal, then
 // delegates the exact-versus-successor decision to ResumeAuthorization. The
 // latter rechecks recovery, bindings, identity, expiry, and cumulative caps at
 // the real admission boundary; this selection never authorizes a new contract.
@@ -636,7 +636,7 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 		if err != nil {
 			return Record{}, err
 		}
-		if record.Workspace != root || record.GoalID != goalID || record.ExecutionAuthorizationDigest == "" || record.Stop == nil {
+		if record.Workspace != root || record.GoalID != goalID || record.ExecutionAuthorizationDigest == "" {
 			continue
 		}
 		if selected == nil || record.UpdatedAt.After(selected.UpdatedAt) ||
@@ -646,7 +646,7 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 		}
 	}
 	if selected == nil {
-		return Record{}, fmt.Errorf("goal %q has no stopped authorization-bound run to continue", goalID)
+		return Record{}, fmt.Errorf("goal %q has no authorization-bound run to continue", goalID)
 	}
 	return ResumeAuthorization(options, selected.RunID)
 }

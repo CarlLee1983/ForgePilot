@@ -9,6 +9,28 @@ import (
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 )
 
+func TestExactAuthorizationResumeUsesDurableBoundedStopReason(t *testing.T) {
+	now := time.Date(2026, 9, 21, 8, 0, 0, 0, time.UTC)
+	base := Record{
+		ExecutionAuthorizationDigest: "sha256:authorization",
+		Deadline:                     now.Add(time.Hour),
+		Budget:                       Budget{MaxSteps: 1, MaxAttemptsPerWork: 1},
+		Steps:                        0,
+		Attempts:                     map[string]int{"WI-001": 1},
+		HumanWaits:                   map[string]int{"WI-001": 1},
+	}
+	base.Stop = &Stop{Reason: StopNeedsHuman, At: now}
+	if !exactAuthorizationResumeReusable(base, base.ExecutionAuthorizationDigest, now) {
+		t.Fatal("a confirmed human wait was treated as an exhausted exact-run contract")
+	}
+	for _, reason := range []StopReason{StopMaxSteps, StopMaxAttempts, StopMaxDuration} {
+		base.Stop = &Stop{Reason: reason, At: now}
+		if exactAuthorizationResumeReusable(base, base.ExecutionAuthorizationDigest, now.Add(-2*time.Hour)) {
+			t.Fatalf("%s became exact-resumable after a clock rollback", reason)
+		}
+	}
+}
+
 func TestResumeAuthorizationCreatesSuccessorAfterAnchorMaxStepsWithCurrentAuthorization(t *testing.T) {
 	root, runtimeCommand, _, now, _ := newUnresolvedExecutionRunnerFixture(t)
 	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
@@ -35,6 +57,7 @@ func TestResumeAuthorizationCreatesSuccessorAfterAnchorMaxStepsWithCurrentAuthor
 	// The Goal authorization is unchanged and the anchor is still within its
 	// deadline. Authorization-level continuation must nevertheless create a
 	// fresh run because the old run exhausted its own step contract.
+	options.Now = func() time.Time { return now.Add(time.Second) }
 	successor, err := ResumeAuthorization(options, anchor.RunID)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +66,7 @@ func TestResumeAuthorizationCreatesSuccessorAfterAnchorMaxStepsWithCurrentAuthor
 		t.Fatalf("same-authorization exhausted anchor was resumed exactly: %#v", successor)
 	}
 	if successor.ExecutionAuthorizationDigest != anchor.ExecutionAuthorizationDigest || successor.Budget != anchor.Budget ||
-		successor.Deadline.Before(anchor.Deadline) {
+		!successor.Deadline.After(anchor.Deadline) {
 		t.Fatalf("successor did not preserve authorization and receive a fresh run contract: anchor=%#v successor=%#v", anchor, successor)
 	}
 	anchorAfter, err := LoadRecord(root, anchor.RunID)

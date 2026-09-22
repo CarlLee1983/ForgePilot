@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/CarlLee1983/ForgePilot/internal/storage"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 func TestValidateCurrentExecutionBindingsRejectsManifestDriftAndMissingMigratedPath(t *testing.T) {
