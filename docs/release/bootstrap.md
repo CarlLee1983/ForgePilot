@@ -1,7 +1,7 @@
 # Source-built Bootstrap development status
 
 > **Not a supported installer yet.** The repository contains an incomplete
-> development slice for `status` and `retention-v1`; lifecycle commands such as
+> development slice for `status`, `generation-v1 current`, and `retention-v1`; lifecycle commands such as
 > `plan`, `install`, `upgrade`, `prune`, and `uninstall` are unavailable. Today,
 > use the source-built onboarding procedure and short prompt in this directory.
 

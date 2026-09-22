@@ -129,6 +129,16 @@ assert_output "$output" 'generations=5'
 assert_output "$output" 'retention_refs=2'
 case "$output" in *"$reference_a"*) fail 'status exposed the raw retention reference' ;; esac
 
+# A managed caller receives one exact, rechecked generation tuple and the
+# generation-local CLI/helper paths. It must never reconstruct this from PATH
+# or the current pointer after the helper's read completes.
+output=$(HOME="$home" "$bootstrap" generation-v1 current) || fail 'current generation discovery failed'
+assert_output "$output" '"protocol_version":1'
+assert_output "$output" "\"generation_id\":\"$generation_a\""
+assert_output "$output" "\"payload_digest\":\"$digest_a\""
+assert_output "$output" "\"forgepilot_path\":\"$root/versions/$generation_a/bin/forgepilot\""
+assert_output "$output" "\"helper_path\":\"$root/versions/$generation_a/libexec/forgepilot-bootstrap\""
+
 decode_action_plan() {
 	assert_action_file=$1
 	assert_plan_id=$2

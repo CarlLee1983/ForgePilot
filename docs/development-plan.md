@@ -10,8 +10,8 @@ Dogfood Goal FP-28 的導入方向是 prompt-first、fixed-source-version 本機
 inspection-only commands 檢查與展示，逐條顯示完整 commit SHA、commands、路徑與效果；使用者
 授權後才能取得 source、安裝／建置、執行 `make verify` 或切換 entrypoint。既有 Go 是正式前提，
 source-built CLI 通過啟動檢查後才進入 Story 人工檢閱；預設 `WORK_ITEM` Goal／Work Item 建立前
-必須另取 repository write 的明確授權。ADR-0033 已定案 Bootstrap，實作目前只有 `status` 與
-`retention-v1` 開發切片，尚不能安裝 ForgePilot：完成後會同版安裝 CLI 與 Codex skill、但不取得
+必須另取 repository write 的明確授權。ADR-0033 已定案 Bootstrap，實作目前只有 `status`、
+`generation-v1 current` 與 `retention-v1` 開發切片，尚不能安裝 ForgePilot：完成後會同版安裝 CLI 與 Codex skill、但不取得
 Repository Onboarding 權限；完整 contract 在
 [docs/specs/source-built-bootstrap.md](specs/source-built-bootstrap.md)。unsigned binary 只可作 maintainer
 trial，不宣稱正式導入或 macOS execution trust。Apple signing、notarization 與 no-Go prebuilt release

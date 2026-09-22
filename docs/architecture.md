@@ -42,7 +42,7 @@ Onboarding procedure、可選 Codex／Claude adapters 與任何安裝 helper 都
 表面，不是 ForgePilot 核心治理命令。正式 macOS 支援面只包含 Apple Silicon；完成乾淨原生
 Apple Silicon Mac 的固定 source commit 驗收前，不得宣稱正式支援，Intel Mac 不在支援範圍內。
 預定的 supported path 是使用者明確授權的 fixed-source-version 本機建置。Bootstrap（ADR-0033）
-目前只有 `status` 與 `retention-v1` 開發切片；install、upgrade、plan、prune、uninstall 尚未完成，
+目前只有 `status`、`generation-v1 current` 與 `retention-v1` 開發切片；install、upgrade、plan、prune、uninstall 尚未完成，
 因此整體 Bootstrap 尚非可用或 supported path。完整設計以使用者提供的絕對本機 source checkout 與完整 commit SHA 建立 detached
 staging checkout，以已安裝的 Go 建置、跑 `make verify`、確認 staged CLI，然後透過一個 user-home
 managed current pointer 同版切換 CLI 與 Codex skill。它不下載 ForgePilot binary、不持有或呼叫

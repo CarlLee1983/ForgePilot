@@ -12,6 +12,7 @@ Usage:
   forgepilot-bootstrap install [source options] --approve PLAN_ID
   forgepilot-bootstrap upgrade --source PATH --commit SHA --approve PLAN_ID
   forgepilot-bootstrap status
+  forgepilot-bootstrap generation-v1 current
   forgepilot-bootstrap uninstall --commit SHA --approve PLAN_ID
   forgepilot-bootstrap prune --approve PLAN_ID
   forgepilot-bootstrap retention-v1 acquire|release --generation SHA --payload-digest DIGEST --reference TOKEN
@@ -190,6 +191,7 @@ generation_manifest() {
 		valid_sha "$generation_id" || fail 'versions contains an invalid generation identity'
 		safe_dir "$generation_path"
 		generation_digest=$(payload_digest "$generation_path") || fail 'cannot verify a managed generation'
+		if [ "$generation_id" = "$CURRENT_COMMIT" ]; then CURRENT_DIGEST=$generation_digest; fi
 		if [ "$first_generation" -eq 1 ]; then first_generation=0; else printf ',' >>"$manifest_expected"; fi
 		printf '"%s":{"payload_digest":"%s","path":"versions/%s"}' \
 			"$generation_id" "$generation_digest" "$generation_id" >>"$manifest_expected"
@@ -224,6 +226,32 @@ status() {
 	previous_display=${PREVIOUS_COMMIT:-none}
 	printf 'Bootstrap status: idle; generations=%s; current=%s; previous=%s; retention_refs=%s\n' \
 		"$GENERATION_COUNT" "$CURRENT_COMMIT" "$previous_display" "$RETENTION_COUNT"
+}
+
+# generation-v1 is the machine-readable counterpart to status for a managed
+# ForgePilot process. It reports immutable paths within the generation observed
+# during one rechecked read, never a later resolution of current or PATH.
+generation_current() {
+	setup_paths
+	setup_temp
+	trap cleanup EXIT HUP INT TERM
+	validate_layout
+	manifest_before=$(sha256_stdin <"$MANIFEST") || fail 'cannot snapshot managed manifest'
+	current_before=$CURRENT_COMMIT
+	previous_before=$PREVIOUS_COMMIT
+	retention_before=$RETENTION_DIGEST
+	retention_count_before=$RETENTION_COUNT
+	generation_count_before=$GENERATION_COUNT
+	validate_layout
+	manifest_after=$(sha256_stdin <"$MANIFEST") || fail 'cannot recheck managed manifest'
+	[ "$manifest_before" = "$manifest_after" ] &&
+		[ "$current_before" = "$CURRENT_COMMIT" ] &&
+		[ "$previous_before" = "$PREVIOUS_COMMIT" ] &&
+		[ "$retention_before" = "$RETENTION_DIGEST" ] &&
+		[ "$retention_count_before" -eq "$RETENTION_COUNT" ] &&
+		[ "$generation_count_before" -eq "$GENERATION_COUNT" ] || fail 'managed state changed during generation discovery'
+	printf '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s/versions/%s/bin/forgepilot","helper_path":"%s/versions/%s/libexec/forgepilot-bootstrap"}\n' \
+		"$CURRENT_COMMIT" "$CURRENT_DIGEST" "$ROOT" "$CURRENT_COMMIT" "$ROOT" "$CURRENT_COMMIT"
 }
 
 read_retention_marker() {
@@ -583,6 +611,10 @@ main() {
 		retention-v1)
 			shift
 			run_retention_protocol "$@"
+			;;
+		generation-v1)
+			[ "$#" -eq 2 ] && [ "$2" = current ] || fail 'generation-v1 accepts only current'
+			generation_current
 			;;
 		status)
 			[ "$#" -eq 1 ] || fail 'status accepts no options'

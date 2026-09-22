@@ -26,6 +26,85 @@ type GenerationRetention interface {
 	Acquire(context.Context, work.ExecutionEngineGeneration, string) error
 }
 
+// ResolvedBootstrapGeneration is the current immutable generation as observed
+// through its managed Bootstrap helper. HelperPath is the exact helper that
+// authenticated the tuple and is safe to pass to BootstrapRetention; it is
+// never resolved through PATH.
+type ResolvedBootstrapGeneration struct {
+	Generation work.ExecutionEngineGeneration
+	HelperPath string
+}
+
+// EngineGenerationResolver supplies a managed Bootstrap generation to Runner
+// admission. It deliberately has no repository identity input: Bootstrap
+// retention must not learn which repository or job holds a generation.
+type EngineGenerationResolver interface {
+	Resolve(context.Context) (ResolvedBootstrapGeneration, error)
+}
+
+// BootstrapGenerationResolver asks a managed, version-matched Bootstrap helper
+// for its current generation. The helper response must identify both the
+// running ForgePilot executable and the helper itself after symlink resolution;
+// this refuses a developer build, a stale helper, or an ambient command that
+// merely claims a managed tuple.
+type BootstrapGenerationResolver struct {
+	HelperPath     string
+	ExecutablePath string
+}
+
+func (resolver BootstrapGenerationResolver) Resolve(ctx context.Context) (ResolvedBootstrapGeneration, error) {
+	if !filepath.IsAbs(resolver.HelperPath) || strings.TrimSpace(resolver.HelperPath) != resolver.HelperPath ||
+		!filepath.IsAbs(resolver.ExecutablePath) || strings.TrimSpace(resolver.ExecutablePath) != resolver.ExecutablePath {
+		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap generation resolver paths must be absolute")
+	}
+	helperPath, err := filepath.EvalSymlinks(resolver.HelperPath)
+	if err != nil {
+		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve Bootstrap helper path: %w", err)
+	}
+	executablePath, err := filepath.EvalSymlinks(resolver.ExecutablePath)
+	if err != nil {
+		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve ForgePilot executable path: %w", err)
+	}
+	output, err := exec.CommandContext(ctx, helperPath, "generation-v1", "current").Output()
+	if err != nil {
+		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve current Bootstrap generation: %w", err)
+	}
+	var result struct {
+		ProtocolVersion int    `json:"protocol_version"`
+		GenerationID    string `json:"generation_id"`
+		PayloadDigest   string `json:"payload_digest"`
+		ForgePilotPath  string `json:"forgepilot_path"`
+		HelperPath      string `json:"helper_path"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(output)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return ResolvedBootstrapGeneration{}, fmt.Errorf("decode Bootstrap generation result: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap generation result contains extra JSON values")
+	}
+	generation := work.ExecutionEngineGeneration{SourceCommit: result.GenerationID, PayloadSHA256: result.PayloadDigest}
+	if !filepath.IsAbs(result.ForgePilotPath) || strings.TrimSpace(result.ForgePilotPath) != result.ForgePilotPath ||
+		!filepath.IsAbs(result.HelperPath) || strings.TrimSpace(result.HelperPath) != result.HelperPath {
+		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap helper returned invalid managed paths")
+	}
+	reportedExecutable, err := filepath.EvalSymlinks(result.ForgePilotPath)
+	if err != nil {
+		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve reported ForgePilot path: %w", err)
+	}
+	reportedHelper, err := filepath.EvalSymlinks(result.HelperPath)
+	if err != nil {
+		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve reported Bootstrap helper path: %w", err)
+	}
+	if result.ProtocolVersion != 1 || !validEngineGeneration(generation) ||
+		reportedExecutable != executablePath || reportedHelper != helperPath {
+		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap helper did not confirm the current managed ForgePilot generation")
+	}
+	return ResolvedBootstrapGeneration{Generation: generation, HelperPath: helperPath}, nil
+}
+
 // BootstrapRetention uses the versioned Bootstrap helper protocol. The helper
 // owns its state and lock; this package neither reads nor writes its retention
 // directory. HelperPath must name the managed helper selected by the engine
@@ -186,10 +265,14 @@ func validateIdentityForBinding(authorization work.ExecutionAuthorization, ident
 	if digest != profile.ExecutableSHA256 {
 		return errors.New("runner executable does not match the current execution Worker Profile digest")
 	}
-	if len(generation.SourceCommit) != 40 || strings.Trim(generation.SourceCommit, "0123456789abcdef") != "" ||
-		len(generation.PayloadSHA256) != len("sha256:")+64 || !strings.HasPrefix(generation.PayloadSHA256, "sha256:") ||
-		strings.Trim(generation.PayloadSHA256[len("sha256:"):], "0123456789abcdef") != "" {
+	if !validEngineGeneration(generation) {
 		return errors.New("ForgePilot engine generation identity is invalid")
 	}
 	return nil
+}
+
+func validEngineGeneration(generation work.ExecutionEngineGeneration) bool {
+	return len(generation.SourceCommit) == 40 && strings.Trim(generation.SourceCommit, "0123456789abcdef") == "" &&
+		len(generation.PayloadSHA256) == len("sha256:")+64 && strings.HasPrefix(generation.PayloadSHA256, "sha256:") &&
+		strings.Trim(generation.PayloadSHA256[len("sha256:"):], "0123456789abcdef") == ""
 }

@@ -2,7 +2,7 @@
 
 ## Status and boundary
 
-This is the accepted design contract. `scripts/forgepilot-bootstrap` now exists as an incomplete development slice: `status` and `retention-v1` are implemented, while install, upgrade, plan, prune, and uninstall are not yet available as a supported workflow. The governing decisions are [ADR-0030](../adr/0030-source-built-onboarding-without-apple-developer.md), [ADR-0032](../adr/0032-formal-macos-onboarding-is-apple-silicon-only.md), and [ADR-0033](../adr/0033-source-built-bootstrap-separates-distribution-from-onboarding.md). Existing FP-33 through FP-35 evidence describes the previous coupled procedure and remains historical evidence.
+This is the accepted design contract. `scripts/forgepilot-bootstrap` now exists as an incomplete development slice: `status`, `generation-v1 current`, and `retention-v1` are implemented, while install, upgrade, plan, prune, and uninstall are not yet available as a supported workflow. The governing decisions are [ADR-0030](../adr/0030-source-built-onboarding-without-apple-developer.md), [ADR-0032](../adr/0032-formal-macos-onboarding-is-apple-silicon-only.md), and [ADR-0033](../adr/0033-source-built-bootstrap-separates-distribution-from-onboarding.md). Existing FP-33 through FP-35 evidence describes the previous coupled procedure and remains historical evidence.
 
 Bootstrap is a repository-external POSIX-shell distribution surface. It installs one source-built ForgePilot CLI, one Codex standalone skill, and the generation-matched Bootstrap control-plane helper into the current user's home. It is not a ForgePilot core command, plugin, release downloader, or Repository Onboarding.
 
@@ -30,11 +30,18 @@ Every installed generation also exposes a versioned, machine-only retention seam
 `~/.local/bin/forgepilot-bootstrap`:
 
 ```text
+forgepilot-bootstrap generation-v1 current
 forgepilot-bootstrap retention-v1 acquire --generation <lowercase-40-character-sha> --payload-digest sha256:<lowercase-64-character-sha> --reference <lowercase-64-character-token>
 forgepilot-bootstrap retention-v1 release --generation <lowercase-40-character-sha> --payload-digest sha256:<lowercase-64-character-sha> --reference <lowercase-64-character-token>
 ```
 
-It emits one JSON result with `protocol_version: 1`; it accepts no source, target, or repository path and
+`generation-v1 current` accepts no repository, target, or source path. After the same read-only, rechecked
+managed-layout validation as `status`, it emits exactly one JSON value with `protocol_version: 1`, the exact
+current `generation_id` and `payload_digest`, and absolute generation-local `forgepilot_path` and `helper_path`.
+The paths are the immutable `versions/<commit>/` members observed in that read; callers must compare them to
+their own resolved executable and helper rather than re-resolving `current` or using PATH.
+
+`retention-v1` emits one JSON result with `protocol_version: 1`; it accepts no source, target, or repository path and
 does not invoke a build, verification, Git, network, or credential helper. The reference is a random
 256-bit bearer value supplied by ForgePilot; Bootstrap stores only its SHA-256. Acquire is idempotent
 for the same generation tuple, and an existing reference cannot be rebound. Release removes only the

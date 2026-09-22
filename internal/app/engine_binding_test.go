@@ -154,3 +154,51 @@ printf '%%s\n' '{"protocol_version":1,"result":"acquired","generation_id":"%s","
 		t.Fatal(err)
 	}
 }
+
+func TestBootstrapGenerationResolverAcceptsOnlyTheCurrentManagedExecutable(t *testing.T) {
+	root := t.TempDir()
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	managedExecutable := filepath.Join(root, "versions", generation.SourceCommit, "bin", "forgepilot")
+	managedHelper := filepath.Join(root, "versions", generation.SourceCommit, "libexec", "forgepilot-bootstrap")
+	if err := os.MkdirAll(filepath.Dir(managedExecutable), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(managedHelper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managedExecutable, []byte("managed CLI"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	helper := managedHelper
+	script := fmt.Sprintf(`#!/bin/sh
+[ "$1" = generation-v1 ] && [ "$2" = current ] || exit 9
+printf '%%s\n' '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s","helper_path":"%s"}'
+`, generation.SourceCommit, generation.PayloadSHA256, managedExecutable, managedHelper)
+	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := (BootstrapGenerationResolver{HelperPath: helper, ExecutablePath: managedExecutable}).Resolve(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalHelper, err := filepath.EvalSymlinks(managedHelper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Generation != generation || resolved.HelperPath != canonicalHelper {
+		t.Fatalf("resolved generation = %#v", resolved)
+	}
+
+	unmanagedExecutable := filepath.Join(root, "unmanaged", "forgepilot")
+	if err := os.MkdirAll(filepath.Dir(unmanagedExecutable), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unmanagedExecutable, []byte("unmanaged CLI"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (BootstrapGenerationResolver{HelperPath: helper, ExecutablePath: unmanagedExecutable}).Resolve(t.Context()); err == nil {
+		t.Fatal("unmanaged executable was accepted as a managed generation")
+	}
+}
