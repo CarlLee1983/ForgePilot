@@ -47,6 +47,24 @@ func GoalDecision(ctx context.Context, root, goalID string) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
+	if goal, ok := state.GoalByID(goalID); ok && goal.Status == work.GoalCompleted && goal.CompletionPolicy == work.CompletionVerified {
+		completion, hasCompletion := state.GoalCompletionEvidenceFor(goalID)
+		var evidenceIDs []string
+		if hasCompletion {
+			evidenceIDs = append(evidenceIDs, completion.ID)
+			evidenceIDs = append(evidenceIDs, completion.VerificationEvidenceIDs...)
+		}
+		reason := "Goal is already completed"
+		if goal.LegacyCompletion != nil {
+			reason = "Goal completion was preserved from schema v11 HUMAN policy"
+		} else if hasCompletion {
+			reason = "Goal is already completed (" + completion.ID + ")"
+		}
+		return Decision{
+			Action: work.NextAction{Goal: goal, Kind: work.NextActionGoalCompleted, Reason: reason, EvidenceIDs: evidenceIDs},
+			Stall:  state.GoalStall(goalID, work.RepositoryState{}),
+		}, nil
+	}
 	facts, err := GoalCandidateFacts(ctx, &state, goalID, root)
 	if err != nil {
 		return Decision{}, err
@@ -130,20 +148,78 @@ func ReconcileGoal(ctx context.Context, root, goalID string, now Now) ([]work.Re
 	return changes, err
 }
 
-// GoalReadiness projects whether a Goal has reached its final-review boundary.
-// It is recomputed from current facts every time, which is why a run record's
-// stored conclusion and this answer are reported separately: the workspace may
-// have moved since the run stopped.
+// GoalReadiness projects whether a Goal is ready for machine completion. It is
+// recomputed from current facts every time, which is why a run record's stored
+// conclusion and this answer are reported separately: the workspace may have
+// moved since the run stopped.
 func GoalReadiness(ctx context.Context, root, goalID string) (work.GoalSummary, error) {
 	state, err := storage.Load(root)
 	if err != nil {
 		return work.GoalSummary{}, err
+	}
+	if goal, ok := state.GoalByID(goalID); ok && goal.Status == work.GoalCompleted {
+		// A terminal projection is independent of today's workspace. This keeps
+		// status/run recovery useful even after the checkout has moved or vanished.
+		return state.GoalSummary(goalID, work.RepositoryState{})
 	}
 	facts, err := GoalCandidateFacts(ctx, &state, goalID, root)
 	if err != nil {
 		return work.GoalSummary{}, err
 	}
 	return state.GoalSummary(goalID, facts)
+}
+
+// GoalCompletionResult carries the exact Verification Evidence that justified
+// an automatic Goal completion. The transition and the Evidence ID selection
+// happen in one state transaction; callers use this list only for execution
+// history and presentation.
+type GoalCompletionResult struct {
+	CompletionEvidenceID    string
+	VerificationEvidenceIDs []string
+}
+
+// CompleteVerifiedGoal resolves the current Candidate facts inside the same locked
+// transaction that marks a GOAL-policy Goal COMPLETED. This keeps the
+// precondition and the transition on one criterion: a Candidate or Gate change
+// between a read-only readiness check and the write cannot authorize stale
+// completion.
+func CompleteVerifiedGoal(ctx context.Context, root, goalID string, expectedIDs []string, now Now) (GoalCompletionResult, error) {
+	var result GoalCompletionResult
+	err := storage.Update(root, func(state *work.State) error {
+		goal, ok := state.GoalByID(goalID)
+		if !ok {
+			return fmt.Errorf("unknown goal %q", goalID)
+		}
+		if goal.Status == work.GoalCompleted && goal.CompletionPolicy == work.CompletionVerified {
+			if goal.LegacyCompletion != nil {
+				return fmt.Errorf("completed Goal %q has legacy HUMAN completion provenance, not automatic verification evidence", goalID)
+			}
+			completion, ok := state.GoalCompletionEvidenceFor(goalID)
+			if !ok {
+				return fmt.Errorf("completed Goal %q has no completion evidence", goalID)
+			}
+			result.CompletionEvidenceID = completion.ID
+			result.VerificationEvidenceIDs = append([]string(nil), completion.VerificationEvidenceIDs...)
+			return nil
+		}
+		if goal.ReviewPolicy != work.ReviewPerGoal || goal.CompletionPolicy != work.CompletionVerified {
+			return fmt.Errorf("goal %q does not use VERIFIED completion policy", goalID)
+		}
+		// Completion validates every latest Verification, not just dependency
+		// readiness. Resolve the Candidate kinds of the whole Goal so a final
+		// SNAPSHOT/COMMIT comparison cannot silently run with empty facts.
+		facts, err := GoalCandidateFacts(ctx, state, goalID, root)
+		if err != nil {
+			return fmt.Errorf("resolve current Candidate before completing Goal: %w", err)
+		}
+		completion, err := state.CompleteVerifiedGoal(goalID, facts, expectedIDs, now.at())
+		if err == nil {
+			result.CompletionEvidenceID = completion.ID
+			result.VerificationEvidenceIDs = append([]string(nil), completion.VerificationEvidenceIDs...)
+		}
+		return err
+	})
+	return result, err
 }
 
 // GoalScope fingerprints the Work Item set a run was started against: each

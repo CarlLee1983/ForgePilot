@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,23 +214,37 @@ func TestStateDigestFailureKeepsTheAttemptWithoutAPhantomWorker(t *testing.T) {
 	}
 	runID := "run-20260916t000000-abcdef"
 	now := time.Date(2026, 9, 16, 1, 2, 3, 0, time.UTC)
+	if err := storage.Update(root, func(state *work.State) error {
+		return state.AddGoalWithReviewPolicy("g", "Goal", "", root, work.ReviewPerGoal, now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	limits := testLimits()
 	runner := &Runner{
 		options: Options{
 			Root: root, Now: func() time.Time { return now },
 			Budget: Budget{MaxSteps: 10, MaxAttemptsPerWork: 3, MaxDuration: time.Hour,
-				AgentTimeout: time.Minute, VerifyTimeout: time.Minute, MaxHandoffBytes: 64 * 1024},
+				AgentTimeout: time.Minute, VerifyTimeout: time.Minute, MaxHandoffBytes: 64 * 1024}, Limits: limits,
 		},
 		record: &Record{
 			RunID: runID, Workspace: root, GoalID: "g", GoalTitle: "Goal",
-			Deadline: now.Add(time.Hour), Attempts: map[string]int{}, HumanWaits: map[string]int{},
+			Deadline: now.Add(time.Hour), Limits: limits, Attempts: map[string]int{}, HumanWaits: map[string]int{},
 		},
 	}
-	if err := os.Remove(filepath.Join(root, ".forgepilot", "state.json")); err != nil {
-		t.Fatal(err)
+	checkpointed := false
+	runner.saveRecord = func() error {
+		if err := runner.record.save(root, limits, now); err != nil {
+			return err
+		}
+		if !checkpointed {
+			checkpointed = true
+			return os.Remove(filepath.Join(root, ".forgepilot", "state.json"))
+		}
+		return nil
 	}
 	action := work.NextAction{Item: work.Item{ID: "WI-001", GoalID: "g", Status: work.Running}, Kind: work.NextActionResume}
-	if err := runner.implement(action, app.Decision{}); err == nil {
-		t.Fatal("implement accepted a missing state digest")
+	if err := runner.implement(action, app.Decision{}); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("implement error = %v, want missing state digest", err)
 	}
 	stored, err := LoadRecord(root, runID)
 	if err != nil {

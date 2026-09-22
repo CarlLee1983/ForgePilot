@@ -2,32 +2,32 @@
 
 ## Happy Path
 
-* [ ] AC-001: Codex adapter 宣告的安裝路徑符合 Codex 官方文件記載的個人 skill 目錄樣式，adapter 內容只含平台載入位置與呼叫方式。
-* [ ] AC-002: Claude Code adapter 宣告的安裝路徑符合 Claude Code 官方文件記載的個人 skill 目錄樣式，adapter 內容只含平台載入位置與呼叫方式。
-* [ ] AC-003: 兩個 adapter 對同一份 #33 `docs/release/onboarding.md` common procedure 的暫時引用
+* [x] AC-001: Codex adapter 宣告的安裝路徑符合 Codex 官方文件記載的個人 skill 目錄樣式，adapter 內容只含平台載入位置與呼叫方式。
+* [x] AC-002: Claude Code adapter 宣告的安裝路徑符合 Claude Code 官方文件記載的個人 skill 目錄樣式，adapter 內容只含平台載入位置與呼叫方式。
+* [x] AC-003: 兩個 adapter 對同一份 #33 `docs/release/onboarding.md` common procedure 的暫時引用
   逐字相同，且兩者都未宣稱那是 published immutable identity。
 
 ## Business Rules
 
-* [ ] AC-004: 兩個 adapter 檔案都不含 Story、Candidate、授權或 ForgePilot state 規則的原文或摘要。
-* [ ] AC-005: 零 skill 短 prompt 入口在任一 adapter 缺席時，仍會解析到同一份共通 onboarding
+* [x] AC-004: 兩個 adapter 檔案都不含 Story、Candidate、授權或 ForgePilot state 規則的原文或摘要。
+* [x] AC-005: 零 skill 短 prompt 入口在任一 adapter 缺席時，仍會解析到同一份共通 onboarding
   source contract 且維持可獨立運作。
-* [ ] AC-006: Skill 安裝是明確、可選的使用者動作，不隨 ForgePilot 安裝自動發生。
-* [ ] AC-007: Claude Code adapter 只逐步呼叫既有 `forgepilot` CLI 命令，不擴張 `forgepilot run` 的 runtime。
-* [ ] AC-008: 兩個 adapter 對暫時 source contract、失敗即停止與人工檢閱行為的敘述一致；另行授權
+* [x] AC-006: Skill 安裝是明確、可選的使用者動作，不隨 ForgePilot 安裝自動發生。
+* [x] AC-007: Claude Code adapter 只逐步呼叫既有 `forgepilot` CLI 命令，不擴張 `forgepilot run` 的 runtime。
+* [x] AC-008: 兩個 adapter 對暫時 source contract、失敗即停止與人工檢閱行為的敘述一致；另行授權
   的 immutable pin step 會原子且逐字相同地替換兩個引用，但本 Story 不執行該 step 或任何 publish。
 
 ## Failure Cases
 
-* [ ] AC-009: 兩個 adapter 的暫時 source contract 字串不同、或任一 adapter 將它宣稱為 published
+* [x] AC-009: 兩個 adapter 的暫時 source contract 字串不同、或任一 adapter 將它宣稱為 published
   immutable identity 時，anti-drift 檢查失敗並指出兩邊各自讀到的字串或違規內容。
-* [ ] AC-010: Adapter 檔案含有禁止複製的規則關鍵字或段落時，anti-drift 檢查失敗並指出命中的檔案與內容。
+* [x] AC-010: Adapter 檔案含有禁止複製的規則關鍵字或段落時，anti-drift 檢查失敗並指出命中的檔案與內容。
 
 ## Regression Requirements
 
-* [ ] AC-011: `internal/cli`、`internal/app`、`internal/repository`、`internal/work` 的既有行為不變，且 `forgepilot run` 的 runtime 不變。
-* [ ] AC-012: ForgePilot 核心套件（`internal/cli`、`internal/app`、`internal/repository`、`internal/work`）未因本 Story 新增下載或封裝相關的相依或匯入，仍只使用標準函式庫。
-* [ ] AC-013: `go test -race -count=1 ./...` 通過。
+* [x] AC-011: `internal/cli`、`internal/app`、`internal/repository`、`internal/work` 的既有行為不變，且 `forgepilot run` 的 runtime 不變。
+* [x] AC-012: ForgePilot 核心套件（`internal/cli`、`internal/app`、`internal/repository`、`internal/work`）未因本 Story 新增下載或封裝相關的相依或匯入，仍只使用標準函式庫。
+* [x] AC-013: `go test -race -count=1 ./...` 通過。
 
 ## Acceptance Evidence
 

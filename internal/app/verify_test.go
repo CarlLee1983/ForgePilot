@@ -8,7 +8,7 @@ import (
 
 func TestVerificationVerdictFingerprintIncludesTheWholeLatestVerificationEvidence(t *testing.T) {
 	state := &work.State{
-		Goals: []work.Goal{{ID: "goal", Repository: "repo", ReviewPolicy: work.ReviewPerGoal, Status: work.GoalActive}},
+		Goals: []work.Goal{{ID: "goal", Repository: "repo", ReviewPolicy: work.ReviewPerGoal, CompletionPolicy: work.CompletionVerified, Status: work.GoalActive}},
 		WorkItems: []work.Item{{ID: "WI-001", GoalID: "goal", Status: work.Verifying, CurrentRun: &work.Run{
 			CandidateDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 		}}},

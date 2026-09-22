@@ -26,7 +26,7 @@ const smokeSpyLogVariable = "FORGEPILOT_TEST_CODEX_SPY_LOG"
 // smokeTestName is the test whose guard is under test. It is spelled out once,
 // anchored, and reused: a -run pattern that stopped matching would make every
 // assertion below vacuously true.
-const smokeTestName = "TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary"
+const smokeTestName = "TestCodexSmokeDrivesDependentWorkToGoalCompletion"
 
 // TestSmokeOptInAcceptsOnlyTheExactValueOne states the opt-in contract value by
 // value. It reads through os.Getenv rather than calling smokeOptedIn with a

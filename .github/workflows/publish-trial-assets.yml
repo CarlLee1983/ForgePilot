@@ -1,0 +1,320 @@
+name: publish unsigned trial assets
+
+# A tag push is deliberately not a publication trigger. The dispatching
+# maintainer chooses one immutable source commit; the workflow derives its
+# release tag and creates only an unsigned maintainer-trial prerelease.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Lowercase full 40-character commit SHA reachable from main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-trial-${{ inputs.commit }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    # macos-15 is an Apple Silicon GitHub-hosted runner. The local trial
+    # builder still records which architecture received the native startup
+    # check; this does not turn the artifact into supported onboarding.
+    runs-on: macos-15
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - name: Validate source identity
+        id: source
+        env:
+          INPUT_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -eu
+          case "$INPUT_COMMIT" in
+            *[!0123456789abcdef]*|???????????????????????????????????????|'')
+              echo 'commit must be a lowercase full 40-character SHA' >&2
+              exit 2
+              ;;
+          esac
+          [ "${#INPUT_COMMIT}" -eq 40 ] || {
+            echo 'commit must be a lowercase full 40-character SHA' >&2
+            exit 2
+          }
+          printf 'commit=%s\n' "$INPUT_COMMIT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.source.outputs.commit }}
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Bind the checkout to main and the requested commit
+        env:
+          COMMIT: ${{ steps.source.outputs.commit }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          [ "$(git rev-parse HEAD)" = "$COMMIT" ]
+          git merge-base --is-ancestor "$COMMIT" "origin/$DEFAULT_BRANCH"
+      - run: make verify
+      - run: go test -race -count=1 ./...
+      - name: Build and validate the complete trial bundle
+        env:
+          COMMIT: ${{ steps.source.outputs.commit }}
+          ASSET_DIR: ${{ runner.temp }}/unsigned-trial-assets
+        run: |
+          set -eu
+          scripts/release/build_trial_assets.sh --output "$ASSET_DIR" "$COMMIT"
+          [ "$(uname -m)" = arm64 ]
+          expected='forgepilot-darwin-arm64-unsigned-trial forgepilot-darwin-amd64-unsigned-trial SHA256SUMS provenance.json startup-evidence.json forgepilot-darwin-arm64-unsigned-trial.startup.txt'
+          for file in $expected; do test -f "$ASSET_DIR/$file"; done
+          [ "$(find "$ASSET_DIR" -type f | wc -l | tr -d ' ')" = 6 ]
+          (cd "$ASSET_DIR" && shasum -a 256 -c SHA256SUMS)
+          go run scripts/release/validate_json.go "$ASSET_DIR/provenance.json"
+          go run scripts/release/validate_json.go "$ASSET_DIR/startup-evidence.json"
+          grep -F "\"commit\": \"$COMMIT\"" "$ASSET_DIR/provenance.json"
+          file -b "$ASSET_DIR/forgepilot-darwin-arm64-unsigned-trial" | grep -Eq 'Mach-O.*(^|[^[:alnum:]_])arm64([^[:alnum:]_]|$)'
+          file -b "$ASSET_DIR/forgepilot-darwin-amd64-unsigned-trial" | grep -Eq 'Mach-O.*(^|[^[:alnum:]_])x86_64([^[:alnum:]_]|$)'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-trial-${{ steps.source.outputs.commit }}
+          path: ${{ runner.temp }}/unsigned-trial-assets
+          if-no-files-found: error
+          retention-days: 7
+
+  stage:
+    needs: prepare
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: macos-15
+    environment:
+      name: unsigned-trial-stage
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          fetch-depth: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-trial-${{ needs.prepare.outputs.commit }}
+          path: unsigned-trial-assets
+      - name: Create or resume a matching draft prerelease
+        env:
+          RELEASE_WRITE_TOKEN: ${{ secrets.RELEASE_WRITE_TOKEN }}
+          RELEASE_GUARD_TOKEN: ${{ secrets.RELEASE_GUARD_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+          ASSET_DIR: unsigned-trial-assets
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          tag="unsigned-trial/$COMMIT"
+          title="Unsigned maintainer trial — $COMMIT"
+          expected='forgepilot-darwin-arm64-unsigned-trial forgepilot-darwin-amd64-unsigned-trial SHA256SUMS provenance.json startup-evidence.json forgepilot-darwin-arm64-unsigned-trial.startup.txt'
+          [ -n "$RELEASE_WRITE_TOKEN" ] || { echo 'RELEASE_WRITE_TOKEN is required' >&2; exit 1; }
+          [ -n "$RELEASE_GUARD_TOKEN" ] || { echo 'RELEASE_GUARD_TOKEN is required' >&2; exit 1; }
+          export GH_TOKEN="$RELEASE_WRITE_TOKEN"
+          validate_bundle() {
+            expected_files='SHA256SUMS forgepilot-darwin-amd64-unsigned-trial forgepilot-darwin-arm64-unsigned-trial forgepilot-darwin-arm64-unsigned-trial.startup.txt provenance.json startup-evidence.json'
+            actual_files=$(find "$ASSET_DIR" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+            [ "$actual_files" = "$expected_files" ] || { echo 'transferred bundle has unexpected files' >&2; exit 1; }
+            [ "$(find "$ASSET_DIR" -type f | wc -l | tr -d ' ')" = 6 ] || { echo 'transferred bundle has nested files' >&2; exit 1; }
+            if find "$ASSET_DIR" -mindepth 1 ! -type f -print -quit | grep -q .; then echo 'transferred bundle contains a non-file entry' >&2; exit 1; fi
+            for name in $expected; do [ -f "$ASSET_DIR/$name" ] && [ ! -L "$ASSET_DIR/$name" ]; done
+            expected_checksums=$(cd "$ASSET_DIR" && shasum -a 256 forgepilot-darwin-arm64-unsigned-trial forgepilot-darwin-amd64-unsigned-trial)
+            [ "$(cat "$ASSET_DIR/SHA256SUMS")" = "$expected_checksums" ] || { echo 'SHA256SUMS does not exactly describe the two binaries' >&2; exit 1; }
+            (cd "$ASSET_DIR" && shasum -a 256 -c SHA256SUMS)
+            go run scripts/release/validate_json.go "$ASSET_DIR/provenance.json"
+            go run scripts/release/validate_json.go "$ASSET_DIR/startup-evidence.json"
+            jq -e --arg commit "$COMMIT" '. == {channel: "unsigned-trial", commit: $commit, version: ("0.0.0+commit." + $commit), assets: [{name: "forgepilot-darwin-arm64-unsigned-trial", target: "darwin/arm64"}, {name: "forgepilot-darwin-amd64-unsigned-trial", target: "darwin/amd64"}]}' "$ASSET_DIR/provenance.json" >/dev/null
+            jq -e '. == [{target: "darwin/arm64", status: "passed", command: "forgepilot-darwin-arm64-unsigned-trial --help", output: "forgepilot-darwin-arm64-unsigned-trial.startup.txt"}, {target: "darwin/amd64", status: "not-run-cross-architecture", reason: "requires native amd64 host"}]' "$ASSET_DIR/startup-evidence.json" >/dev/null
+            file -b "$ASSET_DIR/forgepilot-darwin-arm64-unsigned-trial" | grep -Eq 'Mach-O.*(^|[^[:alnum:]_])arm64([^[:alnum:]_]|$)'
+            file -b "$ASSET_DIR/forgepilot-darwin-amd64-unsigned-trial" | grep -Eq 'Mach-O.*(^|[^[:alnum:]_])x86_64([^[:alnum:]_]|$)'
+          }
+          verify_environment_branch_policy() {
+            environment="$1"
+            GH_TOKEN="$RELEASE_GUARD_TOKEN" gh api "repos/$GH_REPO/environments/$environment" --jq '.deployment_branch_policy.custom_branch_policies' | grep -Fx true
+            GH_TOKEN="$RELEASE_GUARD_TOKEN" gh api "repos/$GH_REPO/environments/$environment/deployment-branch-policies" --jq '[.branch_policies[].name] | if length == 1 and . == ["main"] then "main" else empty end' | grep -Fx main
+          }
+          verify_release_environment_policies() {
+            verify_environment_branch_policy unsigned-trial-stage
+            verify_environment_branch_policy unsigned-trial-publish
+          }
+          validate_bundle
+          # This endpoint requires an enabled immutable-release policy. Refuse
+          # before creating a draft if the repository has not been configured.
+          GH_TOKEN="$RELEASE_GUARD_TOKEN" gh api "repos/$GH_REPO/immutable-releases" --jq '.enabled' | grep -Fx true
+          verify_tag_target() {
+            git fetch --no-tags origin "refs/tags/$tag:refs/tags/$tag"
+            [ "$(git rev-parse "$tag^{commit}")" = "$COMMIT" ] || {
+              echo 'existing unsigned-trial tag targets another commit' >&2
+              exit 1
+            }
+          }
+          # Never let gh release create make a tag after an absence check. If
+          # a concurrent creator won the ref creation (GitHub reports it as a
+          # failure, normally HTTP 422), it must still prove the same target
+          # before any Release write can happen.
+          if git ls-remote --exit-code --refs origin "refs/tags/$tag" >/dev/null 2>&1; then
+            verify_tag_target
+          else
+            if ! gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$COMMIT" >/dev/null; then
+              verify_tag_target
+            fi
+            verify_tag_target
+          fi
+          if ! gh release view "$tag" --repo "$GH_REPO" --json tagName >/dev/null 2>&1; then
+            notes=$(mktemp)
+            trap 'rm -f "$notes"' EXIT HUP INT TERM
+            cat >"$notes" <<EOF
+          This is an **unsigned maintainer trial** built from commit \`$COMMIT\`.
+
+          It is not Developer ID signed, notarized, formal onboarding, supported Intel evidence, or a Gatekeeper-bypass instruction. Source-built Apple Silicon onboarding remains the supported path.
+
+          CI run: $RUN_URL
+          EOF
+            verify_release_environment_policies
+            gh release create "$tag" --repo "$GH_REPO" --target "$COMMIT" --draft --prerelease --latest=false --title "$title" --notes-file "$notes"
+          fi
+          verify_tag_target
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json tagName --jq .tagName)" = "$tag" ]
+          is_draft=$(gh release view "$tag" --repo "$GH_REPO" --json isDraft --jq .isDraft)
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json isPrerelease --jq .isPrerelease)" = true ]
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json name --jq .name)" = "$title" ]
+          notes=$(gh release view "$tag" --repo "$GH_REPO" --json body --jq .body)
+          for required_note in 'unsigned maintainer trial' 'not Developer ID signed, notarized, formal onboarding' 'supported Intel evidence' 'Gatekeeper-bypass instruction' 'Source-built Apple Silicon onboarding remains the supported path.'; do
+            printf '%s\n' "$notes" | grep -F "$required_note" >/dev/null
+          done
+          for actual in $(gh release view "$tag" --repo "$GH_REPO" --json assets --jq '.assets[].name'); do
+            case " $expected " in *" $actual "*) ;; *) echo "unexpected draft asset: $actual" >&2; exit 1 ;; esac
+          done
+          if [ "$is_draft" = false ]; then
+            [ "$(gh release view "$tag" --repo "$GH_REPO" --json isImmutable --jq .isImmutable)" = true ]
+            for name in $expected; do
+              local_digest=$(shasum -a 256 "$ASSET_DIR/$name" | awk '{print $1}')
+              remote_digest=$(gh release view "$tag" --repo "$GH_REPO" --json assets --jq ".assets[] | select(.name == \"$name\") | .digest")
+              [ "$remote_digest" = "sha256:$local_digest" ] || { echo "published asset differs: $name" >&2; exit 1; }
+            done
+            exit 0
+          fi
+          [ "$is_draft" = true ]
+          missing=''
+          for name in $expected; do
+            local_digest=$(shasum -a 256 "$ASSET_DIR/$name" | awk '{print $1}')
+            remote_digest=$(gh release view "$tag" --repo "$GH_REPO" --json assets --jq ".assets[] | select(.name == \"$name\") | .digest")
+            if [ -z "$remote_digest" ]; then
+              missing="$missing $name"
+            elif [ "$remote_digest" != "sha256:$local_digest" ]; then
+              echo "draft asset digest differs: $name" >&2
+              exit 1
+            fi
+          done
+          # No --clobber: a network interruption can be resumed only when the
+          # surviving bytes match, never by replacing a release asset.
+          for name in $missing; do
+            verify_release_environment_policies
+            gh release upload "$tag" "$ASSET_DIR/$name" --repo "$GH_REPO"
+          done
+          for name in $expected; do
+            local_digest=$(shasum -a 256 "$ASSET_DIR/$name" | awk '{print $1}')
+            remote_digest=$(gh release view "$tag" --repo "$GH_REPO" --json assets --jq ".assets[] | select(.name == \"$name\") | .digest")
+            [ "$remote_digest" = "sha256:$local_digest" ] || { echo "draft asset missing after upload: $name" >&2; exit 1; }
+          done
+
+  publish:
+    needs: [prepare, stage]
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: macos-15
+    environment:
+      name: unsigned-trial-publish
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          fetch-depth: 1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-trial-${{ needs.prepare.outputs.commit }}
+          path: unsigned-trial-assets
+      - name: Verify the draft and publish it after environment approval
+        env:
+          RELEASE_WRITE_TOKEN: ${{ secrets.RELEASE_WRITE_TOKEN }}
+          RELEASE_GUARD_TOKEN: ${{ secrets.RELEASE_GUARD_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+          ASSET_DIR: unsigned-trial-assets
+        run: |
+          set -eu
+          tag="unsigned-trial/$COMMIT"
+          title="Unsigned maintainer trial — $COMMIT"
+          expected='forgepilot-darwin-arm64-unsigned-trial forgepilot-darwin-amd64-unsigned-trial SHA256SUMS provenance.json startup-evidence.json forgepilot-darwin-arm64-unsigned-trial.startup.txt'
+          [ -n "$RELEASE_WRITE_TOKEN" ] || { echo 'RELEASE_WRITE_TOKEN is required' >&2; exit 1; }
+          [ -n "$RELEASE_GUARD_TOKEN" ] || { echo 'RELEASE_GUARD_TOKEN is required' >&2; exit 1; }
+          export GH_TOKEN="$RELEASE_WRITE_TOKEN"
+          validate_bundle() {
+            expected_files='SHA256SUMS forgepilot-darwin-amd64-unsigned-trial forgepilot-darwin-arm64-unsigned-trial forgepilot-darwin-arm64-unsigned-trial.startup.txt provenance.json startup-evidence.json'
+            actual_files=$(find "$ASSET_DIR" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+            [ "$actual_files" = "$expected_files" ] || { echo 'transferred bundle has unexpected files' >&2; exit 1; }
+            [ "$(find "$ASSET_DIR" -type f | wc -l | tr -d ' ')" = 6 ] || { echo 'transferred bundle has nested files' >&2; exit 1; }
+            if find "$ASSET_DIR" -mindepth 1 ! -type f -print -quit | grep -q .; then echo 'transferred bundle contains a non-file entry' >&2; exit 1; fi
+            for name in $expected; do [ -f "$ASSET_DIR/$name" ] && [ ! -L "$ASSET_DIR/$name" ]; done
+            expected_checksums=$(cd "$ASSET_DIR" && shasum -a 256 forgepilot-darwin-arm64-unsigned-trial forgepilot-darwin-amd64-unsigned-trial)
+            [ "$(cat "$ASSET_DIR/SHA256SUMS")" = "$expected_checksums" ] || { echo 'SHA256SUMS does not exactly describe the two binaries' >&2; exit 1; }
+            (cd "$ASSET_DIR" && shasum -a 256 -c SHA256SUMS)
+            go run scripts/release/validate_json.go "$ASSET_DIR/provenance.json"
+            go run scripts/release/validate_json.go "$ASSET_DIR/startup-evidence.json"
+            jq -e --arg commit "$COMMIT" '. == {channel: "unsigned-trial", commit: $commit, version: ("0.0.0+commit." + $commit), assets: [{name: "forgepilot-darwin-arm64-unsigned-trial", target: "darwin/arm64"}, {name: "forgepilot-darwin-amd64-unsigned-trial", target: "darwin/amd64"}]}' "$ASSET_DIR/provenance.json" >/dev/null
+            jq -e '. == [{target: "darwin/arm64", status: "passed", command: "forgepilot-darwin-arm64-unsigned-trial --help", output: "forgepilot-darwin-arm64-unsigned-trial.startup.txt"}, {target: "darwin/amd64", status: "not-run-cross-architecture", reason: "requires native amd64 host"}]' "$ASSET_DIR/startup-evidence.json" >/dev/null
+            file -b "$ASSET_DIR/forgepilot-darwin-arm64-unsigned-trial" | grep -Eq 'Mach-O.*(^|[^[:alnum:]_])arm64([^[:alnum:]_]|$)'
+            file -b "$ASSET_DIR/forgepilot-darwin-amd64-unsigned-trial" | grep -Eq 'Mach-O.*(^|[^[:alnum:]_])x86_64([^[:alnum:]_]|$)'
+          }
+          verify_environment_branch_policy() {
+            environment="$1"
+            GH_TOKEN="$RELEASE_GUARD_TOKEN" gh api "repos/$GH_REPO/environments/$environment" --jq '.deployment_branch_policy.custom_branch_policies' | grep -Fx true
+            GH_TOKEN="$RELEASE_GUARD_TOKEN" gh api "repos/$GH_REPO/environments/$environment/deployment-branch-policies" --jq '[.branch_policies[].name] | if length == 1 and . == ["main"] then "main" else empty end' | grep -Fx main
+          }
+          verify_release_environment_policies() {
+            verify_environment_branch_policy unsigned-trial-stage
+            verify_environment_branch_policy unsigned-trial-publish
+          }
+          validate_bundle
+          GH_TOKEN="$RELEASE_GUARD_TOKEN" gh api "repos/$GH_REPO/immutable-releases" --jq '.enabled' | grep -Fx true
+          git fetch --no-tags origin "refs/tags/$tag:refs/tags/$tag"
+          [ "$(git rev-parse "$tag^{commit}")" = "$COMMIT" ]
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json name --jq .name)" = "$title" ]
+          notes=$(gh release view "$tag" --repo "$GH_REPO" --json body --jq .body)
+          for required_note in 'unsigned maintainer trial' 'not Developer ID signed, notarized, formal onboarding' 'supported Intel evidence' 'Gatekeeper-bypass instruction' 'Source-built Apple Silicon onboarding remains the supported path.'; do
+            printf '%s\n' "$notes" | grep -F "$required_note" >/dev/null
+          done
+          # Naming an environment alone creates no approval barrier. The job
+          # is already pending on that environment; verify its API contract
+          # before the irreversible draft-to-public transition as well.
+          reviewer_rules=$(GH_TOKEN="$RELEASE_GUARD_TOKEN" gh api "repos/$GH_REPO/environments/unsigned-trial-publish" --jq '[.protection_rules[] | select(.type == "required_reviewers" and ((.reviewers | length) > 0))] | length')
+          [ "$reviewer_rules" -gt 0 ] || {
+            echo 'unsigned-trial-publish requires at least one required reviewer' >&2
+            exit 1
+          }
+          for actual in $(gh release view "$tag" --repo "$GH_REPO" --json assets --jq '.assets[].name'); do
+            case " $expected " in *" $actual "*) ;; *) echo "unexpected draft asset: $actual" >&2; exit 1 ;; esac
+          done
+          for name in $expected; do
+            local_digest=$(shasum -a 256 "$ASSET_DIR/$name" | awk '{print $1}')
+            remote_digest=$(gh release view "$tag" --repo "$GH_REPO" --json assets --jq ".assets[] | select(.name == \"$name\") | .digest")
+            [ "$remote_digest" = "sha256:$local_digest" ] || { echo "draft asset differs: $name" >&2; exit 1; }
+          done
+          is_draft=$(gh release view "$tag" --repo "$GH_REPO" --json isDraft --jq .isDraft)
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json isPrerelease --jq .isPrerelease)" = true ]
+          if [ "$is_draft" = false ]; then
+            [ "$(gh release view "$tag" --repo "$GH_REPO" --json isImmutable --jq .isImmutable)" = true ]
+            exit 0
+          fi
+          [ "$is_draft" = true ]
+          verify_release_environment_policies
+          gh release edit "$tag" --repo "$GH_REPO" --draft=false
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json isDraft --jq .isDraft)" = false ]
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json isPrerelease --jq .isPrerelease)" = true ]
+          [ "$(gh release view "$tag" --repo "$GH_REPO" --json isImmutable --jq .isImmutable)" = true ]

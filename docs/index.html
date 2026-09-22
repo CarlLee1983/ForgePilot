@@ -1052,7 +1052,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
         </div>
         <h3 class="pipeline-step__title">單點實作、驗證與核准邊界</h3>
         <p class="pipeline-step__desc">
-          Agent 只做指定 focused checks；ForgePilot 對 immutable Candidate 執行 canonical verification。預設 WORK_ITEM policy 須經 Human Review 才解鎖下游；GOAL policy 則保留 Goal final review。
+          Agent 只做指定 focused checks；ForgePilot 對 immutable Candidate 執行 canonical verification。預設 WORK_ITEM policy 須經 Human Review 才解鎖下游；GOAL policy 以 VERIFIED 推進依賴，並在整個 Goal 通過驗證後自動完成。
         </p>
       </article>
     </div>
@@ -1070,7 +1070,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <div class="graph-image-slot">
         <img src="images/graph-engineering.png" alt="Graph Engineering 流程：ADR、Spec 與 Story 規格匯入 Work Item 依賴圖，經隔離驗證取得 PASS Evidence，再經 Human Review 後解鎖下游工作。">
       </div>
-      <p style="margin:var(--space-sm) 0 0; color:var(--color-muted); font-size:var(--text-sm);">圖示為預設 WORK_ITEM policy：PASS 不會直接解鎖下游；Human <code>review approve</code> 使 Work Item 成為 DONE。GOAL policy 則以 VERIFIED 推進依賴，並保留 Goal final review。</p>
+      <p style="margin:var(--space-sm) 0 0; color:var(--color-muted); font-size:var(--text-sm);">圖示為預設 WORK_ITEM policy：PASS 不會直接解鎖下游；Human <code>review approve</code> 使 Work Item 成為 DONE。GOAL policy 則以 VERIFIED 推進依賴，並在整個 Goal 的 current verification 條件成立後自動完成。</p>
     </div>
 
     <!-- 實踐核心三大原則 -->
@@ -1085,7 +1085,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <div class="graph-principle">
         <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-seal"/></svg> 預算邊界與一次收斂</h4>
         <p>
-          驗證失敗才在明確的 Attempt 預算內進入 Repair 迴圈。預設 WORK_ITEM policy 的 PASS 先等 Human Review，只有 DONE 才推進下游；GOAL policy 的 VERIFIED 仍停在 Goal final review。一旦超出預算或遇到架構決策立即停下，絕不無界浪費資源。
+          驗證失敗才在明確的 Attempt 預算內進入 Repair 迴圈。預設 WORK_ITEM policy 的 PASS 先等 Human Review，只有 DONE 才推進下游；GOAL policy 的 VERIFIED 可推進依賴，全部 current verification 通過且沒有 OPEN Gate 時自動完成 Goal。一旦超出預算或遇到架構決策立即停下，絕不無界浪費資源。
         </p>
       </div>
 

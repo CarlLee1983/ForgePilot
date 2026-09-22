@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 )
 
-const SchemaVersion = 10
+const SchemaVersion = 17
 
 type GoalStatus string
 
@@ -30,6 +30,26 @@ const (
 	ReviewPerGoal     ReviewPolicy = "GOAL"
 )
 
+// CompletionPolicy is derived from ReviewPolicy: WORK_ITEM Goals retain Human
+// Review per item, while GOAL Goals complete after current machine verification.
+// Callers cannot choose a second Goal-level final-review boundary.
+type CompletionPolicy string
+
+const (
+	CompletionHuman    CompletionPolicy = "HUMAN"
+	CompletionVerified CompletionPolicy = "VERIFIED"
+)
+
+// LegacyGoalCompletion records the narrow compatibility fact asserted by a
+// schema-v11 HUMAN final-review Goal. It is intentionally separate from
+// GoalCompletionEvidence, which proves current Candidate verification.
+type LegacyGoalCompletion struct {
+	SourceSchemaVersion int              `json:"source_schema_version"`
+	CompletionPolicy    CompletionPolicy `json:"completion_policy"`
+}
+
+const LegacyHumanCompletionSourceSchemaVersion = 11
+
 type Status string
 
 const (
@@ -47,12 +67,15 @@ const (
 )
 
 type Goal struct {
-	ID           string       `json:"id"`
-	Title        string       `json:"title"`
-	Description  string       `json:"description"`
-	Repository   string       `json:"repository"`
-	Status       GoalStatus   `json:"status"`
-	ReviewPolicy ReviewPolicy `json:"review_policy"`
+	ID               string                `json:"id"`
+	Title            string                `json:"title"`
+	Description      string                `json:"description"`
+	Repository       string                `json:"repository"`
+	Status           GoalStatus            `json:"status"`
+	ReviewPolicy     ReviewPolicy          `json:"review_policy"`
+	CompletionPolicy CompletionPolicy      `json:"completion_policy"`
+	LegacyCompletion *LegacyGoalCompletion `json:"legacy_completion,omitempty"`
+	Execution        *GoalExecution        `json:"execution,omitempty"`
 	// Reason explains a Goal that was blocked or cancelled. Neither is worth
 	// recording without one: the status alone says a Goal stopped, not why.
 	Reason    string    `json:"reason"`
@@ -97,19 +120,21 @@ func (run Run) Candidate() Candidate {
 }
 
 type State struct {
-	SchemaVersion         int        `json:"schema_version"`
-	NextWorkID            int        `json:"next_work_id"`
-	NextEvidenceID        int        `json:"next_evidence_id"`
-	NextGateID            int        `json:"next_gate_id"`
-	NextVerificationRunID int        `json:"next_verification_run_id"`
-	Goals                 []Goal     `json:"goals"`
-	WorkItems             []Item     `json:"work_items"`
-	Evidence              []Evidence `json:"evidence"`
-	Gates                 []Gate     `json:"gates"`
+	SchemaVersion                int                      `json:"schema_version"`
+	NextWorkID                   int                      `json:"next_work_id"`
+	NextEvidenceID               int                      `json:"next_evidence_id"`
+	NextGateID                   int                      `json:"next_gate_id"`
+	NextVerificationRunID        int                      `json:"next_verification_run_id"`
+	NextGoalCompletionEvidenceID int                      `json:"next_goal_completion_evidence_id"`
+	Goals                        []Goal                   `json:"goals"`
+	WorkItems                    []Item                   `json:"work_items"`
+	Evidence                     []Evidence               `json:"evidence"`
+	GoalCompletionEvidence       []GoalCompletionEvidence `json:"goal_completion_evidence"`
+	Gates                        []Gate                   `json:"gates"`
 }
 
 func NewState() State {
-	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1}
+	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1}
 }
 
 func (s *State) AddGoal(id, title, description, repository string, now time.Time) error {
@@ -117,22 +142,48 @@ func (s *State) AddGoal(id, title, description, repository string, now time.Time
 }
 
 func (s *State) AddGoalWithReviewPolicy(id, title, description, repository string, policy ReviewPolicy, now time.Time) error {
+	return s.AddGoalWithPolicies(id, title, description, repository, policy, completionPolicyForReviewPolicy(policy), now)
+}
+
+// AddGoalWithPolicies creates a Goal with the completion policy implied by its
+// review policy. The explicit parameter keeps persisted/API callers honest, but
+// does not permit a HUMAN final-review boundary on a GOAL-policy Goal.
+func (s *State) AddGoalWithPolicies(id, title, description, repository string, policy ReviewPolicy, completion CompletionPolicy, now time.Time) error {
 	if id == "" || title == "" {
 		return errors.New("goal id and title are required")
 	}
 	if !validReviewPolicy(policy) {
 		return fmt.Errorf("invalid review policy %q", policy)
 	}
+	if !validCompletionPolicy(completion) {
+		return fmt.Errorf("invalid completion policy %q", completion)
+	}
+	if completion != completionPolicyForReviewPolicy(policy) {
+		return fmt.Errorf("%s review policy requires %s completion policy", policy, completionPolicyForReviewPolicy(policy))
+	}
 	if s.goal(id) != nil {
 		return fmt.Errorf("goal %q already exists", id)
 	}
-	s.Goals = append(s.Goals, Goal{ID: id, Title: title, Description: description, Repository: repository, Status: GoalActive, ReviewPolicy: policy, CreatedAt: now, UpdatedAt: now})
+	s.Goals = append(s.Goals, Goal{ID: id, Title: title, Description: description, Repository: repository, Status: GoalActive, ReviewPolicy: policy, CompletionPolicy: completion, CreatedAt: now, UpdatedAt: now})
 	return nil
 }
 
 func validReviewPolicy(policy ReviewPolicy) bool {
 	return policy == ReviewPerWorkItem || policy == ReviewPerGoal
 }
+
+func validCompletionPolicy(policy CompletionPolicy) bool {
+	return policy == CompletionHuman || policy == CompletionVerified
+}
+
+func completionPolicyForReviewPolicy(policy ReviewPolicy) CompletionPolicy {
+	if policy == ReviewPerGoal {
+		return CompletionVerified
+	}
+	return CompletionHuman
+}
+
+func usesGoalReview(policy ReviewPolicy) bool { return policy == ReviewPerGoal }
 
 func (s *State) AddWork(goalID, story string, dependencies []string, now time.Time) (Item, error) {
 	item, _, err := s.addWork(goalID, story, dependencies, "", nil, now)
@@ -371,6 +422,9 @@ func (s State) Validate() error {
 	if s.NextVerificationRunID < 1 {
 		return errors.New("next_verification_run_id must be positive")
 	}
+	if s.NextGoalCompletionEvidenceID < 1 {
+		return errors.New("next_goal_completion_evidence_id must be positive")
+	}
 	goals := map[string]Goal{}
 	for _, goal := range s.Goals {
 		if goal.ID == "" || goal.Title == "" || goal.Repository == "" {
@@ -379,8 +433,19 @@ func (s State) Validate() error {
 		if !validReviewPolicy(goal.ReviewPolicy) {
 			return fmt.Errorf("goal %q has invalid review policy %q", goal.ID, goal.ReviewPolicy)
 		}
-		if goal.ReviewPolicy == ReviewPerGoal && goal.Status == GoalCompleted {
-			return fmt.Errorf("goal %q uses GOAL review policy but is COMPLETED without final-review evidence", goal.ID)
+		if !validCompletionPolicy(goal.CompletionPolicy) {
+			return fmt.Errorf("goal %q has invalid completion policy %q", goal.ID, goal.CompletionPolicy)
+		}
+		if goal.CompletionPolicy != completionPolicyForReviewPolicy(goal.ReviewPolicy) {
+			return fmt.Errorf("goal %q uses %s review policy with incompatible %s completion policy", goal.ID, goal.ReviewPolicy, goal.CompletionPolicy)
+		}
+		if legacy := goal.LegacyCompletion; legacy != nil {
+			if goal.Status != GoalCompleted || goal.ReviewPolicy != ReviewPerGoal || goal.CompletionPolicy != CompletionVerified {
+				return fmt.Errorf("Goal %q has legacy completion provenance outside a completed GOAL/VERIFIED lifecycle", goal.ID)
+			}
+			if legacy.SourceSchemaVersion != LegacyHumanCompletionSourceSchemaVersion || legacy.CompletionPolicy != CompletionHuman {
+				return fmt.Errorf("Goal %q has invalid legacy completion provenance", goal.ID)
+			}
 		}
 		switch goal.Status {
 		case GoalActive, GoalCompleted:
@@ -427,13 +492,13 @@ func (s State) Validate() error {
 			refs[item.ExternalRef] = item.ID
 		}
 		goal := goals[item.GoalID]
-		if goal.ReviewPolicy == ReviewPerGoal && (item.Status == Review || item.Status == Done) {
+		if usesGoalReview(goal.ReviewPolicy) && (item.Status == Review || item.Status == Done) {
 			return fmt.Errorf("work item %q is %s under GOAL review policy", item.ID, item.Status)
 		}
 		switch item.Status {
 		case Pending, Ready, Running, Verifying, Review, Done:
 		case Verified:
-			if goals[item.GoalID].ReviewPolicy != ReviewPerGoal {
+			if !usesGoalReview(goals[item.GoalID].ReviewPolicy) {
 				return fmt.Errorf("work item %q is VERIFIED under %s review policy", item.ID, goals[item.GoalID].ReviewPolicy)
 			}
 		default:
@@ -513,11 +578,25 @@ func (s State) Validate() error {
 	}
 	for _, evidence := range s.Evidence {
 		item := items[evidence.WorkItemID]
-		if evidence.Type == ReviewEvidence && goals[item.GoalID].ReviewPolicy == ReviewPerGoal {
+		if evidence.Type == ReviewEvidence && usesGoalReview(goals[item.GoalID].ReviewPolicy) {
 			return fmt.Errorf("evidence %q is a Work Item review under GOAL review policy", evidence.ID)
 		}
 	}
 	if err := validateGates(s.Gates, s.NextGateID, items); err != nil {
+		return err
+	}
+	for _, goal := range s.Goals {
+		if goal.Status != GoalCompleted {
+			continue
+		}
+		if goal.CompletionPolicy == CompletionVerified {
+			if _, ok := s.GoalCompletionEvidenceFor(goal.ID); !ok && goal.LegacyCompletion == nil {
+				return fmt.Errorf("completed Goal %q uses VERIFIED completion without completion provenance", goal.ID)
+			}
+			continue
+		}
+	}
+	if err := validateGoalCompletionEvidence(s); err != nil {
 		return err
 	}
 	visiting, visited := map[string]bool{}, map[string]bool{}
@@ -541,6 +620,14 @@ func (s State) Validate() error {
 	for id := range items {
 		if err := visit(id); err != nil {
 			return err
+		}
+	}
+	for _, goal := range s.Goals {
+		if goal.Execution == nil {
+			continue
+		}
+		if err := validateGoalExecution(*goal.Execution, goal, items); err != nil {
+			return fmt.Errorf("goal %q has an invalid execution aggregate: %w", goal.ID, err)
 		}
 	}
 	return nil
@@ -624,7 +711,7 @@ func (s *State) satisfiesDependency(item Item) bool {
 		return true
 	}
 	goal := s.goal(item.GoalID)
-	return goal != nil && goal.Status == GoalActive && goal.ReviewPolicy == ReviewPerGoal &&
+	return goal != nil && goal.Status == GoalActive && usesGoalReview(goal.ReviewPolicy) &&
 		item.Status == Verified && s.OpenGateCount(item.ID) == 0
 }
 func workNumber(id string) int { n, _ := parseWorkID(id); return n }

@@ -6,15 +6,22 @@ package runner
 type StopReason string
 
 const (
-	// StopAwaitingGoalReview is the successful end of a run. It means every
-	// condition the Goal final-review projection checks now holds — not that the
-	// Goal is complete, and not that anything was approved.
+	// StopGoalCompleted is the successful end of a run. It means the Goal's
+	// current Candidate passed every Work Item check, all Gates were closed, and
+	// the Goal completion transition committed atomically.
+	StopGoalCompleted StopReason = "GOAL_COMPLETED"
+	// StopAwaitingGoalReview is retained only so historical run records remain
+	// readable; current GOAL-policy runs complete the Goal transactionally.
 	StopAwaitingGoalReview StopReason = "AWAITING_GOAL_REVIEW"
 
 	// These need a person or an external change before anything can move.
-	StopWaitGate             StopReason = "WAIT_GATE"
-	StopWaitGoal             StopReason = "WAIT_GOAL"
-	StopWaitHumanReview      StopReason = "WAIT_HUMAN_REVIEW"
+	StopWaitGate        StopReason = "WAIT_GATE"
+	StopWaitGoal        StopReason = "WAIT_GOAL"
+	StopWaitHumanReview StopReason = "WAIT_HUMAN_REVIEW"
+	// StopUserPaused records a durable execution-control request. Unlike a
+	// signal, it remains in the control sidecar and therefore cannot be
+	// accidentally resumed by a later Runner invocation.
+	StopUserPaused           StopReason = "USER_PAUSED"
 	StopNeedsHuman           StopReason = "AGENT_NEEDS_HUMAN"
 	StopAgentExecutionFailed StopReason = "AGENT_EXECUTION_FAILED"
 	StopVerificationRefused  StopReason = "VERIFICATION_REFUSED"
@@ -44,10 +51,11 @@ const (
 	StopTerminated StopReason = "TERMINATED"
 )
 
-// Exit codes. A run that reaches the Goal final-review boundary exits 0, which
-// says the machine has nothing left to do — not that the Goal is finished.
+// Exit codes. A run that completes the Goal exits 0.
 const (
-	ExitAwaitingReview = 0
+	ExitGoalCompleted = 0
+	// ExitAwaitingReview is retained for old callers and run records.
+	ExitAwaitingReview = ExitGoalCompleted
 	ExitError          = 1
 	ExitNeedsHuman     = 2
 	ExitLimit          = 3
@@ -58,9 +66,9 @@ const (
 // ExitCode maps a stop reason to the documented exit code.
 func (reason StopReason) ExitCode() int {
 	switch reason {
-	case StopAwaitingGoalReview:
-		return ExitAwaitingReview
-	case StopWaitGate, StopWaitGoal, StopWaitHumanReview, StopNeedsHuman,
+	case StopGoalCompleted, StopAwaitingGoalReview:
+		return ExitGoalCompleted
+	case StopWaitGate, StopWaitGoal, StopWaitHumanReview, StopUserPaused, StopNeedsHuman,
 		StopAgentExecutionFailed, StopVerificationRefused, StopVerificationInFlight,
 		StopScopeChanged, StopReadinessPreflight, StopStateTampered, StopRecoveryBlocked, StopStalled:
 		return ExitNeedsHuman

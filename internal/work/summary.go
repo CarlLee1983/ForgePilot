@@ -11,14 +11,13 @@ type RepositoryState struct {
 	SnapshotDigest string
 }
 
-// GoalCompletion is a read-only projection. In particular,
-// GoalAwaitingFinalReview is not a persisted Goal status and cannot complete a
-// Goal without the future Human final-review transition.
+// GoalCompletion is a read-only projection. Neither readiness value is a
+// persisted Goal status; the caller must use the matching typed transition.
 type GoalCompletion string
 
 const (
 	GoalInProgress          GoalCompletion = "in progress"
-	GoalAwaitingFinalReview GoalCompletion = "awaiting goal final review"
+	GoalReadyToComplete     GoalCompletion = "ready for automatic completion"
 	GoalBlockedCompletion   GoalCompletion = "blocked"
 	GoalDoneCompletion      GoalCompletion = "done"
 	GoalCancelledCompletion GoalCompletion = "cancelled"
@@ -30,10 +29,10 @@ type GoalSummary struct {
 	VerificationEvidenceIDs []string
 }
 
-// GoalSummary projects whether a Goal-level review boundary is ready. Durable
-// VERIFIED state is enough for dependency progression; final review readiness
-// is stricter and requires every Work Item's latest PASS to match the current
-// repository candidate and every Gate to be closed.
+// GoalSummary projects whether a GOAL-policy Goal is ready for automatic
+// completion: current PASS Evidence for every Work Item and no open Gate. The
+// matching typed action lets application recheck that exact set in its write
+// transaction before completing the Goal.
 func (s *State) GoalSummary(id string, repository RepositoryState) (GoalSummary, error) {
 	goal := s.goal(id)
 	if goal == nil {
@@ -46,6 +45,11 @@ func (s *State) GoalSummary(id string, repository RepositoryState) (GoalSummary,
 		return summary, nil
 	case GoalCompleted:
 		summary.Completion = GoalDoneCompletion
+		if completion, ok := s.GoalCompletionEvidenceFor(id); ok {
+			summary.VerificationEvidenceIDs = append([]string(nil), completion.VerificationEvidenceIDs...)
+		} else if goal.LegacyCompletion == nil {
+			summary.VerificationEvidenceIDs = s.goalVerificationEvidenceIDs(id)
+		}
 		return summary, nil
 	case GoalCancelled:
 		summary.Completion = GoalCancelledCompletion
@@ -54,25 +58,55 @@ func (s *State) GoalSummary(id string, repository RepositoryState) (GoalSummary,
 	if goal.ReviewPolicy != ReviewPerGoal {
 		return summary, nil
 	}
-	found := false
+	if verificationIDs, ready := s.goalCompletionEvidence(id, repository); ready {
+		summary.VerificationEvidenceIDs = verificationIDs
+		summary.Completion = GoalReadyToComplete
+	}
+	return summary, nil
+}
+
+func (s *State) goalVerificationEvidenceIDs(id string) []string {
 	var verificationIDs []string
-	for _, item := range s.itemsByCreation() {
-		if item.GoalID != id {
-			continue
+	for _, item := range s.itemsByCreationInGoal(id) {
+		if verification, ok := s.LatestVerification(item.ID); ok {
+			verificationIDs = append(verificationIDs, verification.ID)
 		}
+	}
+	return verificationIDs
+}
+
+// goalCompletionEvidence is the shared readiness predicate for GoalSummary and
+// CompleteVerifiedGoal. Keeping the Candidate and Gate checks here makes
+// the read-only projection and the write it authorizes impossible to widen
+// independently.
+func (s *State) goalCompletionEvidence(id string, repository RepositoryState) ([]string, bool) {
+	goal := s.goal(id)
+	if goal == nil || goal.Status != GoalActive || goal.ReviewPolicy != ReviewPerGoal {
+		return nil, false
+	}
+	var verificationIDs []string
+	found := false
+	for _, item := range s.itemsByCreationInGoal(id) {
 		found = true
 		verification, ok := s.LatestVerification(item.ID)
-		if item.Status != Verified || !ok || verification.Result != Pass || s.OpenGateCount(item.ID) > 0 ||
-			!candidateMatchesRepository(verification, repository) {
-			return summary, nil
+		matchesCurrent := ok && candidateMatchesRepository(verification, repository)
+		// Snapshot digests include the base revision. A real repository read
+		// supplies both facts, so requiring this consistency rejects a
+		// contradictory pair without changing snapshot freshness semantics for
+		// callers that intentionally supply only a digest.
+		if ok && verification.CandidateKind == SnapshotCandidate && repository.Revision != "" &&
+			verification.BaseRevision != repository.Revision {
+			matchesCurrent = false
+		}
+		if item.Status != Verified || !ok || verification.Result != Pass || s.OpenGateCount(item.ID) > 0 || !matchesCurrent {
+			return nil, false
 		}
 		verificationIDs = append(verificationIDs, verification.ID)
 	}
-	if found {
-		summary.Completion = GoalAwaitingFinalReview
-		summary.VerificationEvidenceIDs = verificationIDs
+	if !found {
+		return nil, false
 	}
-	return summary, nil
+	return verificationIDs, true
 }
 
 func candidateMatchesRepository(verification Evidence, repository RepositoryState) bool {
@@ -87,17 +121,18 @@ func candidateMatchesRepository(verification Evidence, repository RepositoryStat
 type Completion string
 
 const (
-	CompletionNotStarted            Completion = "not started"
-	CompletionImplementing          Completion = "implementing"
-	CompletionVerificationNeeded    Completion = "verification required"
-	CompletionVerificationFailed    Completion = "verification failed"
-	CompletionVerificationStale     Completion = "verification stale"
-	CompletionVerifiedForGoalReview Completion = "verified for goal review"
-	CompletionAwaitingReview        Completion = "awaiting human review"
-	CompletionChangesRequested      Completion = "changes requested"
-	CompletionBlockedByGate         Completion = "blocked by gate"
-	CompletionGoalBlocked           Completion = "goal blocked"
-	CompletionDone                  Completion = "done"
+	CompletionNotStarted                Completion = "not started"
+	CompletionImplementing              Completion = "implementing"
+	CompletionVerificationNeeded        Completion = "verification required"
+	CompletionVerificationFailed        Completion = "verification failed"
+	CompletionVerificationStale         Completion = "verification stale"
+	CompletionVerifiedForGoalCompletion Completion = "verified for goal completion"
+	CompletionAwaitingReview            Completion = "awaiting human review"
+	CompletionChangesRequested          Completion = "changes requested"
+	CompletionBlockedByGate             Completion = "blocked by gate"
+	CompletionGoalBlocked               Completion = "goal blocked"
+	CompletionGoalCompleted             Completion = "goal completed"
+	CompletionDone                      Completion = "done"
 )
 
 // WorkItemSummary is a read-only view of one Work Item's actionable state.
@@ -168,6 +203,9 @@ func summaryCompletion(summary WorkItemSummary) Completion {
 	if summary.Item.Status == Done {
 		return CompletionDone
 	}
+	if summary.Goal.Status == GoalCompleted {
+		return CompletionGoalCompleted
+	}
 	// CurrentRun is newer than every durable Evidence record. Historical FAIL or
 	// REJECTED Evidence must not make an in-flight re-verification look settled.
 	if summary.Item.Status == Verifying {
@@ -204,7 +242,7 @@ func summaryCompletion(summary WorkItemSummary) Completion {
 	case Running:
 		return CompletionImplementing
 	case Verified:
-		return CompletionVerifiedForGoalReview
+		return CompletionVerifiedForGoalCompletion
 	case Verifying:
 		return CompletionVerificationNeeded
 	default:

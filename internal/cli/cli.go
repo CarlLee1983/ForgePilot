@@ -20,9 +20,8 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 	if err == nil {
 		return 0
 	}
-	// A run that stops for a Gate, a budget or a goal review has not failed: it
-	// has finished doing what it may legally do. Its exit code says which, and
-	// there is nothing to print as an error.
+	// A run that stops for a Gate, a budget or another bounded condition has not
+	// necessarily failed: its stop reason carries the actionable outcome.
 	var status *exitStatus
 	if errors.As(err, &status) {
 		if status.err != nil {
@@ -34,7 +33,7 @@ func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
 	return 1
 }
 
-const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|reconcile|verify|run|gate|review|status>"
+const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|reconcile|verify|run|execution|gate|review|status>"
 
 // Asking what the commands are must not require an initialized repository:
 // discovering the CLI is the step before deciding to run it anywhere.
@@ -45,7 +44,10 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   init                              create .forgepilot state in the current repository
   migrate                           upgrade state written by an older binary
   goal create --id <id> --title <t> [--review-policy <work-item|goal>] [--json]
+                                    GOAL automatically completes after all checks pass
   goal <block|unblock|complete|cancel> <goal-id>
+  goal preflight --request <path> --json
+                                    inspect a reviewed Goal Plan without mutation
   work add --goal <id> --story <path> [--depends-on <work-id>] [--external-ref <ref>] [--json]
   work list --goal <id> --json     list one Goal's Work Items for machine use
   next                              recommend the next legal agent action
@@ -53,9 +55,19 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   reconcile --goal <goal-id>        recompute one Goal's PENDING/READY readiness
   verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
   run --goal <goal-id> --runtime <codex|fake> --snapshot [--dry-run]
-                                    drive one GOAL-policy goal until a person is needed
+                                    drive one GOAL-policy goal to completion or a bounded stop
   run status <run-id> [--json]      what that run concluded, and the goal's readiness now
   run resume <run-id>               continue a stopped run without resetting its budget
+  execution plan --request <path> --json
+                                    preview a reviewed Goal Plan without mutation
+  execution authorize --request <path> --approval-token <token> --by <name> --json
+                                    atomically adopt and authorize an initial Goal Plan
+	  execution resume --goal <goal-id> [--json]
+	                                    continue through the current execution authorization
+
+  execution revise plan --request <path> --json
+  execution revise authorize --request <path> --approval-token <token> --by <name> --json
+                                    preview then atomically authorize an additive reviewed revision
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
   review request <work-id>            submit a passing WORK_ITEM candidate for human review
@@ -106,6 +118,8 @@ func run(args []string, cwd string, output io.Writer) error {
 		return verify(args[1:], root, output)
 	case "run":
 		return runCommand(args[1:], root, output)
+	case "execution":
+		return executionCommand(args[1:], root, output)
 	case "gate":
 		return gate(args[1:], root, output)
 	case "review":
@@ -175,10 +189,14 @@ func createGoal(args []string, root string, output io.Writer) error {
 	default:
 		return errors.New("--review-policy must be work-item or goal")
 	}
+	completion := work.CompletionHuman
+	if policy == work.ReviewPerGoal {
+		completion = work.CompletionVerified
+	}
 	createdAt := now()
-	created := work.Goal{ID: flags.one("id"), Title: flags.one("title"), Description: flags.one("description"), Repository: root, Status: work.GoalActive, ReviewPolicy: policy, CreatedAt: createdAt, UpdatedAt: createdAt}
+	created := work.Goal{ID: flags.one("id"), Title: flags.one("title"), Description: flags.one("description"), Repository: root, Status: work.GoalActive, ReviewPolicy: policy, CompletionPolicy: completion, CreatedAt: createdAt, UpdatedAt: createdAt}
 	if err := storage.Update(root, func(state *work.State) error {
-		return state.AddGoalWithReviewPolicy(created.ID, created.Title, created.Description, root, policy, createdAt)
+		return state.AddGoalWithPolicies(created.ID, created.Title, created.Description, root, policy, completion, createdAt)
 	}); err != nil {
 		return err
 	}
@@ -214,6 +232,13 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 	if needsReason && reason == "" {
 		return errors.New("--reason is required")
 	}
+	if target == work.GoalCompleted {
+		if err := storage.Update(root, func(state *work.State) error { return state.CompleteGoal(id, now()) }); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(output, "Goal %s %s\n", id, target)
+		return err
+	}
 	if err := storage.Update(root, func(state *work.State) error {
 		switch target {
 		case work.GoalBlocked:
@@ -224,8 +249,6 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 				return fmt.Errorf("resolve current Candidate before unblocking: %w", err)
 			}
 			return state.UnblockGoalWithRepository(id, repositoryState, now())
-		case work.GoalCompleted:
-			return state.CompleteGoal(id, now())
 		default:
 			return state.CancelGoal(id, reason, now())
 		}
@@ -341,8 +364,10 @@ func next(args []string, root string, output io.Writer) error {
 	switch action.Kind {
 	case work.NextActionNone:
 		_, err = fmt.Fprintln(output, "No actionable work.")
-	case work.NextActionWaitGoalReview:
-		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: Goal %s\nReason: %s\n", action.Goal.ID, action.Reason)
+	case work.NextActionCompleteGoal:
+		_, err = fmt.Fprintf(output, "Goal %s is ready for automatic completion.\nAction: runner will complete the Goal transactionally\nReason: %s\n", action.Goal.ID, action.Reason)
+	case work.NextActionGoalCompleted:
+		_, err = fmt.Fprintf(output, "Goal %s is already completed.\n", action.Goal.ID)
 	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
 		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: %s\nReason: %s\n", action.Item.ID, action.Reason)
 	default:
@@ -411,6 +436,8 @@ func nextActionText(state *work.State, action work.NextAction) string {
 		// The recommendation names the Goal because readiness is reconciled a Goal
 		// at a time; the Work Item it is about is already on the Next: line.
 		return fmt.Sprintf("forgepilot reconcile --goal %s", action.Item.GoalID)
+	case work.NextActionCompleteGoal:
+		return "runner completes the Goal transactionally"
 	default:
 		return ""
 	}
@@ -460,11 +487,14 @@ func status(args []string, root string, output io.Writer) error {
 			return err
 		}
 		if goal.ReviewPolicy == work.ReviewPerGoal {
+			if _, err := fmt.Fprintf(output, "  Completion policy: %s\n", goal.CompletionPolicy); err != nil {
+				return err
+			}
 			summary, summaryErr := state.GoalSummary(goal.ID, work.RepositoryState{Revision: revision, SnapshotDigest: digest})
 			if summaryErr != nil {
 				return summaryErr
 			}
-			if _, err := fmt.Fprintf(output, "  Goal review: %s\n", summary.Completion); err != nil {
+			if _, err := fmt.Fprintf(output, "  Goal completion: %s\n", summary.Completion); err != nil {
 				return err
 			}
 		}
@@ -510,11 +540,12 @@ const jsonFormatVersion = "forgepilot.cli/v1"
 // They do not mirror the durable State: run paths, Evidence, and other internal
 // details remain available only through their own product projections.
 type goalJSON struct {
-	ID           string            `json:"id"`
-	Title        string            `json:"title"`
-	Description  string            `json:"description"`
-	Status       work.GoalStatus   `json:"status"`
-	ReviewPolicy work.ReviewPolicy `json:"review_policy"`
+	ID               string                `json:"id"`
+	Title            string                `json:"title"`
+	Description      string                `json:"description"`
+	Status           work.GoalStatus       `json:"status"`
+	ReviewPolicy     work.ReviewPolicy     `json:"review_policy"`
+	CompletionPolicy work.CompletionPolicy `json:"completion_policy"`
 }
 
 type workItemJSON struct {
@@ -548,7 +579,8 @@ func writeJSON(output io.Writer, value any) error {
 }
 
 func encodeGoal(goal work.Goal) goalJSON {
-	return goalJSON{ID: goal.ID, Title: goal.Title, Description: goal.Description, Status: goal.Status, ReviewPolicy: goal.ReviewPolicy}
+	completion := goal.CompletionPolicy
+	return goalJSON{ID: goal.ID, Title: goal.Title, Description: goal.Description, Status: goal.Status, ReviewPolicy: goal.ReviewPolicy, CompletionPolicy: completion}
 }
 
 func encodeWorkItem(item work.Item) workItemJSON {
@@ -604,7 +636,7 @@ func statusSummary(args []string, root string, output io.Writer) error {
 		return err
 	}
 	repositoryState := work.RepositoryState{}
-	if summary.HasVerification && summary.Item.Status != work.Done {
+	if summary.HasVerification && summary.Item.Status != work.Done && summary.Goal.Status != work.GoalCompleted {
 		if summary.Verification.CandidateKind == work.SnapshotCandidate {
 			workspace, inspectErr := repository.InspectSnapshot(context.Background(), root)
 			if inspectErr != nil {

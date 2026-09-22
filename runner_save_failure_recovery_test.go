@@ -213,21 +213,21 @@ func TestRunnerPreservesPendingWhenStateSaveFails(t *testing.T) {
 
 	// Once the group this test owns is confirmed gone, a legitimate resume opens
 	// the workspace again — without anybody editing a record by hand — and then
-	// carries the same run all the way to the Goal final-review boundary.
+	// carries the same run all the way to Goal completion.
 	// "No longer blocked" is not the claim being made here: the claim is that the
 	// machine finished its half of the work, so the exit code and the persisted
 	// stop reason are what is asserted, not the absence of a word in the output.
 	stopGroup(t, stillRunning)
 	out, code := fixture.runForge(t, agent, "run", "resume", record.RunID)
-	if code != runner.ExitAwaitingReview {
-		t.Fatalf("resume exit = %d, want %d (AWAITING_GOAL_REVIEW)\n%s", code, runner.ExitAwaitingReview, out)
+	if code != runner.ExitGoalCompleted {
+		t.Fatalf("resume exit = %d, want %d (GOAL_COMPLETED)\n%s", code, runner.ExitGoalCompleted, out)
 	}
 	resumed, err := runner.LoadRecord(fixture.root, record.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumed.Stop == nil || resumed.Stop.Reason != runner.StopAwaitingGoalReview {
-		t.Fatalf("the stored stop is %#v, want %s\n%s", resumed.Stop, runner.StopAwaitingGoalReview, out)
+	if resumed.Stop == nil || resumed.Stop.Reason != runner.StopGoalCompleted {
+		t.Fatalf("the stored stop is %#v, want %s\n%s", resumed.Stop, runner.StopGoalCompleted, out)
 	}
 	// The same run, not a fresh one that happened to finish the work.
 	if resumed.RunID != record.RunID {
@@ -292,8 +292,8 @@ func TestRunnerPreservesPendingWhenStateSaveFails(t *testing.T) {
 		t.Fatalf("the second work item recorded no attempt: %v", resumed.Attempts)
 	}
 
-	// What a person is being handed: two VERIFIED work items with real PASS
-	// Evidence behind them, and nothing the machine decided on their behalf.
+	// The Goal is completed from two VERIFIED work items with real PASS Evidence;
+	// no Work Item was marked DONE and no Human Review was fabricated.
 	state, err := storage.Load(fixture.root)
 	if err != nil {
 		t.Fatal(err)
@@ -342,38 +342,39 @@ func TestRunnerPreservesPendingWhenStateSaveFails(t *testing.T) {
 	if !found {
 		t.Fatal("goal queue is missing from state")
 	}
-	if goal.Status != work.GoalActive {
-		t.Fatalf("goal queue is %s; the runner must not complete a Goal", goal.Status)
+	if goal.Status != work.GoalCompleted {
+		t.Fatalf("goal queue is %s; the runner should complete a verified Goal", goal.Status)
 	}
 
-	// The projection, not the run record, is what says a person may now look.
+	// The projection and durable aggregate record agree on the completion proof.
 	// Only the Goal this run drove: the second Goal exists to prove cross-goal
 	// blocking and was never meant to finish.
 	summary, err := app.GoalReadiness(context.Background(), fixture.root, "queue")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Completion != work.GoalAwaitingFinalReview {
-		t.Fatalf("goal queue is %q, want %q", summary.Completion, work.GoalAwaitingFinalReview)
+	if summary.Completion != work.GoalDoneCompletion {
+		t.Fatalf("goal queue is %q, want %q", summary.Completion, work.GoalDoneCompletion)
 	}
 	// Every Evidence id the run finally stands on is the projection's own answer,
 	// so each one is durable, current against the Candidate, and the latest PASS
 	// of the Work Item it belongs to. Other Evidence from the reclaimed and
 	// re-run verification is expected and not counted.
 	claimed := resumed.Stop.EvidenceIDs
-	if len(claimed) == 0 {
-		t.Fatalf("the run cited no Evidence for the review boundary: %#v", resumed.Stop)
+	completion, hasCompletion := state.GoalCompletionEvidenceFor("queue")
+	if !hasCompletion || len(claimed) == 0 || claimed[0] != completion.ID {
+		t.Fatalf("the run does not cite its committed Goal completion: stop=%#v completion=%#v", resumed.Stop, completion)
 	}
 	// Not an independent second opinion — the Runner copies this list from the
 	// same projection. What it does say is that the list still holds when
 	// recomputed after the run ended: Evidence that had gone stale against the
 	// current Candidate would drop out of the projection and not out of the
 	// record. The order is itemsByCreation, which is deterministic.
-	if !reflect.DeepEqual(claimed, summary.VerificationEvidenceIDs) {
-		t.Fatalf("the run cites %v, the projection now cites %v", claimed, summary.VerificationEvidenceIDs)
+	if !reflect.DeepEqual(claimed[1:], summary.VerificationEvidenceIDs) {
+		t.Fatalf("the run cites %v, the projection now cites %v", claimed[1:], summary.VerificationEvidenceIDs)
 	}
 	cited := map[string]bool{}
-	for _, id := range claimed {
+	for _, id := range claimed[1:] {
 		evidence, found := evidenceByID(state, id)
 		if !found {
 			t.Fatalf("the run cites Evidence %s that is not in state", id)
@@ -451,8 +452,8 @@ func TestRunnerRecoveryDoesNotClaimFinalReviewAfterAgentFailure(t *testing.T) {
 	if code != runner.StopAgentExecutionFailed.ExitCode() {
 		t.Fatalf("resume exit = %d, want %d\n%s", code, runner.StopAgentExecutionFailed.ExitCode(), out)
 	}
-	if strings.Contains(out, string(runner.StopAwaitingGoalReview)) {
-		t.Fatalf("the run claimed the review boundary it never reached:\n%s", out)
+	if strings.Contains(out, string(runner.StopGoalCompleted)) {
+		t.Fatalf("the run claimed Goal completion it never reached:\n%s", out)
 	}
 
 	state, err := storage.Load(fixture.root)
@@ -469,9 +470,8 @@ func TestRunnerRecoveryDoesNotClaimFinalReviewAfterAgentFailure(t *testing.T) {
 	if latest, ok := state.LatestVerification("WI-002"); ok {
 		t.Fatalf("a session that never ran produced Verification Evidence: %#v", latest)
 	}
-	// The same human-review boundary the successful path is held to. A failure
-	// path is where a "just finish it" shortcut would be cheapest to add, so it
-	// is asserted here too rather than assumed to follow.
+	// A failure path is where a "just finish it" shortcut would be cheapest to
+	// add, so Goal completion remains explicitly unclaimed here.
 	for _, evidence := range state.Evidence {
 		if evidence.Type == work.ReviewEvidence {
 			t.Fatalf("the runner recorded a human review: %#v", evidence)
@@ -493,8 +493,8 @@ func TestRunnerRecoveryDoesNotClaimFinalReviewAfterAgentFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Completion == work.GoalAwaitingFinalReview {
-		t.Fatalf("goal queue is awaiting final review with %s unfinished", item.ID)
+	if summary.Completion == work.GoalReadyToComplete || summary.Completion == work.GoalDoneCompletion {
+		t.Fatalf("goal queue is complete or ready with %s unfinished", item.ID)
 	}
 }
 

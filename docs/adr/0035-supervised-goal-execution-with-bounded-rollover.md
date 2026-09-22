@@ -57,6 +57,12 @@ crash recovery 次數與到期時間，並保留 artifact 容量限制；沒有�
 不能從 Run Record／logs 猜回消耗。授權與總帳的持久化位置、原子更新與預先扣帳的
 crash 一致性由 spec 具體化，但不能把 run history 變成另一份額度權威。
 
+Artifact-byte consumption 同樣是 Execution Ledger 的 append-only stable-ID reservation，必須在
+Agent 產生輸出前扣帳；它隨 ledger digest 進入 witness，並是 revision preview／approval token
+freshness 的輸入。schema v16 以前的已授權歷史沒有可信的 artifact-byte 總帳，migration 明確標記
+為 unknown，不掃描 `.forgepilot/runs` 或 logs 重建，也不允許繼續或以降低／追加上限遮蔽未知用量；
+必須經新的明確 reauthorization 才能恢復執行。
+
 ## 自動 rollover 與明確續接
 
 | 入口／情境 | 契約 |
@@ -158,16 +164,17 @@ External Fulfillment Declaration：具名自述確認綁定計畫與授權版本
 既有 verdict guard 來丟棄誠實結果。結束後 scope 改變即停止，禁止繼續或 rollover；
 Evidence 保留，但不代表新版計畫已完成。
 
-Runner 的終點仍是等待 Goal final review。VERIFIED／machine PASS 不是 DONE 或
-Human acceptance；Goal approve／reject／completion、Goal Evidence 不在這次交付範圍。
-既有 DONE 終態與 domain typed next action 權威不變。
+GOAL policy 沒有 `completion_policy=HUMAN` 的人工終審分支；依 [ADR-0037](0037-goal-completion-has-no-human-final-review.md)，current
+verification 條件成立時 Runner 透過 typed transaction 寫入 aggregate Goal Completion Evidence 後完成。VERIFIED／machine PASS 仍不是
+Work Item DONE 或 Human acceptance。此 ADR 的授權／rollover 範圍仍待實作，既有
+DONE 終態與 domain typed next action 權威不變。
 
 ## 與既有 ADR 的關係
 
 | ADR | 保留或擴充的邊界 |
 |---|---|
 | 0005、0013、0029 | 保留自述身分、上游 Story 語意所有權與 raw-byte digest 核對；擴充 Goal manifest、覆蓋核准與外部條件契約，不由 Markdown 推論 |
-| 0016、0019 | 保留 domain lifecycle／合法動作與 Human final review；新增授權／執行控制，不保存另一份 Work Item 進度；dry-run 改採純 inspection 的能力界線 |
+| 0016、0019、0036、0037 | 保留 domain lifecycle／合法動作；GOAL completion 依 0037 原子完成且不等待 Goal final review；新增授權／執行控制，不保存另一份 Work Item 進度；dry-run 改採純 inspection 的能力界線 |
 | 0020、0021、0022 | 保留程序 ownership、pending cleanup 與原 run 限制；增加跨 run 總額度及獨立的明確授權續接入口，不延長 exact-run resume |
 | 0031 | external ref 仍是冪等鍵；新增獨立節點對應，既有 Goal 必須明確映射，不推測認領 |
 | 0033 | 擴充使用者目錄內的引擎版本保留／切換規則；Bootstrap 仍不取得目標 repository 清單或讀寫其內容 |

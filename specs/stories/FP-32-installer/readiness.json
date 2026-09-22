@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "story_ref": "specs/stories/FP-32-installer",
+  "story_md_digest": "sha256:46427361840cca5842d2ed75235b35132acbeb88fce008de254326ac9cdabf39",
+  "acceptance_md_digest": "sha256:345fc3b7020900fa11f22dfd9ed53142d89fe0b8925db2d90d192d105f38a7d8",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-002",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-003",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-004",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-005",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-006",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-007",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-008",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-009",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-010",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-011",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-012",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-013",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-014",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-015",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-016",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-017",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-018",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-019",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-020",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-021",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-022",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-023",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-024",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-025",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "fp31-trial-assets-contract",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp31-trial-assets-contract"
+        }
+      }
+    },
+    {
+      "id": "adr-0024",
+      "source": {
+        "preexisting_artifact": {
+          "path": "docs/adr/0024-onboarding-stays-outside-the-offline-cli.md"
+        }
+      }
+    },
+    {
+      "id": "adr-0025",
+      "source": {
+        "preexisting_artifact": {
+          "path": "docs/adr/0025-formal-macos-release-trust.md"
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "fp32-fixed-version-installer-contract"
+    }
+  ],
+  "decision_follow_ups": []
+}

@@ -12,9 +12,9 @@ import (
 )
 
 // The headline behaviour: three dependent Work Items are implemented and
-// verified in order, each attempt in its own session, and the run stops at the
-// Goal final-review boundary without completing anything.
-func TestRunnerDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
+// verified in order, then the default GOAL completion policy crosses the
+// terminal boundary without a human review stop.
+func TestRunnerDrivesDependentWorkToGoalCompletion(t *testing.T) {
 	fixture := newRunnerFixture(t)
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue",
@@ -27,11 +27,11 @@ func TestRunnerDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d\n%s", code, output)
 	}
-	if !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
-		t.Fatalf("output does not report the review boundary:\n%s", output)
+	if !strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatalf("output does not report Goal completion:\n%s", output)
 	}
-	if !strings.Contains(output, "not completion") {
-		t.Fatalf("output does not say this is not completion:\n%s", output)
+	if !strings.Contains(output, "completed automatically") {
+		t.Fatalf("output does not explain automatic completion:\n%s", output)
 	}
 
 	if sessions := fixture.sessions(t); len(sessions) != 3 ||
@@ -46,7 +46,7 @@ func TestRunnerDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 	evidence := map[string]string{}
 	for _, item := range state.WorkItems {
 		if item.Status == work.Done {
-			t.Fatalf("%s reached DONE; the runner must never complete work", item.ID)
+			t.Fatalf("%s reached DONE; Goal completion must not rewrite Work Item lifecycle", item.ID)
 		}
 		if item.Status != work.Verified {
 			t.Fatalf("%s is %s, want VERIFIED", item.ID, item.Status)
@@ -60,22 +60,28 @@ func TestRunnerDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 		}
 		evidence[latest.ID] = item.ID
 	}
-	if state.Goals[0].Status != work.GoalActive {
-		t.Fatalf("goal = %s; the runner must not complete a Goal", state.Goals[0].Status)
+	if state.Goals[0].Status != work.GoalCompleted {
+		t.Fatalf("goal = %s; the runner must complete the Goal", state.Goals[0].Status)
 	}
 
-	// The run record names the exact Evidence the boundary was judged on.
+	// The run record names the aggregate completion proof followed by the exact
+	// Verification Evidence IDs the transaction was judged on.
 	runID := lastRun(t, fixture.root)
 	record := loadRunRecord(t, fixture.root, runID)
 	stop := record["stop"].(map[string]any)
-	if stop["reason"] != "AWAITING_GOAL_REVIEW" {
+	if stop["reason"] != "GOAL_COMPLETED" {
 		t.Fatalf("stop = %v", stop)
 	}
-	if len(stop["evidence_ids"].([]any)) != 3 {
+	if len(stop["evidence_ids"].([]any)) != 4 || stop["evidence_ids"].([]any)[0] != "GC-001" {
 		t.Fatalf("evidence_ids = %v", stop["evidence_ids"])
 	}
+	summaryOutput, summaryCode := fixture.runForge(t, "", "status", "--work", "WI-001", "--summary")
+	if summaryCode != 0 || !strings.Contains(summaryOutput, "Completion: goal completed") || strings.Contains(summaryOutput, "Completion: goal blocked") {
+		t.Fatalf("completed Goal summary exit = %d, output = %s", summaryCode, summaryOutput)
+	}
 	// Execution history retains every Evidence produced by each shared run; the
-	// stop record above separately names only the three latest final-review IDs.
+	// stop record above separately names the aggregate completion proof followed
+	// by the three latest Verification Evidence IDs.
 	history := record["evidence_ids"].([]any)
 	if len(history) != 6 {
 		t.Fatalf("run Evidence history = %v, want all six Evidence records from three executions", history)
@@ -87,6 +93,40 @@ func TestRunnerDrivesDependentWorkToTheGoalReviewBoundary(t *testing.T) {
 			t.Fatalf("run Evidence history repeats %s: %v", id, history)
 		}
 		seen[id] = true
+	}
+}
+
+func TestRunnerCompletesVerifiedGoalWithoutHumanReview(t *testing.T) {
+	fixture := newRunnerFixture(t)
+	mustRun(t, fixture.binary, fixture.root, "init")
+	mustRun(t, fixture.binary, fixture.root, "goal", "create", "--id", "queue", "--title", "Goal queue", "--review-policy", "goal")
+	mustRun(t, fixture.binary, fixture.root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	agent := fixture.fakeAgent(t, implementsCleanly)
+
+	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	if code != 0 || !strings.Contains(output, "GOAL_COMPLETED") || !strings.Contains(output, "completed automatically") {
+		t.Fatalf("exit = %d\n%s", code, output)
+	}
+	state, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Goals[0].Status != work.GoalCompleted || state.Goals[0].CompletionPolicy != work.CompletionVerified {
+		t.Fatalf("goal = %#v", state.Goals[0])
+	}
+	if len(state.GoalCompletionEvidence) != 1 || state.GoalCompletionEvidence[0].ID != "GC-001" {
+		t.Fatalf("completion evidence = %#v", state.GoalCompletionEvidence)
+	}
+	if len(state.GoalCompletionEvidence[0].VerificationEvidenceIDs) != 1 || state.WorkItems[0].Status != work.Verified {
+		t.Fatalf("completion provenance/status = %#v / %s", state.GoalCompletionEvidence[0], state.WorkItems[0].Status)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatalf("completed state invalid: %v", err)
+	}
+	stop := loadRunRecord(t, fixture.root, lastRun(t, fixture.root))["stop"].(map[string]any)
+	ids := stop["evidence_ids"].([]any)
+	if len(ids) != 2 || ids[0] != "GC-001" {
+		t.Fatalf("stop evidence IDs = %v", ids)
 	}
 }
 

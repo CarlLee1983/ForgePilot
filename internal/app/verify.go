@@ -59,6 +59,12 @@ var ErrVerificationInterrupted = errors.New("canonical check was interrupted")
 // governance state moved underneath it proves nothing about anything.
 var ErrStateWrittenDuringCheck = errors.New("the canonical check changed .forgepilot/state.json")
 
+// ErrExecutionBindingDrift reports that a Runner-bound plan or authorization
+// changed at the verification boundary. It is separate from the verdict guard:
+// a verification may have honestly produced Candidate Evidence before this
+// later governance change was observed.
+var ErrExecutionBindingDrift = errors.New("the execution plan or authorization changed during verification")
+
 // VerifyOptions carries what one verification needs beyond the Work Item.
 // Timeout of zero means no deadline, which is the CLI's existing behaviour:
 // ADR-0004 decided a Verification Run has no built-in time limit.
@@ -66,6 +72,13 @@ type VerifyOptions struct {
 	Snapshot bool
 	Timeout  time.Duration
 	Now      func() time.Time
+	// ExecutionGoalID and ExecutionAuthorizationDigest are an optional Runner
+	// boundary guard. Standalone verification leaves them empty and retains its
+	// existing contract; a Runner supplies both so a revision is rejected before
+	// a check starts and reported after an already-started check's Evidence is
+	// committed.
+	ExecutionGoalID              string
+	ExecutionAuthorizationDigest string
 }
 
 type FanoutSkip = work.FanoutSkip
@@ -266,6 +279,12 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 	if err := state.CanBeginVerification(id); err != nil {
 		return result, refuse(err)
 	}
+	// A Runner-bound verification must recheck its plan and authorization before
+	// any Candidate capture, checkout, or runtime preflight can begin. The later
+	// check immediately before beginRun closes the preparation window as well.
+	if err := verifyExecutionBinding(root, options); err != nil {
+		return result, err
+	}
 	verificationRunID := state.NextVerificationRun()
 	startedAt := options.now()
 	candidate := work.Candidate{Kind: work.CommitCandidate}
@@ -411,6 +430,9 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 	if _, err := fmt.Fprintf(output, "Log: %s\n", logFile); err != nil {
 		return result, err
 	}
+	if err := verifyExecutionBinding(root, options); err != nil {
+		return result, err
+	}
 
 	plan, err := beginRun(id, root, candidate, worktree, logFile, runtime.Versions(), verificationRunID, startedAt)
 	if err != nil {
@@ -518,6 +540,9 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		return result, updateErr
 	}
 	result.Evidence, result.EvidenceSet, result.Skipped, result.HasEvidence, result.Status = evidence, evidenceSet, skipped, true, status
+	if err := verifyExecutionBinding(root, options); err != nil {
+		return result, err
+	}
 	// Failing to refresh dependency readiness is a warning: the Evidence stands
 	// and a rerun repairs it. Failing to confirm a process group started while
 	// reading those facts is not — the next step must not begin, whatever the
@@ -542,6 +567,19 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		_, err = fmt.Fprintf(output, "warning: dependency readiness was not refreshed: %v; Evidence was preserved; repair repository access and rerun %s\n", factsErr, VerificationRetryCommand(id, candidate))
 	}
 	return result, err
+}
+
+func verifyExecutionBinding(root string, options VerifyOptions) error {
+	if options.ExecutionGoalID == "" && options.ExecutionAuthorizationDigest == "" {
+		return nil
+	}
+	if options.ExecutionGoalID == "" || options.ExecutionAuthorizationDigest == "" {
+		return fmt.Errorf("%w: incomplete Runner execution binding", ErrExecutionBindingDrift)
+	}
+	if err := ValidateCurrentExecutionBindings(root, options.ExecutionGoalID, options.ExecutionAuthorizationDigest); err != nil {
+		return fmt.Errorf("%w: %v", ErrExecutionBindingDrift, err)
+	}
+	return nil
 }
 
 // VerificationRetryCommand names the command that would rerun this exact
@@ -579,9 +617,10 @@ func verdictFingerprint(root, id string) (string, error) {
 func verificationVerdictFingerprint(state *work.State, id string) (string, error) {
 	latest, ok := state.LatestVerification(id)
 	type goalInputs struct {
-		ID           string            `json:"id"`
-		Repository   string            `json:"repository"`
-		ReviewPolicy work.ReviewPolicy `json:"review_policy"`
+		ID               string                `json:"id"`
+		Repository       string                `json:"repository"`
+		ReviewPolicy     work.ReviewPolicy     `json:"review_policy"`
+		CompletionPolicy work.CompletionPolicy `json:"completion_policy"`
 	}
 	verdict := struct {
 		Item     *work.Item     `json:"item,omitempty"`
@@ -597,7 +636,7 @@ func verificationVerdictFingerprint(state *work.State, id string) (string, error
 		for goalIndex := range state.Goals {
 			if state.Goals[goalIndex].ID == item.GoalID {
 				goal := state.Goals[goalIndex]
-				verdict.Goal = &goalInputs{ID: goal.ID, Repository: goal.Repository, ReviewPolicy: goal.ReviewPolicy}
+				verdict.Goal = &goalInputs{ID: goal.ID, Repository: goal.Repository, ReviewPolicy: goal.ReviewPolicy, CompletionPolicy: goal.CompletionPolicy}
 				break
 			}
 		}

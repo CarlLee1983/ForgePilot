@@ -8,6 +8,8 @@ import (
 
 	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/process"
+	"github.com/CarlLee1983/ForgePilot/internal/storage"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 // settleExecution is the one safety criterion a recovery has, for every kind of
@@ -132,17 +134,55 @@ func (runner *Runner) recover() (bool, error) {
 // process.
 func (runner *Runner) recoverPending() (bool, error) {
 	for _, pending := range runner.record.UnresolvedPending() {
+		completed, err := runner.committedGoalCompletionRead(pending)
+		if err != nil {
+			return false, err
+		}
+		if completed {
+			runner.print("Recovering run %s: the committed Goal completion proves its final facts read finished\n", runner.record.RunID)
+			runner.record.resolvePending(pending.ID)
+			if err := runner.save(); err != nil {
+				return false, err
+			}
+			continue
+		}
 		safe, detail := judgePending(pending)
 		if !safe {
 			return true, runner.stopNow(StopRecoveryBlocked, detail+manualRecoveryHint(runner.record.RunID))
 		}
 		runner.print("Recovering run %s: %s is confirmed stopped\n", runner.record.RunID, pending.Kind)
 		runner.record.resolvePending(pending.ID)
+		if pending.Kind == KindAgentSession && runner.record.Worker != nil &&
+			runner.record.Worker.WorkItemID == pending.WorkItemID && runner.record.Worker.Identity == pending.Identity {
+			runner.record.Worker = nil
+		}
 		if err := runner.save(); err != nil {
 			return false, err
 		}
 	}
 	return false, nil
+}
+
+// committedGoalCompletionRead recognizes the one PENDING_START facts read that
+// can be proved complete after a crash: it was purpose-tagged immediately
+// before the atomic completion transaction, and durable aggregate evidence
+// proves that transaction returned only after its Candidate reads succeeded.
+// All other unresolved executions keep the ordinary fail-closed recovery rule.
+func (runner *Runner) committedGoalCompletionRead(pending PendingExecution) (bool, error) {
+	if pending.Purpose != PurposeGoalCompletion || pending.Kind != KindGit ||
+		pending.Phase != PhasePendingStart || pending.WorkItemID != "" || pending.Identity != (agent.ProcessIdentity{}) {
+		return false, nil
+	}
+	state, err := storage.Load(runner.options.Root)
+	if err != nil {
+		return false, fmt.Errorf("check committed Goal completion while recovering run %s: %w", runner.record.RunID, err)
+	}
+	goal, ok := state.GoalByID(runner.record.GoalID)
+	if !ok || goal.Status != work.GoalCompleted || goal.CompletionPolicy != work.CompletionVerified {
+		return false, nil
+	}
+	_, hasCompletion := state.GoalCompletionEvidenceFor(goal.ID)
+	return hasCompletion, nil
 }
 
 // readFacts runs one between-steps Git read with the same protection every
@@ -159,10 +199,18 @@ func (runner *Runner) recoverPending() (bool, error) {
 // — a stalled Goal, most often, which is an engineering statement about code
 // that did nothing wrong.
 func (runner *Runner) readFacts(itemID string, read func(ctx context.Context) error) (bool, error) {
+	return runner.readFactsWithPurpose(itemID, "", read)
+}
+
+func (runner *Runner) readFactsForGoalCompletion(read func(ctx context.Context) error) (bool, error) {
+	return runner.readFactsWithPurpose("", PurposeGoalCompletion, read)
+}
+
+func (runner *Runner) readFactsWithPurpose(itemID, purpose string, read func(ctx context.Context) error) (bool, error) {
 	execution := runner.newFactsExecution()
 	defer execution.release()
 	pendingID := runner.record.addPending(PendingExecution{
-		Kind: KindGit, Phase: PhasePendingStart, WorkItemID: itemID,
+		Kind: KindGit, Phase: PhasePendingStart, WorkItemID: itemID, Purpose: purpose,
 		Location: runner.options.Root, ObservedAt: runner.now()})
 	if err := runner.save(); err != nil {
 		runner.record.resolvePending(pendingID)

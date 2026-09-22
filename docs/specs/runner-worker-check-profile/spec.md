@@ -142,7 +142,7 @@ This P0 deliberately adds no repository manifest.
     `go test -race -count=1 ./...` merely to satisfy a repository-wide Story AC;
   - those Story AC obligations are **transferred, not waived**: Runner owns canonical `make verify`, and the
     human-directed primary integration/final workflow owns `go test -race -count=1 ./...` after Runner reaches
-    `AWAITING_GOAL_REVIEW` and before Human final acceptance;
+    `GOAL_COMPLETED` and before Human final acceptance;
   - outside a Runner-launched Agent Session, the existing pre-work and final requirements remain unchanged.
 - The primary integration/final workflow must report the exact non-canonical command and exit result in its final
   review handoff. That report is observable acceptance evidence for the repository workflow, not ForgePilot

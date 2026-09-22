@@ -304,7 +304,7 @@ func TestACanonicalCheckLeavesNoBackgroundChildBehindOnAPass(t *testing.T) {
 	agent := fixture.fakeAgent(t, implementsCleanly)
 
 	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
-	if code != 0 || !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
+	if code != 0 || !strings.Contains(output, "GOAL_COMPLETED") {
 		t.Fatalf("exit = %d\n%s", code, output)
 	}
 	if countResult(evidenceResults(t, fixture.root), work.Pass) == 0 {

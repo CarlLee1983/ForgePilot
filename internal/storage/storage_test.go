@@ -2,6 +2,8 @@ package storage
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -64,7 +66,7 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 	// The second fixture must name a schema version this binary does not yet
 	// support. It has to be raised with every bump: left behind, it silently
 	// stops testing rejection and starts testing that a valid state loads.
-	for _, contents := range []string{"{", `{"schema_version":11,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
+	for _, contents := range []string{"{", `{"schema_version":18,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`} {
 		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -72,6 +74,127 @@ func TestLoadRejectsCorruptAndFutureState(t *testing.T) {
 			t.Fatalf("accepted %q", contents)
 		}
 	}
+}
+
+func TestUpgradeV15RefusesArtifactAccountingUnderAnOlderHeader(t *testing.T) {
+	contents := []byte(`{"schema_version":15,"goals":[{"id":"g","execution":{"ledger":{"artifact_accounting_start_revision":1}}}]}`)
+	if _, err := upgrade(contents, 15); err == nil || !strings.Contains(err.Error(), "artifact-byte accounting") {
+		t.Fatalf("v15 artifact-accounting header contradiction = %v", err)
+	}
+}
+
+func TestUpgradeV15ResealsAuthorizedExecutionWithUnknownArtifactUsage(t *testing.T) {
+	now := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
+	state := work.NewState()
+	if err := state.AddGoalWithPolicies("g", "Goal", "", "/workspace", work.ReviewPerGoal, work.CompletionVerified, now); err != nil {
+		t.Fatal(err)
+	}
+	item, err := state.AddWork("g", "specs/stories/migrate", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.Repeat("a", 64)
+	binding := work.GoalPlanBinding{Revision: 1, RequestSHA256: "sha256:" + sha, PlanID: "plan-1", PlanRevision: 1,
+		ManifestSHA256: sha, Manifest: work.ExecutionArtifactBinding{Path: "manifest.json", SHA256: sha}, CoverageReviewID: "review-1",
+		CoverageReview: work.ExecutionArtifactBinding{Path: "coverage.json", SHA256: sha}, Declaration: work.ExecutionArtifactBinding{Path: "plan.json", SHA256: sha},
+		Nodes: []work.ExecutionPlanNodeBinding{{PlanNodeRef: "node-1", StoryRef: item.StoryRef, WorkItemID: item.ID,
+			ReadinessContract: work.ExecutionArtifactBinding{Path: "readiness.json", SHA256: sha}}}, AdoptedAt: now}
+	execution := work.GoalExecution{GoalID: "g", Workspace: "/workspace", PlanBindings: []work.GoalPlanBinding{binding},
+		Authorizations: []work.ExecutionAuthorization{{Revision: 1, GoalID: "g", Workspace: "/workspace", RequestSHA256: "sha256:" + sha,
+			ApprovalToken: "sha256:" + sha, Approver: "operator", AuthorizedAt: now, ExpiresAt: now.Add(time.Hour),
+			Caps: work.ExecutionCaps{MaxSteps: 2, MaxTechnicalAttemptsPerNode: 1, MaxRuns: 1, MaxRecoveries: 1,
+				Artifacts: work.ExecutionArtifactLimits{MaxHandoffBytes: 1, MaxWriteBytes: 1, MaxRunBytes: 2, MaxTotalBytes: 2}},
+			WorkerProfile: work.WorkerProfile{Runtime: "codex", ExecutablePath: "/bin/codex", ExecutableSHA256: sha, Model: "test", Effort: "medium", Sandbox: "workspace-write"}}},
+		Ledger: work.ExecutionLedger{Revision: 1, AuthorizationRevision: 1, NodeAttempts: []work.ExecutionNodeAttempts{{PlanNodeRef: "node-1"}}}}
+	if err := state.AdoptInitialExecution(execution); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the actual v15 ledger/witness seals, whose JSON omitted the
+	// three v16 artifact-accounting fields. This is deliberately not a v16
+	// aggregate with only its header rewound.
+	legacyExecution := state.Goals[0].Execution
+	legacyExecution.Ledger.Digest = legacyV15LedgerDigestForTest(t, legacyExecution.Ledger)
+	legacyExecution.Witness.LedgerDigest = legacyExecution.Ledger.Digest
+	legacyExecution.Witness.Digest = ""
+	legacyExecution.Witness.Digest = legacyExecutionDigestForTest(t, "forgepilot.goal-execution-witness/v1", legacyExecution.Witness)
+	contents, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(contents, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy["schema_version"] = float64(15)
+	goal := legacy["goals"].([]any)[0].(map[string]any)
+	ledger := goal["execution"].(map[string]any)["ledger"].(map[string]any)
+	delete(ledger, "artifact_accounting_start_revision")
+	delete(ledger, "artifact_bytes_consumed")
+	legacyContents, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := upgrade(legacyContents, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrated.Validate(); err != nil {
+		t.Fatalf("migrated v15 authorization is invalid: %v", err)
+	}
+	got, ok := migrated.GoalByID("g")
+	if !ok || got.Execution == nil || got.Execution.Ledger.ArtifactAccountingStartRevision != 0 || got.Execution.Ledger.ArtifactBytesConsumed != 0 {
+		t.Fatalf("migration did not preserve unknown artifact usage: %#v", got)
+	}
+	if got.Execution.Witness.LedgerDigest != got.Execution.Ledger.Digest {
+		t.Fatalf("migration did not reseal witness: %#v", got.Execution.Witness)
+	}
+	var corrupt map[string]any
+	if err := json.Unmarshal(legacyContents, &corrupt); err != nil {
+		t.Fatal(err)
+	}
+	corruptLedger := corrupt["goals"].([]any)[0].(map[string]any)["execution"].(map[string]any)["ledger"].(map[string]any)
+	corruptLedger["digest"] = "sha256:" + strings.Repeat("b", 64)
+	corruptContents, err := json.Marshal(corrupt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upgrade(corruptContents, 15); err == nil || !strings.Contains(err.Error(), "v15 execution aggregate") {
+		t.Fatalf("corrupt v15 execution aggregate was migrated: %v", err)
+	}
+}
+
+type legacyV15LedgerForTest struct {
+	Revision               int                                   `json:"revision"`
+	AuthorizationRevision  int                                   `json:"authorization_revision"`
+	StepsConsumed          int                                   `json:"steps_consumed"`
+	RunsConsumed           int                                   `json:"runs_consumed"`
+	RecoveriesConsumed     int                                   `json:"recoveries_consumed"`
+	NodeAttempts           []work.ExecutionNodeAttempts          `json:"node_attempts"`
+	Reservations           []work.ExecutionReservation           `json:"reservations,omitempty"`
+	NeedsHumanDispositions []work.ExecutionNeedsHumanDisposition `json:"needs_human_dispositions,omitempty"`
+	Digest                 string                                `json:"digest"`
+}
+
+func legacyV15LedgerDigestForTest(t *testing.T, ledger work.ExecutionLedger) string {
+	t.Helper()
+	return legacyExecutionDigestForTest(t, "forgepilot.execution-ledger/v1", legacyV15LedgerForTest{
+		Revision: ledger.Revision, AuthorizationRevision: ledger.AuthorizationRevision, StepsConsumed: ledger.StepsConsumed,
+		RunsConsumed: ledger.RunsConsumed, RecoveriesConsumed: ledger.RecoveriesConsumed, NodeAttempts: ledger.NodeAttempts,
+		Reservations: ledger.Reservations, NeedsHumanDispositions: ledger.NeedsHumanDispositions,
+	})
+}
+
+func legacyExecutionDigestForTest(t *testing.T, domain string, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(domain))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(encoded)
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func TestRuntimeMetadataIsDefensivelyCopiedBeforeSaving(t *testing.T) {
@@ -254,6 +377,269 @@ func TestMigrateUpgradesLegacyStateAndKeepsBackup(t *testing.T) {
 	}
 }
 
+func TestV10GoalMigrationEnablesContinuousGoalCompletion(t *testing.T) {
+	contents := []byte(`{"schema_version":10,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"next_verification_run_id":1,"goals":[` +
+		`{"id":"auto","title":"Auto","description":"","repository":"/repo","status":"ACTIVE","review_policy":"GOAL"},` +
+		`{"id":"human","title":"Human","description":"","repository":"/repo","status":"ACTIVE","review_policy":"WORK_ITEM"}],` +
+		`"work_items":[],"evidence":[],"gates":[]}`)
+	state, err := upgrade(contents, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auto, ok := state.GoalByID("auto")
+	if !ok || auto.CompletionPolicy != work.CompletionVerified {
+		t.Fatalf("migrated GOAL completion policy = %#v, want VERIFIED", auto)
+	}
+	human, ok := state.GoalByID("human")
+	if !ok || human.CompletionPolicy != work.CompletionHuman {
+		t.Fatalf("migrated WORK_ITEM completion policy = %#v, want HUMAN", human)
+	}
+	if state.NextGoalCompletionEvidenceID != 1 || state.SchemaVersion != work.SchemaVersion {
+		t.Fatalf("migrated completion counters/version = %d / %d", state.NextGoalCompletionEvidenceID, state.SchemaVersion)
+	}
+	if err := state.Validate(); err != nil {
+		t.Fatalf("migrated state invalid: %v", err)
+	}
+}
+
+func TestMigrateV11ConvertsGoalHumanCompletionAndKeepsBackup(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	root, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := work.State{
+		SchemaVersion: 11, NextWorkID: 1, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1,
+		NextGoalCompletionEvidenceID: 1,
+		Goals: []work.Goal{{ID: "g", Title: "Goal", Repository: root, Status: work.GoalActive,
+			ReviewPolicy: work.ReviewPerGoal, CompletionPolicy: work.CompletionHuman}},
+	}
+	contents, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath(filepath.Join(root, stateDirectory)), contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if migrated, err := Migrate(root); err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	backup, err := os.ReadFile(statePath(filepath.Join(root, stateDirectory)) + ".v11.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backup, contents) {
+		t.Fatal("v11 backup does not preserve the original HUMAN Goal snapshot")
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal, ok := state.GoalByID("g")
+	if !ok || goal.CompletionPolicy != work.CompletionVerified || goal.Status != work.GoalActive || state.SchemaVersion != work.SchemaVersion {
+		t.Fatalf("migrated Goal = %#v, schema %d; want ACTIVE VERIFIED under v13", goal, state.SchemaVersion)
+	}
+}
+
+func TestMigrateV11PreservesCompletedHumanGoalWithLegacyProvenance(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	root, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC)
+	revision := "1111111111111111111111111111111111111111"
+	legacy := work.NewState()
+	legacy.SchemaVersion = 11
+	if err := legacy.AddGoalWithPolicies("g", "Goal", "", root, work.ReviewPerGoal, work.CompletionVerified, now); err != nil {
+		t.Fatal(err)
+	}
+	legacy.Goals[0].CompletionPolicy = work.CompletionHuman
+	item, err := legacy.AddWork("g", "specs/stories/a", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Start(item.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.BeginVerification(item.ID, revision, "/tmp/worktree", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.RecordVerificationWithRepository(item.ID, revision, "make verify", 0, work.RepositoryState{Revision: revision}, now); err != nil {
+		t.Fatal(err)
+	}
+	legacy.Goals[0].Status = work.GoalCompleted
+	legacy.Goals[0].UpdatedAt = now
+	contents, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath(filepath.Join(root, stateDirectory)), contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if migrated, err := Migrate(root); err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	backup, err := os.ReadFile(statePath(filepath.Join(root, stateDirectory)) + ".v11.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backup, contents) {
+		t.Fatal("v11 backup does not preserve the original completed HUMAN Goal state")
+	}
+	path := statePath(filepath.Join(root, stateDirectory))
+	migratedBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal, ok := state.GoalByID("g")
+	if !ok || goal.Status != work.GoalCompleted || goal.CompletionPolicy != work.CompletionVerified || state.SchemaVersion != work.SchemaVersion {
+		t.Fatalf("migrated Goal = %#v, schema %d; want COMPLETED VERIFIED under v13", goal, state.SchemaVersion)
+	}
+	if !goal.CreatedAt.Equal(now) || !goal.UpdatedAt.Equal(now) {
+		t.Fatalf("migration changed Goal timestamps: created=%s updated=%s, want both %s", goal.CreatedAt, goal.UpdatedAt, now)
+	}
+	if len(state.GoalCompletionEvidence) != 0 {
+		t.Fatalf("legacy HUMAN provenance was misrepresented as automatic completion evidence: %#v", state.GoalCompletionEvidence)
+	}
+	if goal.LegacyCompletion == nil || goal.LegacyCompletion.SourceSchemaVersion != 11 ||
+		goal.LegacyCompletion.CompletionPolicy != work.CompletionHuman {
+		t.Fatalf("legacy completion provenance = %#v", goal.LegacyCompletion)
+	}
+	if state.NextGoalCompletionEvidenceID != legacy.NextGoalCompletionEvidenceID {
+		t.Fatalf("migration changed the automatic completion evidence counter from %d to %d", legacy.NextGoalCompletionEvidenceID, state.NextGoalCompletionEvidenceID)
+	}
+	if afterLoad, err := os.ReadFile(path); err != nil || !bytes.Equal(afterLoad, migratedBytes) {
+		t.Fatalf("loading migrated state rewrote it: err=%v", err)
+	}
+}
+
+func TestMigrateV12PreservesGoalCompletionAndAddsNoExecution(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	root, err := canonicalRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC)
+	revision := "1111111111111111111111111111111111111111"
+	legacy := work.NewState()
+	if err := legacy.AddGoalWithPolicies("g", "Goal", "", root, work.ReviewPerGoal, work.CompletionVerified, now); err != nil {
+		t.Fatal(err)
+	}
+	item, err := legacy.AddWork("g", "specs/stories/a", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Start(item.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.BeginVerification(item.ID, revision, "/tmp/worktree", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.RecordVerificationWithRepository(item.ID, revision, "make verify", 0, work.RepositoryState{Revision: revision}, now); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := legacy.GoalSummary("g", work.RepositoryState{Revision: revision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.CompleteVerifiedGoal("g", work.RepositoryState{Revision: revision}, summary.VerificationEvidenceIDs, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("completed state fixture is invalid: %v", err)
+	}
+	legacy.SchemaVersion = 12
+	contents, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath(filepath.Join(root, stateDirectory)), contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if migrated, err := Migrate(root); err != nil || !migrated {
+		t.Fatalf("Migrate = %v, %v", migrated, err)
+	}
+	backup, err := os.ReadFile(statePath(filepath.Join(root, stateDirectory)) + ".v12.bak")
+	if err != nil || !bytes.Equal(backup, contents) {
+		t.Fatalf("v12 backup = %v, err=%v", backup, err)
+	}
+	migratedBytes, err := os.ReadFile(statePath(filepath.Join(root, stateDirectory)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal, ok := state.GoalByID("g")
+	if !ok || goal.CompletionPolicy != work.CompletionVerified || goal.Status != work.GoalCompleted ||
+		state.SchemaVersion != work.SchemaVersion || len(state.GoalCompletionEvidence) != 1 || goal.Execution != nil {
+		t.Fatalf("migrated Goal/state = %#v / %#v; want completion preserved and no inferred execution under v13", goal, state)
+	}
+	after, err := os.ReadFile(statePath(filepath.Join(root, stateDirectory)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, migratedBytes) {
+		t.Fatal("loading a migrated v13 state rewrote it")
+	}
+	if _, err := os.Stat(statePath(filepath.Join(root, stateDirectory)) + ".v13.bak"); !os.IsNotExist(err) {
+		t.Fatalf("migration created an unexpected v13 backup: %v", err)
+	}
+}
+
+func TestUpgradeV12RefusesExecutionDataUnderstatedByHeader(t *testing.T) {
+	contents := []byte(`{"schema_version":12,"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"next_verification_run_id":1,"next_goal_completion_evidence_id":1,"goals":[{"id":"g","title":"Goal","description":"","repository":"/repo","status":"ACTIVE","review_policy":"WORK_ITEM","completion_policy":"HUMAN","execution":{}}],"work_items":[],"evidence":[],"gates":[],"goal_completion_evidence":[]}`)
+	if _, err := upgrade(contents, 12); err == nil || !strings.Contains(err.Error(), "already carries execution authorization data") {
+		t.Fatalf("understated v12 execution data error = %v", err)
+	}
+}
+
+func TestV10MigrationRefusesCompletionFieldsUnderstatedByItsHeader(t *testing.T) {
+	for name, fields := range map[string]string{
+		"completion policy":  `"completion_policy":"HUMAN"`,
+		"completion counter": `"next_goal_completion_evidence_id":1`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			goalFields := `"id":"g","title":"Goal","description":"","repository":"/repo","status":"ACTIVE","review_policy":"GOAL"`
+			stateFields := `"next_work_id":1,"next_evidence_id":1,"next_gate_id":1,"next_verification_run_id":1`
+			if strings.Contains(fields, "completion_policy") {
+				goalFields += `,` + fields
+			} else {
+				stateFields += `,` + fields
+			}
+			contents := []byte(`{"schema_version":10,` + stateFields + `,"goals":[{` + goalFields + `}],"work_items":[],"evidence":[],"gates":[]}`)
+			if _, err := upgrade(contents, 10); err == nil || !strings.Contains(err.Error(), "already carries") {
+				t.Fatalf("understated schema header error = %v", err)
+			}
+		})
+	}
+}
+
 // v2State writes a schema v2 snapshot carrying accumulated Evidence, the shape
 // M2 left behind.
 func v2State(t *testing.T, root string) string {
@@ -377,7 +763,7 @@ func TestMigrateRefusesToDiscardWhatAStepWouldCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 10`, `"schema_version": 1`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 17`, `"schema_version": 1`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}
@@ -770,7 +1156,7 @@ func TestMigrateUpgradesV7GoalsToPerWorkItemReviewPolicy(t *testing.T) {
 }
 
 func TestUpgradeV8AssignsDistinctLegacyRunIDs(t *testing.T) {
-	state, err := upgrade([]byte(v8VerificationState()), 8)
+	state, err := upgrade([]byte(v8VerificationState(t)), 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,6 +1188,7 @@ func TestUpgradeV9AddsEmptyExternalReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	contents = stripV11Fields(t, contents)
 	contents = bytes.Replace(contents, []byte(`,"external_ref":""`), nil, 1)
 	if bytes.Contains(contents, []byte(`"external_ref"`)) {
 		t.Fatalf("failed to construct field-absent v9 fixture: %s", contents)
@@ -811,8 +1198,8 @@ func TestUpgradeV9AddsEmptyExternalReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upgrade = %v", err)
 	}
-	if upgraded.SchemaVersion != 10 {
-		t.Fatalf("schema version = %d, want 10", upgraded.SchemaVersion)
+	if upgraded.SchemaVersion != 17 {
+		t.Fatalf("schema version = %d, want 17", upgraded.SchemaVersion)
 	}
 	if got := upgraded.WorkItems[0].ExternalRef; got != "" {
 		t.Fatalf("migrated external reference = %q, want empty", got)
@@ -823,6 +1210,7 @@ func TestUpgradeV9AddsEmptyExternalReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	contents = stripV11Fields(t, contents)
 	if _, err := upgrade(contents, 9); err == nil || !strings.Contains(err.Error(), "already carries an external reference") {
 		t.Fatalf("upgrade understated v9 external reference = %v", err)
 	}
@@ -854,6 +1242,7 @@ func TestMigrateV9AddsEmptyExternalReferencesAndKeepsBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	contents = stripV11Fields(t, contents)
 	contents = bytes.Replace(contents, []byte(`,"external_ref":""`), nil, 1)
 	if err := os.WriteFile(filepath.Join(root, stateDirectory, "state.json"), contents, 0600); err != nil {
 		t.Fatal(err)
@@ -874,7 +1263,7 @@ func TestMigrateV9AddsEmptyExternalReferencesAndKeepsBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.SchemaVersion != 10 || state.WorkItems[0].ExternalRef != "" {
+	if state.SchemaVersion != work.SchemaVersion || state.WorkItems[0].ExternalRef != "" {
 		t.Fatalf("migrated state = %#v", state)
 	}
 }
@@ -905,7 +1294,7 @@ func TestUpgradeV8RefusesPreexistingRunIdentity(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			var state work.State
-			if err := json.Unmarshal([]byte(v8VerificationState()), &state); err != nil {
+			if err := json.Unmarshal([]byte(v8VerificationState(t)), &state); err != nil {
 				t.Fatal(err)
 			}
 			mutate(&state)
@@ -920,7 +1309,8 @@ func TestUpgradeV8RefusesPreexistingRunIdentity(t *testing.T) {
 	}
 }
 
-func v8VerificationState() string {
+func v8VerificationState(t *testing.T) string {
+	t.Helper()
 	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 	zero := 0
 	state := work.State{
@@ -936,8 +1326,42 @@ func v8VerificationState() string {
 			Command: "make verify", ExitCode: &zero, Result: work.Pass, CreatedAt: now,
 		}},
 	}
-	encoded, _ := json.Marshal(state)
-	return string(encoded)
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(stripV11Fields(t, encoded))
+}
+
+// stripV11Fields makes JSON fixtures written with today's Go structs match the
+// actual snapshot shape from before schema v11 introduced these fields.
+func stripV11Fields(t *testing.T, contents []byte) []byte {
+	t.Helper()
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatal(err)
+	}
+	delete(state, "next_goal_completion_evidence_id")
+	delete(state, "goal_completion_evidence")
+	var goals []map[string]json.RawMessage
+	if raw := state["goals"]; len(raw) > 0 {
+		if err := json.Unmarshal(raw, &goals); err != nil {
+			t.Fatal(err)
+		}
+		for _, goal := range goals {
+			delete(goal, "completion_policy")
+		}
+		encodedGoals, err := json.Marshal(goals)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state["goals"] = encodedGoals
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func TestMigrateRefusesV7HeaderThatUnderstatesReviewPolicy(t *testing.T) {
@@ -957,7 +1381,7 @@ func TestMigrateRefusesV7HeaderThatUnderstatesReviewPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewound := strings.Replace(string(current), `"schema_version": 10`, `"schema_version": 7`, 1)
+	rewound := strings.Replace(string(current), `"schema_version": 17`, `"schema_version": 7`, 1)
 	if rewound == string(current) {
 		t.Fatalf("failed to rewind the version header of %s", current)
 	}

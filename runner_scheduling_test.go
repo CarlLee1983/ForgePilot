@@ -16,7 +16,7 @@ import (
 // Candidate makes earlier PASSes stale, and the work that joins two branches
 // cannot start until its own prerequisites are current again. Deferring those
 // re-verifications is scheduling, not forgiveness — every one of them is still
-// owed before the Goal reaches its review boundary.
+// owed before the Goal can complete.
 func TestConvergingDependenciesPayTheirDeferredReverifications(t *testing.T) {
 	fixture := newRunnerFixture(t, "a.md", "b.md", "c.md", "d.md")
 	mustRun(t, fixture.binary, fixture.root, "init")
@@ -57,9 +57,9 @@ func TestConvergingDependenciesPayTheirDeferredReverifications(t *testing.T) {
 			t.Fatalf("%s is %s", item.ID, item.Status)
 		}
 	}
-	// Every PASS names the current Candidate: that is what the final-review
-	// boundary checks, and reaching it is what exit 0 claimed.
-	if !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
+	// Every PASS names the current Candidate: that is what Goal completion checks,
+	// and reaching it is what exit 0 claimed.
+	if !strings.Contains(output, "GOAL_COMPLETED") {
 		t.Fatalf("output:\n%s", output)
 	}
 }
@@ -195,8 +195,8 @@ func TestALiveVerificationElsewhereStopsTheRunWithoutClaimingCompletion(t *testi
 	if !strings.Contains(output, "VERIFICATION_IN_FLIGHT") {
 		t.Fatalf("output:\n%s", output)
 	}
-	if strings.Contains(output, "AWAITING_GOAL_REVIEW") {
-		t.Fatal("a live verification was reported as readiness for final review")
+	if strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatal("a live verification was reported as Goal completion")
 	}
 }
 

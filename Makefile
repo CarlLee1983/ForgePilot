@@ -5,6 +5,7 @@ verify:
 	go vet ./...
 	go test ./...
 	sh scripts/release/build_trial_assets_test.sh
+	sh scripts/release/publish_trial_assets_workflow_test.sh
 	sh scripts/onboarding/onboarding_test.sh
 	sh scripts/skills/check_adapters_test.sh
 	sh scripts/skills/short_prompt_regression_test.sh

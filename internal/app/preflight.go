@@ -120,14 +120,15 @@ type GoalPreflightGoal struct {
 	ReviewPolicy work.ReviewPolicy `json:"reviewPolicy"`
 }
 type GoalPreflightProjection struct {
-	Version        string                       `json:"version"`
-	Goal           GoalPreflightGoal            `json:"goal"`
-	Manifest       *GoalPlanManifest            `json:"manifest,omitempty"`
-	CoverageReview *GoalPlanCoverageReview      `json:"coverageReview,omitempty"`
-	SourceBindings []GoalPlanSourceBinding      `json:"sourceBindings,omitempty"`
-	NodeMappings   []GoalPlanNodeMapping        `json:"nodeMappings,omitempty"`
-	Diagnostics    []GoalPreflightDiagnostic    `json:"diagnostics"`
-	Facts          map[string]GoalPreflightFact `json:"facts"`
+	Version              string                       `json:"version"`
+	Goal                 GoalPreflightGoal            `json:"goal"`
+	Manifest             *GoalPlanManifest            `json:"manifest,omitempty"`
+	CoverageReview       *GoalPlanCoverageReview      `json:"coverageReview,omitempty"`
+	coverageReviewSHA256 string                       `json:"-"`
+	SourceBindings       []GoalPlanSourceBinding      `json:"sourceBindings,omitempty"`
+	NodeMappings         []GoalPlanNodeMapping        `json:"nodeMappings,omitempty"`
+	Diagnostics          []GoalPreflightDiagnostic    `json:"diagnostics"`
+	Facts                map[string]GoalPreflightFact `json:"facts"`
 }
 
 var (
@@ -204,6 +205,23 @@ func parseGoalPreflightRequest(body []byte) (GoalPreflightRequest, error) {
 // supplied artifact/source files and existing ForgePilot state. Validation
 // failures are returned as diagnostics (and a projection), not mutations.
 func PreflightGoalPlan(ctx context.Context, root string, request GoalPreflightRequest) (GoalPreflightProjection, error) {
+	state, err := storage.Load(root)
+	if err != nil {
+		p := newGoalPreflightProjection()
+		setPreflightFact(&p, "goal", "unavailable", nil)
+		p.fail("state-unavailable", err.Error())
+		return p, err
+	}
+	return preflightGoalPlanForState(ctx, root, request, state, func(manifest GoalPlanManifest) error {
+		return validateGoalPlanMapping(state.WorkItems, request.GoalID, manifest, request.NodeMappings)
+	})
+}
+
+// preflightGoalPlanForState keeps artifact parsing and verification identical
+// for initial adoption and revision admission. The caller supplies the one
+// registration rule appropriate to its state transaction.
+func preflightGoalPlanForState(ctx context.Context, root string, request GoalPreflightRequest, state work.State,
+	validateRegistration func(GoalPlanManifest) error) (GoalPreflightProjection, error) {
 	p := newGoalPreflightProjection()
 	if err := ctx.Err(); err != nil {
 		return p, err
@@ -215,12 +233,6 @@ func PreflightGoalPlan(ctx context.Context, root string, request GoalPreflightRe
 	if request.GoalID == "" || !validArtifactPath(request.ManifestPath) || !validArtifactPath(request.CoverageReviewPath) {
 		p.fail("invalid-request", "goalId, manifestPath, and coverageReviewPath are required")
 		return p, nil
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		setPreflightFact(&p, "goal", "unavailable", nil)
-		p.fail("state-unavailable", err.Error())
-		return p, err
 	}
 	goal, ok := state.GoalByID(request.GoalID)
 	if !ok {
@@ -267,8 +279,9 @@ func PreflightGoalPlan(ctx context.Context, root string, request GoalPreflightRe
 		return p, nil
 	}
 	p.CoverageReview = &review
+	p.coverageReviewSHA256 = digest(reviewBytes)
 	setPreflightFact(&p, "coverageReview", "observed", review.ReviewID)
-	if err := validateGoalPlanMapping(state.WorkItems, request.GoalID, manifest, request.NodeMappings); err != nil {
+	if err := validateRegistration(manifest); err != nil {
 		setPreflightFact(&p, "registration", "unavailable", nil)
 		p.fail("mapping-mismatch", err.Error())
 		return p, nil

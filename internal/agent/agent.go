@@ -39,6 +39,10 @@ type Question struct {
 	Question string   `json:"question"`
 	Options  []string `json:"options,omitempty"`
 	Context  string   `json:"context,omitempty"`
+	// ExternalFact names the one offline-unverifiable fact a person may later
+	// self-declare. It is deliberately distinct from options: a fact wait is
+	// not a Gate and ForgePilot must not fabricate one for it.
+	ExternalFact string `json:"external_fact,omitempty"`
 }
 
 // Result is the structured hand-back from one session. It is untrusted content:
@@ -162,6 +166,14 @@ func (result Result) validate() error {
 	case NeedsHuman:
 		if result.Question == nil || strings.TrimSpace(result.Question.Question) == "" {
 			return &ProtocolError{Detail: "needs_human result states no question"}
+		}
+		if result.Question.ExternalFact != "" {
+			if strings.TrimSpace(result.Question.ExternalFact) == "" || strings.ContainsAny(result.Question.ExternalFact, "\r\n") {
+				return &ProtocolError{Detail: "needs_human external fact is invalid"}
+			}
+			if len(result.Question.Options) != 0 {
+				return &ProtocolError{Detail: "needs_human external fact cannot carry Gate options"}
+			}
 		}
 	case ExecutionFailed:
 		if strings.TrimSpace(result.Error) == "" {

@@ -32,7 +32,7 @@ Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不�
    - **Work Item DAG 拓撲編排**：以 `goal create` 建立目標，`work add --story <ref> --depends-on <prereqs>` 將所有 Stories 組裝為嚴密的有向無環圖（DAG）。未滿足依賴者為 `PENDING`，滿足者推進至 `READY`。
    - **單點實作與驗證**：由 Runner 派發專屬 Agent Session 接單實作；Agent 只執行交接指定的 focused checks。Agent 回報 `implementation_finished` 後，ForgePilot 才在 explicit `verify` 或 Runner 的 verification orchestration 中，對 immutable Candidate 的隔離 checkout 執行 repository canonical `make verify` 並保存 Evidence。
    - **預算約束與一次收斂**：驗證失敗才在明確的 Attempt 預算內進入有限 Repair 迴圈；超限或遇架構決策（Gate）立即中斷等待人類。預設 `WORK_ITEM` policy 的 PASS 先進 REVIEW，只有 Human `review approve` 成為 DONE 才解鎖下游；`GOAL` policy 的 PASS 才可成為 VERIFIED 以推進依賴。
-   - **拓撲順序與最終邊界**：ForgePilot 始終握有合法轉移與順序仲裁權，即時提供依確定排序選出的 `next` 建議動作；其他 independently READY Work Item 仍可合法 `start`。Runner 只把 `GOAL` policy 推進至等待 Goal final review；它不自動完成 Goal 或跨越任何 Human Review 邊界。
+   - **拓撲順序與完成邊界**：ForgePilot 始終握有合法轉移與順序仲裁權，即時提供依確定排序選出的 `next` 建議動作；其他 independently READY Work Item 仍可合法 `start`。GOAL policy 在 current Candidate 驗證條件全部成立後由 Runner 原子完成 Goal，不設人工 final-review 停止模式。
 
 Breaking change、architecture trade-off、security-sensitive decision、production operation、destructive action、scope expansion、ambiguous requirement、merge／release authorization 都需要明確 Human Decision。M3 起這些決策以 Gate 表示並保存；merge／release authorization 仍不在產品範圍內，Gate resolution 不授予該權限。
 
@@ -62,6 +62,11 @@ fresh approval。細節見 [ADR-0038](adr/0038-versioned-bootstrap-generation-re
 是未來 signed-prebuilt path 的受保護分發工作，不影響核心 CLI 的離線邊界。完整取捨見 ADR-0030、ADR-0032；
 未來 signed binary 的門檻仍由 ADR-0025 保存。
 
+CI 可以把 unsigned maintainer trial bundle 綁到固定 commit、完整 gate、checksum 與 immutable prerelease，
+但這些只提供 transport integrity 與可審閱的發佈證據，不能替代 Apple execution trust。CI 的 draft 與
+publish 必須分開，後者由 protected environment 的 Human approval 決定；它不會將 trial asset 提升為
+正式安裝或 onboarding 支援。細節見 ADR-0034。
+
 ## Implementation boundaries
 
 M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/ForgePilot`。CLI 只負責參數、呈現與錯誤映射；domain rules 集中管理，不直接呼叫 filesystem、Git 或 subprocess。
@@ -85,7 +90,7 @@ M1 使用 Go 1.25.5 與標準函式庫，module 為 `github.com/CarlLee1983/Forg
 
 | 物件 | 目標欄位 | 啟用階段 |
 |---|---|---|
-| Goal | `id`, `title`, `description`, `repository`, `status`, `review_policy`, `created_at`, `updated_at` | M1；`review_policy` 於 Goal-level Review Policy 加入 |
+| Goal | `id`, `title`, `description`, `repository`, `status`, `review_policy`, `completion_policy`, optional `legacy_completion`, `created_at`, `updated_at` | M1；`review_policy` 於 Goal-level Review Policy、`completion_policy` 於 schema v11 加入；`legacy_completion` 供 v11→v12 保留既有 COMPLETED HUMAN Goal |
 | Work Item | `id`, `goal_id`, `story_ref`, `status`, `depends_on`, `created_at`, `updated_at` | M1 |
 | Work Item run | `current_run`（Verification Run ID、Candidate identity、worktree path、started_at、log path、resolved runtime；閒置時為 null） | M2；`log path` 於 M5、Candidate kind／base／digest 於 P0-001、runtime 於 P1-004、run ID 於 schema v9 加入 |
 | Work Item claim | `claimed_by` | 待定；M1 不建立 Agent 身分或 lease 協定 |
@@ -191,13 +196,13 @@ M3 完成某個 Work Item 時，在同一 state transaction 中只更新該 prer
 
 DONE 是終態，不因後續 commit 重開，也沒有 reopen 操作；需要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄。詳見 [ADR-0006](adr/0006-done-is-terminal.md)。不能把「Gate 已 resolve」直接等同於 READY 或 DONE。
 
-### Goal-level Review Policy 與 schema v8
+### Goal-level Review Policy、自動完成與 schema v12
 
-Goal 的 `review_policy` 是持久化 enum：`WORK_ITEM` 為預設且完整保留既有行為，`GOAL` 把例行 Human Review 邊界移至 Goal final review。CLI 僅在 `goal create` 接受 `--review-policy work-item|goal`；它不是 `--skip-review` 或每次命令可選的 bypass。`GOAL` 下 Work Item PASS 轉為 VERIFIED，只有它可依 policy 推進下游；其 prerequisite 進入重驗或新開 OPEN Gate 時，已 READY downstream 依同一 central predicate 回到 PENDING，並在 fresh PASS／Gate closure 後重新 READY。Goal BLOCKED 只阻擋推進、保留既有 status；verification FAIL／INTERRUPTED 與 Candidate freshness 均照常阻擋或要求重驗。
+Goal 的 `review_policy` 是持久化 enum：`WORK_ITEM` 為預設且完整保留逐件 Human Review，`GOAL` 省略 Work Item 人工審查、讓 PASS 轉為 VERIFIED 並推進下游；當整個 Goal 的 current-verification 條件成立時會自動完成，不設 Goal final-review 停止模式。CLI 僅在 `goal create` 接受 `--review-policy work-item|goal`；它不是 `--skip-review` 或每次命令可選的 bypass。GOAL-policy prerequisite 進入重驗或新開 OPEN Gate 時，已 READY downstream 依同一 central predicate 回到 PENDING，並在 fresh PASS／Gate closure 後重新 READY。Goal BLOCKED 只阻擋推進、保留既有 status；verification FAIL／INTERRUPTED 與 Candidate freshness 均照常阻擋或要求重驗。
 
-Goal final readiness 是 fail-closed 的純 projection，不是 Goal status、transition 或自動完成：只在 ACTIVE、非空的 `GOAL` Goal 中，所有 Work Item 都為 VERIFIED、其 latest Verification 都是 PASS 且仍匹配目前 COMMIT／SNAPSHOT Candidate、並且沒有 OPEN Gate 時成立。它保留構成 target 的 Verification Evidence IDs，供將來建立精確 aggregate Evidence。`status` 呈現 policy 與此 readiness；`next` 在沒有合法 agent action 時回報等待 Goal final review，stale VERIFIED 則仍優先建議 reverify。
+Goal completion readiness 是 fail-closed 的純 projection：只在 ACTIVE、非空的 `GOAL` Goal 中，所有 Work Item 都為 VERIFIED、其 latest Verification 都是 PASS 且仍匹配目前 COMMIT／SNAPSHOT Candidate、並且沒有 OPEN Gate 時成立。它直接呈現為型別化 `COMPLETE_GOAL` action；application service 在單一 `storage.Update` 內再次解析 Candidate、核對 exact Verification Evidence IDs，追加 `GC-*` Goal completion evidence，再把 Goal 設為 `COMPLETED`。Work Item 保持 VERIFIED，不改寫成 DONE。
 
-此切片尚未提供 goal-level `review approve`／`reject`、Goal Evidence 或 Runner；因此 `goal complete` 對 `GOAL` policy 一律拒絕。這刻意分開「可安全推進工程」和「Human final acceptance」，避免 machine PASS 被誤當作完成。未來只能在這個 projection 上加入接受精確 Evidence ID 集合的 Goal Evidence 與 Runner，而不能回頭將 VERIFIED 解釋為 DONE。Schema v8 對 Goal 新增必填 `review_policy`；migration 將 v7 與更舊 state 明確填為 `WORK_ITEM`，先備份 `state.json.v<n>.bak`。rollback 是手動還原該備份，沒有 downgrade。
+CLI 不接受 completion-policy 選項；state 中該欄位由 Review Policy 推導，`GOAL` 為 `VERIFIED`、`WORK_ITEM` 為 `HUMAN`。Schema v11 新增此欄位、Goal completion evidence collection 與 counter；schema v12 移除 GOAL 的 HUMAN 終審模式。v11→v12 migration 將舊 GOAL/HUMAN 正規化為 VERIFIED；原 ACTIVE 等未完成狀態不變，原 COMPLETED 狀態則帶上獨立的 `{source_schema_version: 11, completion_policy: HUMAN}` legacy marker，不偽造 Candidate 或 Verification evidence，也不推進 completion counter。已完成 GOAL/VERIFIED Goal 必須恰有一種 provenance：current aggregate Goal completion evidence 或 legacy marker。Migration 建立 `state.json.v11.bak`；更舊 state 逐版遷移並備份；rollback 是手動還原相應備份，沒有 downgrade。此 optional 欄位在 v12 正式發布前加入；舊 v12 binary strict-decode 帶 marker 的 state 會失敗。歷史 run record 的 `AWAITING_GOAL_REVIEW` 保留為唯讀相容值，新的 Runner 不會產生它。決策見 [ADR-0037](adr/0037-goal-completion-has-no-human-final-review.md)。
 
 ### Candidate Verification fan-out 與 schema v9
 
@@ -302,11 +307,11 @@ Schema v6 對 `current_run` 與每筆 Evidence 新增 `candidate_kind`、`base_r
 
 ### P0-003 Actionable Next
 
-`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING；可驗證條件成立且 candidate stale 的 REVIEW；可合法前進的工作——已 READY 者建議 `start`，PENDING 但依賴已滿足者建議 `reconcile`，兩者共用同一個 created-at／numeric-ID 排序與同一個 `advanceable` 判準；再來才是 GOAL-policy 下 candidate stale 的 VERIFIED 重驗。GOAL policy 每換一個 Candidate 都會讓先前 VERIFIED 變 stale，若讓它們永遠優先，連續任務會在每一步重驗整條歷史；延後不放寬 freshness，Goal final review boundary 仍要求每件工作都有匹配目前 Candidate 的 PASS，欠下的重驗必須在總審前補完。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；PASS 留在 RUNNING，直到 agent 完成 AC audit 後明確執行 `review request`。REVIEW／VERIFIED 的 freshness 一律復用 Candidate identity：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
+`next` 的資料流與 summary 相同：domain state + current repository facts → `ActionableNext()` projection → CLI formatter。Projection 不是 lifecycle state，也不持久化。它按以下順序選擇一件工作：可驗證條件成立的 RUNNING；可驗證條件成立且 candidate stale 的 REVIEW；可合法前進的工作——已 READY 者建議 `start`，PENDING 但依賴已滿足者建議 `reconcile`，兩者共用同一個 created-at／numeric-ID 排序與同一個 `advanceable` 判準；再來才是 GOAL-policy 下 candidate stale 的 VERIFIED 重驗。GOAL policy 每換一個 Candidate 都會讓先前 VERIFIED 變 stale，若讓它們永遠優先，連續任務會在每一步重驗整條歷史；延後不放寬 freshness，`COMPLETE_GOAL` 前仍要求每件工作都有匹配目前 Candidate 的 PASS，欠下的重驗必須先補完。RUNNING 的最新 Verification 為 FAIL 時，projection 稱為 repair；PASS 留在 RUNNING，直到 agent 完成 AC audit 後明確執行 `review request`。REVIEW／VERIFIED 的 freshness 一律復用 Candidate identity：COMMIT 比 HEAD，SNAPSHOT 比 workspace digest。
 
-Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW／VERIFIED 是否仍可重驗由 `Verifiable` 決定，READY 是否可開始、PENDING 是否可恢復都由同一個 `advanceable` predicate 決定——這也是 `next` 不會推薦一個 `reconcile` 隨即回報 unchanged 的原因。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal、fresh PASS REVIEW 缺 Work Item Human Review，或完整 Goal candidate 等待 final review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
+Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW／VERIFIED 是否仍可重驗由 `Verifiable` 決定，READY 是否可開始、PENDING 是否可恢復都由同一個 `advanceable` predicate 決定——這也是 `next` 不會推薦一個 `reconcile` 隨即回報 unchanged 的原因。沒有 agent action 時，projection 才可回報最早的 human-only blocker：OPEN Gate、非 ACTIVE Goal，或 fresh PASS REVIEW 缺 Work Item Human Review；PENDING dependency 與 VERIFYING 不被虛構為 Human wait。Goal 完成條件成立時回報 `COMPLETE_GOAL`，不等待人工終審。CLI 的 Action 欄永遠只是文字推薦，不能執行或持久化任何 transition。
 
-completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。GOAL policy 的 fresh VERIFIED 顯示 `verified for goal review`，stale 時仍顯示 `verification stale`。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。summary 只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
+completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。GOAL policy 的 fresh VERIFIED 顯示 `verified for goal completion`，stale 時仍顯示 `verification stale`。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。summary 只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
 
 ### P1-004 Deterministic Runtime Resolution 與 schema v7
 
@@ -371,7 +376,7 @@ OPEN Gate 必須阻擋工作推進。Resolve 需保存明確 Decision 與時間�
 5. **DONE 的可逆性**：終態，無 reopen。詳見 [ADR-0006](adr/0006-done-is-terminal.md)。
 6. **完成的達成方式**：不提供獨立的完成指令。`review approve` 在同一交易內檢查條件，滿足就進入 DONE 並解鎖下游。詳見 [ADR-0008](adr/0008-approval-completes-work.md)。
 7. **多筆結果的判定**：同一 revision 各取最新一筆——DONE 要求最新 Verification 為 PASS 且最新 Human Review 為 APPROVED。曾經出現過即算數會讓「重跑以確認 PASS 是否穩定」反過來變成漏洞。
-8. **Goal lifecycle**：提供 `goal block` / `unblock` / `complete` / `cancel`。COMPLETED 是人手動宣告且要求全部 Work Item 皆為 DONE，不由系統推斷——自動標記會產生一個需要退回 ACTIVE 的可逆狀態，與 DONE 不可逆的立場矛盾。Goal 轉為非 ACTIVE 時，底下活躍的工作維持原狀但無法推進；進行中的 Verification Run 跑完仍須記錄其 Evidence，那是已發生的事實。
+8. **Goal lifecycle**：提供 `goal block` / `unblock` / `complete` / `cancel`。WORK_ITEM policy 的 COMPLETED 仍由人工宣告且要求全部 Work Item DONE；VERIFIED GOAL policy 則在 current Candidate 的 PASS／Gate 條件於單一交易內成立時自動寫入 COMPLETED，Work Item 保持 VERIFIED。COMPLETED 是終態，不需要退回 ACTIVE；Goal 轉為非 ACTIVE 時，底下活躍的工作維持原狀但無法推進；進行中的 Verification Run 跑完仍須記錄其 Evidence，那是已發生的事實。
 
 ### M3 schema v3
 
@@ -424,6 +429,9 @@ Schema v4 相對 v3 只有新增：`schema_version` 改為 4、Evidence 加入�
 Plan Node Reference 對應 Work Item；同 Goal 修訂保留既有節點／Story reference／依賴。
 Execution Authorization 的歷史與消耗跨 run／修訂保留，各版本綁定計畫、Worker Profile、
 固定 ForgePilot 引擎、顯式總額度與到期時間；只在單 run steps／duration 用完且條件仍有效時自動續接。
+Artifact byte 使用量在 Agent 輸出前由 Goal-owned Execution Ledger 以 append-only stable-ID
+reservation 扣除；不能由 run history 或 logs 回推。schema v15 的既有 authorization 因缺少此事實
+而標為 unknown 並 fail closed，直到明確 reauthorization，而不是猜測或重設累計消耗。
 授權層明確續接與 exact-run resume 分開；所有 Runner 入口共用授權，既有 run 經明確切換後保留為歷史。
 背景執行獨立於 Main Agent Session，使用者暫停必須持久化並明確 resume。
 CLI、主 Session 與首版唯讀 TUI 共用進度判定來源，inspection 不啟動 subprocess；
@@ -444,9 +452,20 @@ Runner 由使用者明確啟動，對單一 Goal 循序執行：取得下一個�
 | `internal/app` | CLI 與 Runner 共用的 orchestration：Goal-scoped typed 查詢、start、reconcile、verification、Gate 開立 |
 | `internal/agent` | Agent runtime 邊界：啟動本機 coding CLI、交接內容、結果驗證、程序群組控制 |
 | `internal/runner` | 執行迴圈、session 邊界、預算、期限與停止判定、execution history |
+| `internal/control` | `.forgepilot/execution-control.json` 的 pause／wait／declaration 記錄與短暫 control lock；不讀寫 Work Item lifecycle 或 Evidence |
 | `internal/process` | 受管理程序群組的啟動、有界終止與清理確認，`agent` 與 `repository` 共用 |
 
 `internal/work` 仍是純狀態機，沒有新增 interface；Git 仍只在 `internal/repository`；原子保存與鎖仍只在 `internal/storage`。verification orchestration 從 `internal/cli/verify.go` 搬到 `internal/app`，CLI 的 `verify` 變成薄殼，輸出文字與退出碼不變——Runner 使用的是同一段程式，不是複製品。
+
+FP-56 的 Execution Control 是另一份 versioned sidecar，不放進 `state.json`
+或 `run.json`：前者會把一個使用者控制操作誤判為 governance-state
+tampering，後者由活著的 Runner 重複整檔替換，會遺失並行 stop。Runner
+只在「讀取 control 為 clear → 保存 pending → 啟動 worker → 保存 identity」
+的窄窗口持有 control lock；stop 取得同一把鎖後先保存 pause，再依既有
+fail-closed ownership 規則要求 worker 停止。lock 釋放後的 worker 等待不
+佔用 control lock。外部 declaration 是 append-only 的具名自述，對 exact
+wait/node/plan binding/authorization revision 有效；它不等於 Evidence、Gate
+resolution 或 resume。
 
 Agent runtime（Codex 等 coding CLI）與 Verification toolchain（Candidate checkout 宣告的 Go／Node／Python）是兩個不同的邊界。agent adapter 不進入 [P1-004](#p1-004-deterministic-runtime-resolution-與-schema-v7) 的 runtime resolution。
 
@@ -454,7 +473,7 @@ Agent runtime（Codex 等 coding CLI）與 Verification toolchain（Candidate ch
 
 Runner 呼叫 `State.ActionableNextForGoal(goalID, repository)` 取得有型別的 `NextAction`，不解析任何 CLI 輸出。Goal-scoped 與全域查詢共用同一份 priority／legality 實作；篩選只作用在候選集合，依賴與 freshness 仍然看完整 state。`State.GoalStall` 把「沒有合法動作」分類成 VERIFYING、Gate、依賴未滿足、Goal 非 ACTIVE、空 Goal 或未知；VERIFYING 是 live 還是 orphan 由 `internal/app` 以既有的 flock 判斷，因為那不是狀態機能回答的事。
 
-Runner 能做的寫入只有四種既有 transition：start、Goal readiness reconciliation、verification orchestration，以及 agent 以至少兩個選項回報 `needs_human` 時的 bounded `OpenGate`。最後一種只會增加阻擋，不會放行；Runner 不寫 VERIFIED／DONE、不核准 review、不解除 Gate、不完成 Goal。理由記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md)。
+Runner 能做的寫入包含既有的 start、Goal readiness reconciliation、verification orchestration，以及 agent 以至少兩個選項回報 `needs_human` 時的 bounded `OpenGate`；對符合條件的 GOAL 執行 typed `COMPLETE_GOAL`，但不直接寫 lifecycle state。它不寫 Work Item DONE、不核准 Human review、不解除 Gate；completion 的判定與 aggregate evidence 由 application／domain transaction 擁有。舊 `AWAITING_GOAL_REVIEW` 只保留供歷史 run record 顯示。理由與例外記在 [ADR-0019](adr/0019-runner-executes-forgepilot-decides.md) 與 [ADR-0037](adr/0037-goal-completion-has-no-human-final-review.md)。
 
 ### 網路邊界
 
@@ -479,6 +498,8 @@ Workspace lock 涵蓋整段 Runner，鍵是 canonical path，因此 symlink 別�
 那個 lock 只證明「沒有活著的 Runner」，不證明「沒有活著的 worker」：被 SIGKILL 的 Runner 會釋放 lock，而它啟動的 coding CLI 還活著。因此 `run` 與 `run resume` **都**會在取得 lock 之後掃描既有 run record，套用同一套判定；任何一筆判不出來就 recovery blocked，不新增 run、不啟動 writer。
 
 掃描的對象不只 worker。canonical check、runtime preflight 與 Git 子程序都不會留下 worker 欄位，只看 worker 等於讓這三種執行完全沒有恢復保護。run record 因此另有 `pending`：每一筆未確認的執行在程序啟動**之前**先寫下（所屬 run、workspace、Work Item、執行種類與階段、相關 checkout 位置），啟動後補記觀察到的 PID／PGID 與 identity，確認清理完成後才在同一次原子替換中移除。停止原因與清理失敗原因分成兩個欄位保存，清理失敗不會蓋掉「這是一次 Ctrl-C」。
+
+例外只有 Goal completion 的最後一次 facts read：它帶有明確 purpose，且不啟動程序。若 Goal 交易已提交、但清除 pending 的 run-record save 失敗，resume 只有在持久化 Goal 為 VERIFIED policy 的 COMPLETED 且存在 aggregate completion evidence 時，才清除此筆無 process identity 的 `PENDING_START`；legacy completion marker 不滿足此證明。接著在 readiness 與 runtime preflight 前修復 terminal run record。其餘 pending 仍走原本的 fail-closed 判定。
 
 `pending` 與 `stop` 的生命週期刻意不同。`stop` 說的是「上一次為什麼結束」，`resume` 會清掉它；恢復阻擋不能寄存在會被 resume 清掉的欄位上。同一個 workspace 換 Goal、換 run ID 或重啟 CLI 都是同一個 workspace，三者讀的是同一份掃描。解除只有一種方式：確認安全。沒有 `--force`，刪 `run.json` 或清空 ownership 也不是修復方法——那是把唯一的保證花掉。沒有 `pending` 欄位的舊紀錄照舊只走 worker 路徑，但「沒有這個欄位」讀作「這次 run 除了 worker 沒記別的」，不讀作「這個 workspace 已確認乾淨」；讀不出來的紀錄同樣阻擋。詳見 [ADR-0022](adr/0022-pending-cleanup-outlives-the-process.md)。
 

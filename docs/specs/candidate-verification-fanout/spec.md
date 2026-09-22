@@ -4,7 +4,7 @@
 
 這份設計已完成 code trace、三個獨立 interface 方案比較，以及 Sol/high 對 atomicity、freshness、Gate、prerequisite、failure、recovery、compatibility 與 rollback 的複審。Human 已明確接受這項 concurrency、schema 與 Evidence provenance 取捨；決定記於 [ADR-0027](../../adr/0027-candidate-verification-pass-fans-out-by-run.md)，implementation 依本文件以 TDD 進行。
 
-本 slice 只處理 Candidate-level canonical verification fan-out。Runner-worker verification profile、永久 verification cache、跨 Goal fan-out、Goal final-review transition 與 distribution/release 工作全部不在範圍內。
+本 slice 只處理 Candidate-level canonical verification fan-out。Runner-worker verification profile、永久 verification cache、跨 Goal fan-out、Goal completion transition 與 distribution/release 工作全部不在範圍內。
 
 ## Outcome
 
@@ -178,7 +178,7 @@ existing per-anchor verification flock 必須包住完整 call，且 orphan recl
 
 repository lock 不是歷史 cache，也不承諾 coalesce 兩個明確 requests：第二個 concurrent request 收到 in-flight refusal；之後的明確 rerun仍合法。這個 coarse lock 是有意的 concurrency trade-off，避免以 runtime version map 充當不完整 identity——沒有 declaration 時環境是 caller passthrough，而不同 executable 也可能回報相同版本。
 
-## Runner and Goal final review
+## Runner and Goal completion
 
 Runner 仍只保存 execution history：
 
@@ -187,7 +187,7 @@ Runner 仍只保存 execution history：
 - Runner 不保存 cohort、不自行計算 eligibility、不直接改 lifecycle。
 - 下一輪重新呼叫 typed query；沒有 cached progress。
 
-Goal final-review projection 不改。每張 Work Item 仍有自己的 latest PASS Evidence ID；同一 shared run 產生的 IDs 只是共享 provenance。任何 skipped stale item 仍會讓 Goal 無法進入 `AWAITING_GOAL_REVIEW`。
+每張 Work Item 仍有自己的 latest PASS Evidence ID；同一 shared run 產生的 IDs 只是共享 provenance。任何 skipped stale item 都會阻止 `COMPLETE_GOAL`；只有全部 latest PASS 仍對應 current Candidate 且沒有 OPEN Gate 時，typed transaction 才完成 Goal。
 
 ## Acceptance matrix
 
@@ -219,7 +219,7 @@ Goal final-review projection 不改。每張 Work Item 仍有自己的 latest PA
 | `VR-100` 與 `VR-1000` logs 同時存在 | token-bounded lookup 各自只找到自己的檔案 |
 | explicit same-Candidate rerun after completion | 合法，取得新 run ID；沒有永久 cache |
 | Runner integration | 一個 step／pending execution，記錄全部 Evidence IDs，不保存 cohort lifecycle |
-| Goal final-review | 仍要求每張工作的 latest distinct PASS fresh 且無 OPEN Gate |
+| Goal completion | 仍要求每張工作的 latest distinct PASS fresh 且無 OPEN Gate；通過後以 typed transaction 完成，不等待人工終審 |
 | v8 migration | 每筆 legacy Verification Evidence／orphan Run 取得 distinct `LVR-*` ID；Review 無 ID；新 execution 只用 `VR-*`；兩處 newer-schema fixtures 同步升版 |
 | rollback | first v9 write 前可還原 `state.json.v8.bak`；之後還原會遺失 v9 後 Evidence，沒有自動 downgrade |
 

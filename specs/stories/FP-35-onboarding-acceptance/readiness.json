@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "story_ref": "specs/stories/FP-35-onboarding-acceptance",
+  "story_md_digest": "sha256:636fcb8dc6a4308e4801934d35aabefd104abefd202809984cdf5ad5fe63cb2f",
+  "acceptance_md_digest": "sha256:5938d8192e58cd0f97a984762ff59cc872837f2eaf26672ce7f1bd920c009b67",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-002",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-003",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-004",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-005",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-006",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-007",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-008",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-009",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-010",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-011",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-012",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-013",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-014",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-015",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-016",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-017",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-018",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-019",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-020",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-021",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-022",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-023",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-024",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-025",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-026",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-027",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-028",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-029",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-030",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-031",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "fp33-onboarding-procedure-contract",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp33-onboarding-procedure-contract"
+        }
+      }
+    },
+    {
+      "id": "fp34-skill-adapter-contract",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp34-skill-adapter-contract"
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "fp35-onboarding-acceptance-contract"
+    }
+  ],
+  "decision_follow_ups": []
+}

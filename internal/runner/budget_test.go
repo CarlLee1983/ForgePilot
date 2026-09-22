@@ -43,12 +43,15 @@ func TestBudgetRefusesAnyCancelledLimit(t *testing.T) {
 	}
 }
 
-// The exit code is the one thing a script reads. Awaiting review is the only
-// zero, and anything unclassified must land on an error rather than be read as
-// success by default.
+// The exit code is the one thing a script reads. HUMAN review and committed
+// VERIFIED completion are the documented zero outcomes; anything unclassified
+// must land on an error rather than be read as success by default.
 func TestExitCodesSeparateReviewFromEveryOtherEnding(t *testing.T) {
 	if StopAwaitingGoalReview.ExitCode() != ExitAwaitingReview {
 		t.Fatal("the review boundary is not exit 0")
+	}
+	if StopGoalCompleted.ExitCode() != ExitGoalCompleted {
+		t.Fatal("automatic Goal completion is not exit 0")
 	}
 	for _, reason := range []StopReason{StopWaitGate, StopWaitGoal, StopWaitHumanReview, StopNeedsHuman,
 		StopAgentExecutionFailed, StopVerificationRefused, StopVerificationInFlight, StopScopeChanged,

@@ -108,7 +108,7 @@ M1 已依序完成下列切片。
 | 指令 | 輸入與成功結果 |
 |---|---|
 | `forgepilot init` | 在 repository root 建立 state；已存在時不覆寫；補齊 ignore entry |
-| `forgepilot goal create --id <id> --title <title> [--description <text>]` | 建立 ACTIVE Goal；repository 綁定 state root；省略 description 時保存空字串 |
+| `forgepilot goal create --id <id> --title <title> [--description <text>] [--review-policy <work-item\|goal>]` | 建立 ACTIVE Goal；GOAL policy 依 current verification 與 Gate 條件自動完成；repository 綁定 state root；省略 description 時保存空字串 |
 | `forgepilot work add --goal <goal-id> --story <path> [--depends-on <work-id>]` | 驗證後配發 Work Item ID，回傳 ID、Story 與 PENDING／READY；多個依賴可重複傳 flag；story 尚未提交時多印一行提示 |
 | `forgepilot next` | 跨本機 ACTIVE Goals 選最早 READY 工作，顯示 Goal、Work Item ID、Story 與選取理由 |
 | `forgepilot start <work-id>` | READY → RUNNING；無隱含 Agent spawning 或 claim lease |
@@ -436,9 +436,9 @@ CLI 契約：
 | `forgepilot status` | 保持既有完整 Goal／Work Item／Evidence／Gate history 輸出，不接受單獨的 filter。 |
 | `forgepilot status --work <work-id> --summary` | 固定輸出該 Work Item 的 status、Goal 與 Story、latest Verification、latest Human Review、未解除 Gate IDs 與 completion projection。不存在的 ID 回傳 `unknown work item "<id>"`。 |
 
-Summary 是 read-only presentation projection，不寫入 `state.json`，也不新增 lifecycle state。Verification 必須沿用既有 Candidate 規則：COMMIT 以 HEAD 比較、SNAPSHOT 以 workspace digest 比較，DONE 不標 stale。Review 只選最新 Human Review；Gate 只列 `OPEN`，`RESOLVED`／`CANCELLED` 不列入 blocker。`Completion:` 的 base projection 只會是 `not started`、`implementing`、`verification required`、`verification failed`、`verification stale`、`awaiting human review`、`changes requested`、`blocked by gate`、`goal blocked` 或 `done`。若 APPROVED 之後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有完成條件，`awaiting human review` 固定加上 ` (re-approve to complete)` action suffix；這是既有完成規則的呈現，不是新 transition。
+Summary 是 read-only presentation projection，不寫入 `state.json`，也不新增 lifecycle state。Verification 必須沿用既有 Candidate 規則：COMMIT 以 HEAD 比較、SNAPSHOT 以 workspace digest 比較，DONE 不標 stale；已完成 Goal 的 VERIFIED Work Item 顯示 `goal completed`，且不因 repository 後續移動回報為 Goal blocked。Review 只選最新 Human Review；Gate 只列 `OPEN`，`RESOLVED`／`CANCELLED` 不列入 blocker。`Completion:` 的 base projection 只會是 `not started`、`implementing`、`verification required`、`verification failed`、`verification stale`、`awaiting human review`、`changes requested`、`blocked by gate`、`goal blocked`、`goal completed` 或 `done`。若 APPROVED 之後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有完成條件，`awaiting human review` 固定加上 ` (re-approve to complete)` action suffix；這是既有完成規則的呈現，不是新 transition。
 
-驗收：原有 `status` 輸出保持不變；READY／RUNNING、PASS／FAIL／stale／snapshot、APPROVED／REJECTED、單一／多個 unresolved Gate、BLOCKED Goal 與 DONE 都有 projection coverage；遺漏或不完整 flags 是 usage error。
+驗收：原有 `status` 輸出保持不變；READY／RUNNING、PASS／FAIL／stale／snapshot、APPROVED／REJECTED、單一／多個 unresolved Gate、BLOCKED／COMPLETED Goal 與 DONE 都有 projection coverage；遺漏或不完整 flags 是 usage error。
 
 ## P0-003 — Actionable Next
 
@@ -462,11 +462,13 @@ Schema 升至 v7：`current_run` 與 Verification Evidence 新增選填 `runtime
 
 ## Goal-level Review Policy
 
-Goal 在建立時可持久化 `--review-policy work-item|goal`；`work-item` 是預設，完全保留既有 per-Work-Item Human Review 與 `review approve` → DONE。`goal` 不是 skip-review：PASS 只令 Work Item 成為 `VERIFIED`，讓它在 Gate 已解除、Goal ACTIVE、Candidate fresh 的前提下滿足依賴；prerequisite 重驗或新開 OPEN Gate 會令受影響的 READY downstream 回到 PENDING，fresh PASS 或 Gate closure 後再 READY，保持 stored READY 與同一 progression predicate 一致。所有可能 promotion 的 domain API 都必須接收 CLI 在 `storage.Update` callback 內解析出的 current repository facts；缺少 facts 時 fail closed、保留 PENDING。refresh 僅限直接 dependents 或被 unblock 的 Goal，不可使無關 Goal 倒退。Goal BLOCKED 則維持既有 Work Item status；FAIL、INTERRUPTED 與 stale candidate 的語意不變。
+Goal 在建立時可持久化 `--review-policy work-item|goal`；`work-item` 是預設，完全保留既有 per-Work-Item Human Review 與 `review approve` → DONE。`goal` 不跳過 machine verification：PASS 令 Work Item 成為 `VERIFIED`，讓它在 Gate 已解除、Goal ACTIVE、Candidate fresh 的前提下滿足依賴；prerequisite 重驗或新開 OPEN Gate 會令受影響的 READY downstream 回到 PENDING，fresh PASS 或 Gate closure 後再 READY，保持 stored READY 與同一 progression predicate 一致。所有可能 promotion 的 domain API 都必須接收 CLI 在 `storage.Update` callback 內解析出的 current repository facts；缺少 facts 時 fail closed、保留 PENDING。refresh 僅限直接 dependents 或被 unblock 的 Goal，不可使無關 Goal 倒退。Goal BLOCKED 則維持既有 Work Item status；FAIL、INTERRUPTED 與 stale candidate 的語意不變。
 
-`status` 顯示 Goal policy 與每件工作的 policy-aware projection；GOAL-policy Work Item 的 Human Review 顯示不適用。`next` 會重新驗證 stale VERIFIED Work Item，所有條件都已滿足但無 agent action 時才回報等待 Goal final review。final readiness 是 fail-closed pure projection：ACTIVE Goal 必須非空、全部 Work Item VERIFIED、每筆 latest Verification 是仍匹配目前 Candidate 的 PASS、且無 OPEN Gate；projection 保留所用 Verification Evidence IDs。此版本沒有 goal review approve/reject、Goal Evidence 或 Runner，故 `goal complete` 對 GOAL policy 拒絕；final acceptance 保留給以該 exact Evidence set 為輸入的未來切片。
+`status` 顯示 Goal policy 與每件工作的 policy-aware projection；GOAL-policy Work Item 的 Human Review 顯示不適用。`next` 會重新驗證 stale VERIFIED Work Item，所有條件都已滿足時產生 typed `COMPLETE_GOAL` action，不等待 Goal-level Human Review。completion readiness 是 fail-closed pure projection：ACTIVE Goal 必須非空、全部 Work Item VERIFIED、每筆 latest Verification 是仍匹配目前 Candidate 的 PASS、且無 OPEN Gate；projection 保留所用 Verification Evidence IDs。自動 action 由 application 的單一 transaction 再次檢查 exact Evidence set，追加 Goal completion evidence 後完成 Goal；Work Item 保持 VERIFIED。
 
-Schema 升至 v8：Goal 加入必填 `review_policy`；v7 與更舊 state migration 明確填 `WORK_ITEM`，先備份 `state.json.v<n>.bak`。不自動升級、不提供 downgrade；rollback 是手動還原備份。
+Schema v11 加入由 Review Policy 推導的 `completion_policy`、Goal completion evidence 與 counter；schema v12 移除 GOAL 的人工終審選項，並將舊 v11 GOAL/HUMAN 正規化為 VERIFIED。Migration 保留原 lifecycle status：原已 COMPLETED 的 Goal 在同一 state transaction 帶上獨立的 v11/HUMAN legacy provenance，不能當成 current Candidate／Verification aggregate proof；原未完成 Goal 不會被 migration 完成。完成的 GOAL/VERIFIED 必須恰有一種 provenance（automatic aggregate 或 legacy marker）。先備份 `state.json.v<n>.bak`；不提供 downgrade，rollback 是手動還原備份。v12 尚未發布，optional marker 在 v12 內加入；舊 v12 binary strict-decode 帶 marker 的 state 會拒絕讀取。CLI 不接受 `--completion-policy`；`goal complete` 對 GOAL 一律拒絕，新的完成只走帶 current Candidate facts 的 typed transaction。詳見 [ADR-0037](adr/0037-goal-completion-has-no-human-final-review.md)。
+
+v11 HUMAN migration acceptance：`TestMigrateV11PreservesCompletedHumanGoalWithLegacyProvenance` 驗證原 status、時間與備份不變、無 GC/Candidate/Verification claims，且讀取不改寫；`TestLegacyGoalCompletionPreservesTerminalStatusWithoutClaimingVerification` 驗證 marker 的限制與 XOR；application 與 Runner recovery tests 驗證 marker 不會變成自動完成冪等結果，也不能清除未解決的 Candidate facts read。
 
 驗收：預設及 migration 都維持 WORK_ITEM compatibility；GOAL PASS → VERIFIED 並僅作 progression；READY 在 prerequisite 重驗或 OPEN Gate 新增時回到 PENDING，fresh PASS／Gate closure 後再 READY，而 Goal BLOCKED 保持 Work Item status；Gate／Goal／failure／interruption／freshness 不可被繞過；Work Item review 和 direct `goal complete` 在 GOAL policy 都被拒；readiness 對 inactive、empty、stale、non-PASS 或 OPEN Gate fail closed，並保留 exact Verification Evidence IDs。
 
@@ -488,7 +490,7 @@ Request 使用 `forgepilot.goal-preflight-request/v1`，必須明確提供 `goal
 | `docs/diagrams/` 的圖規格與產物 | 依 [圖的重新產生程序](diagrams/README.md#怎麼重新產生) render 與 visual-check | 同上 |
 | Go、module metadata、Makefile 或 canonical verification 行為 | `make verify` | integration／Human final acceptance 時另跑 `go test -race -count=1 ./...`；Story 也可明定 race gate |
 | `scripts/forgepilot-bootstrap` 與其 test | `sh -n scripts/forgepilot-bootstrap`、`sh scripts/forgepilot-bootstrap_test.sh` | FP-61 integration/final acceptance 另依 Story 執行原生 Apple Silicon disposable-home acceptance；不因純 shell 變更重跑 Go race gate |
-| `scripts/release/`、`scripts/onboarding/` 或 `scripts/skills/` | 分別跑 `sh scripts/release/build_trial_assets_test.sh`、`sh scripts/onboarding/onboarding_test.sh`、`sh scripts/skills/check_adapters_test.sh` 與／或 `sh scripts/skills/short_prompt_regression_test.sh` 中受影響者 | release、跨面整合，或同次變更碰到 Go／Makefile 時跑 `make verify`；final acceptance 另跑 race gate |
+| `scripts/release/`、`.github/workflows/`、`scripts/onboarding/` 或 `scripts/skills/` | 分別跑 `sh scripts/release/build_trial_assets_test.sh`、`sh scripts/release/publish_trial_assets_workflow_test.sh`、`sh scripts/onboarding/onboarding_test.sh`、`sh scripts/skills/check_adapters_test.sh` 與／或 `sh scripts/skills/short_prompt_regression_test.sh` 中受影響者 | release、跨面整合，或同次變更碰到 Go／Makefile 時跑 `make verify`；final acceptance 另跑 race gate |
 
 報告每一項實跑命令、結果，以及沒有跑的 full gate 與理由。不得把未跑的必要 check 寫成 PASS；若必需 check 被阻擋，交付仍是 partial。這份矩陣不改變 ForgePilot 對受管理 repository 的 canonical `make verify` contract。
 
@@ -515,7 +517,7 @@ Request 使用 `forgepilot.goal-preflight-request/v1`，必須明確提供 `goal
 
 Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計算的 projection，不新增 durable state、不升 schema。允許的移動只有 `PENDING → READY` 與 `READY → PENDING`；RUNNING、VERIFYING、REVIEW、VERIFIED、DONE 一律不動，Verification Evidence、Review Evidence、Gate 決策與 Review Policy 也一律不動。判準完全沿用既有的 dependency progression predicate，CLI 不另寫一套。Goal 必須存在且為 ACTIVE，BLOCKED／CANCELLED／COMPLETED 都拒絕並說明原因。Goal 的存在與狀態在取 Git facts 之前檢查；facts 在 `storage.Update` 的受鎖 callback 內解析，且只解析這個 Goal 的 PENDING／READY 工作其 prerequisite 實際需要的種類——其他 Goal 的 SNAPSHOT Evidence 不會讓這個 Goal 需要 workspace digest。任何必要 facts 取得失敗即拒絕整個命令，不做部分更新，也不把 unknown 當 fresh。相同 state 與 facts 下重複執行不產生 domain 變更，未改變的項目 `UpdatedAt` 不動。state lock 只序列化 ForgePilot 自己的 state 交易，不是 Git workspace lock。
 
-`next` 新增 `RECONCILE` action，並改為以下順序：合法 RUNNING 的 RESUME／REPAIR；WORK_ITEM 模式既有 stale REVIEW 的 REVERIFY；可合法前進的工作（已 READY 為 START，PENDING 但 readiness 可恢復為 RECONCILE，兩者共用同一個 created-at／numeric-ID 排序）；GOAL-policy stale VERIFIED 的 REVERIFY；最後才是既有的等待原因與 WAIT_GOAL_REVIEW。`next` 與 `reconcile` 共用同一個 `advanceable` 判準，因此不會出現「推薦 reconcile 但 reconcile 一直 unchanged」的空轉；`next` 仍是純查詢，不自行執行 reconciliation。本輪只調整合法動作之間的排序，不改變合法性的標準：READY 不足以推薦 START，prerequisite 的 Gate 與 freshness 仍須成立，且 Goal final review boundary 維持既有完整 freshness 要求，中途延後的重驗必須在總審前補完。
+`next` 新增 `RECONCILE` action，並改為以下順序：合法 RUNNING 的 RESUME／REPAIR；WORK_ITEM 模式既有 stale REVIEW 的 REVERIFY；可合法前進的工作（已 READY 為 START，PENDING 但 readiness 可恢復為 RECONCILE，兩者共用同一個 created-at／numeric-ID 排序）；GOAL-policy stale VERIFIED 的 REVERIFY；最後才是既有等待原因或 `COMPLETE_GOAL`。`next` 與 `reconcile` 共用同一個 `advanceable` 判準，因此不會出現「推薦 reconcile 但 reconcile 一直 unchanged」的空轉；`next` 仍是純查詢，不自行執行 reconciliation。本輪只調整合法動作之間的排序，不改變合法性的標準：READY 不足以推薦 START，prerequisite 的 Gate 與 freshness 仍須成立，且中途延後的重驗必須在 Goal completion action 前補完。
 
 驗收：readiness 由 Gate 與 Candidate 移動退回 PENDING、條件恢復後經 `reconcile` 復原的完整 CLI／Git 流程，且復原過程不新增 Verification Evidence；stale prerequisite、未解除的 prerequisite Gate、工作自身的 Gate、BLOCKED／CANCELLED／COMPLETED Goal、未知 Goal 與 facts 取得失敗都 fail closed 且不留部分更新；reconcile Goal A 不改動 Goal B；三張連續任務各自產生新 commit 時 action sequence 為 START／VERIFY 交錯，原始 P1-005 實作在邊界逐張 REVERIFY、總計 5 次 Verification Run；schema v9 的 accepted fan-out 後改為 3 次 execution，第二與第三次 PASS 分別刷新當時 eligible 的 stale peers；SNAPSHOT 以持續演進的 digest 重做同一流程；多 prerequisite 任一不符即不能 START，但同一 shared PASS 可同時刷新多個已 VERIFIED stale prerequisites；WORK_ITEM policy 的 REVIEW → Human Approval → DONE 與 stale REVIEW 導航不變；`next` 不寫 state、HEAD、real index 或持久化 refs，重複執行結果穩定，`reconcile` 第二次無 domain 變更。
 
@@ -554,7 +556,7 @@ Readiness 是既有的持久化欄位，這個指令只把它重新對齊可計�
 
 | 退出碼 | 意義 |
 |---|---|
-| 0 | 已達到等待 Goal final review 的條件——不表示 Goal 完成 |
+| 0 | Goal 已在單一 transaction 內原子完成 |
 | 2 | 因 Gate、Goal 狀態或需要外部處理的條件停止（含 `needs_human`、scope changed、recovery blocked） |
 | 3 | 達到預算、timeout 或無進展限制 |
 | 1 | 參數、runtime、repository、storage 或其他執行錯誤 |
@@ -569,7 +571,7 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 
 | 驗收 | 測試 |
 |---|---|
-| A → B → C 相依工作循序完成、各 attempt 新 session、最後待總檢而非 DONE | `TestRunnerDrivesDependentWorkToTheGoalReviewBoundary` |
+| A → B → C 相依工作循序完成、各 attempt 新 session、預設 GOAL policy 自動完成而 Work Item 保持 VERIFIED | `TestRunnerDrivesDependentWorkToGoalCompletion` |
 | 多依賴／匯合依賴：必要依賴 stale 時仍先重驗 | `TestConvergingDependenciesPayTheirDeferredReverifications` |
 | 同 repository 多個 Goal：只執行指定 Goal，不因全域排序假停滯 | `TestRunnerDrivesOnlyTheNamedGoal`、`internal/work` 的 `TestActionableNextForGoalAnswersOnlyTheNamedGoal`、`TestActionableNextForGoalDoesNotBorrowAnotherGoalsBlocker` |
 | 篩 Goal 不影響依賴判斷所需的完整 state | `internal/work` 的 `TestActionableNextForGoalStillJudgesDependenciesAgainstFullState` |
@@ -583,6 +585,7 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 | 第二個 Runner／symlink 路徑：拒絕重疊 writer，且 `status` 仍可回答 | `TestASecondRunnerIsRefusedThroughAnAliasToo` |
 | Crash window、signal、timeout 有明確恢復結果；不確定時拒絕續跑 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestResumeRefusesWhenAWorkerCannotBeConfirmed`、`TestRunnerReclaimsAnAbandonedVerificationRun`、`internal/agent` 的 `TestTimeoutStopsTheWholeProcessGroup`、`TestInspectDistinguishesGoneFromOursFromUnrelated` |
 | Evidence 保存後崩潰：依最新 domain state 恢復，不重複實作 | `TestResumeKeepsBudgetAndDoesNotReimplementVerifiedWork` |
+| Goal completion 已提交但清除最後 facts-read pending 的 run-record save 失敗：resume 以 aggregate evidence 證明後修復終止紀錄，且不先碰 readiness／runtime | `TestResumeRepairsCompletionAfterFinalPendingClearSaveFails` |
 | Resume：新 session，預算與 deadline 不重置 | `TestResumeContinuesAfterTheBlockerIsCleared`、`TestResumeKeepsBudgetAndDoesNotReimplementVerifiedWork` |
 | 無進展、預算、容量超限：有界停止，不無限重試 | `TestARunThatChangesNothingStopsForNoProgress`、`TestMaxAttemptsPerWorkIsBounded`、`TestMaxStepsStopsTheRun`、`TestExceedingTheArtifactBudgetStopsSafely`、`internal/runner` 的 `TestBudgetRefusesAnyCancelledLimit` |
 | Runner artifacts 寫入不影響 Candidate digest | `TestRunnerArtifactsDoNotChangeTheCandidateDigest` |
@@ -604,7 +607,7 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 | session 正常結束也終止整個 process group，不留下背景子孫程序 | `internal/agent` 的 `TestACleanExitStillStopsTheWholeProcessGroup` |
 | 引用失敗 log 的節錄會說自己被截斷，且不從半行開始 | `internal/runner` 的 `TestTailSaysWhenItCut`、`TestTailQuotesAShortLogWhole` |
 | SIGINT 與 SIGTERM 分別以 130／143 退出，`run status` 也據實回報 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestTerminationExitsWithItsOwnCode` |
-| 真實 Codex smoke | `TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary`，opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑。以 disposable Go repository 的三張相依 Story 驗證三次新 session、三份 SNAPSHOT PASS Evidence 與 `AWAITING_GOAL_REVIEW`；不以 fake runtime 紀錄冒充。2026-09-14 對 codex-cli 0.154.0 實跑通過，run `run-20260914t045121-d8bd10` 用 339.28 秒；Candidate 演進後依 freshness 規則補跑 prerequisite，最終 Evidence 為 EV-004、EV-005、EV-003。那一輪沒有留下 fixture 之外的證據。2026-09-15 於 `2deaf14` 再跑一輪並完整留存，run `run-20260915t034856-f0e621` 用 716.18 秒，三張工作各一次 attempt，最終 Evidence EV-004、EV-005、EV-003，停在 `AWAITING_GOAL_REVIEW`（退出碼 0）——見 [ticket 11](specs/runner-mvp/issues/11-real-codex-smoke-acceptance.md)。 |
+| 真實 Codex smoke | `TestCodexSmokeDrivesDependentWorkToGoalCompletion` 驗證 Runner 自動完成 Goal；Codex smoke 仍 opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑；舊 artifacts 的 `AWAITING_GOAL_REVIEW` 保留為歷史紀錄。 |
 | 真實 Codex smoke 的啟用條件只接受完全等於 `1`，且判斷在任何副作用之前 | `TestSmokeOptInAcceptsOnlyTheExactValueOne` 逐值陳述契約（未設定、空字串、`0`、`false`、`FALSE`、`off`、`no`、`true`、`yes`、`2`、`" 1 "`、`"1\n"` 一律視為未啟用，只有 `1` 啟用）；`TestRealCodexSmokeConsultsTheOptInBeforeAnySideEffect` 以 PATH 上的 Codex spy 隔離真實 CLI，跑編譯後的測試 binary 確認五個未啟用環境下目標測試回報 SKIP、Codex 未被呼叫、證據匯出未寫入，並以第六個反向對照案例（`1`）確認 opt-in 真的會啟動那一輪並觸及 runtime——見 [ticket 12](specs/runner-mvp/issues/12-smoke-opt-in-closure.md)。修正後的入口尚未在真實模型下重跑。 |
 | 結構化結果的 schema 符合 strict structured output（每個物件的 `required` 涵蓋全部 `properties`） | `internal/agent` 的 `TestResultSchemaSatisfiesStrictStructuredOutput`、`TestDecodeResultAcceptsTheNullsTheSchemaRequires` |
 | 正式 verification 執行中收到 SIGINT：停止程序群組、退出碼 130、留下 INTERRUPTED 而非 FAIL，且不留下無人結案的 VERIFYING | `TestSignalDuringVerificationStopsTheCheckAndItsProcessGroup` |
@@ -695,4 +698,54 @@ Schema 升至 v9：root 新增 `next_verification_run_id`，active Run 與 Verif
 
 ### Public handoff recovery（issue #43）
 
-外部 Agent 不讀寫 `.forgepilot/`，只透過 `goal create --json`、`work add --external-ref <ref> --json` 與 `work list --goal <id> --json` 建立或恢復一個 Goal。三條成功輸出都採 `format_version: "forgepilot.cli/v1"`；create 回傳 Goal，add 回傳 Work Item 與 `created`，list 依建立順序回傳 Goal 及其 Work Items 的 `id`、`goal_id`、`story_ref`、`status`、`depends_on`、`external_ref`。同 Goal／external ref 的完全相同 request 回傳既有項目和 `created: false`；Story 或 dependency set 不同時拒絕，不採用或猜測既有 keyless Work Item。JSON 只保證 exit 0；非零 exit 的 integration caller 必須停止。schema v10 保存 external ref，且延續明確 migrate／backup／手動 rollback 契約。
+外部 Agent 不讀寫 `.forgepilot/`，只透過 `goal create --json`、`work add --external-ref <ref> --json` 與 `work list --goal <id> --json` 建立或恢復一個 Goal。三條成功輸出都採 `format_version: "forgepilot.cli/v1"`；create 回傳 Goal，add 回傳 Work Item 與 `created`，list 依建立順序回傳 Goal 及其 Work Items 的 `id`、`goal_id`、`story_ref`、`status`、`depends_on`、`external_ref`。同 Goal／external ref 的完全相同 request 回傳既有項目和 `created: false`；Story 或 dependency set 不同時拒絕，不採用或猜測既有 keyless Work Item。JSON 只保證 exit 0；非零 exit 的 integration caller 必須停止。schema v11 保存 external ref 與 explicit Goal completion policy，且延續明確 migrate／backup／手動 rollback 契約。
+
+### FP-53 Execution Plan Authorization
+
+FP-53 adds two explicit commands:
+
+| Command | Contract |
+|---|---|
+| `forgepilot execution plan --request <path> --json` | Read-only, versioned preview of the embedded FP-52 Goal Plan request, explicit node mapping, Worker Profile and bounded caps. Returns a current approval token plus diagnostics; it never writes state or launches a subprocess. |
+| `forgepilot execution authorize --request <path> --approval-token <token> --by <name> --json` | Revalidates the same request, artifacts and current Goal registration, then publishes the complete initial binding, revision-one authorization, zero-use ledger and Goal witness in one storage transaction. `--by` is a self-declaration, not authentication. |
+| `forgepilot execution revise plan --request <path> --json` | Read-only preview of an additive reviewed revision. Existing Plan Node mappings must name their existing Work Item; each new node explicitly uses an empty `workItemId`. |
+| `forgepilot execution revise authorize --request <path> --approval-token <token> --by <name> --json` | Rechecks the preview under workspace and state locks, atomically creates the explicit new Work Items, and appends the plan binding and authorization without resetting cumulative consumption. |
+| `forgepilot execution resume --goal <goal-id> [--json]` | Rechecks recovery, the current Goal authorization, and current bindings. It resumes only a run that still satisfies its exact contract; otherwise it creates at most one newly charged run. It accepts no run ID, runtime, budget, or artifact-cap override. |
+| `forgepilot execution stop --goal <goal-id> --by <name> --reason <reason> [--json]` | Persists one user-requested pause for the Goal's current run before it asks the owned worker process group to stop. It never clears a pending execution, edits lifecycle state, Evidence, Gate, or authorization, and it fails closed when worker ownership cannot be proved. |
+| `forgepilot execution declare --request <path> --json` | Validates and records one named External Fulfillment Declaration against an existing external wait. The strict `forgepilot.external-fulfillment-declaration/v1` request supplies `goalId`, `waitId`, `fact`, and `declaredBy`; ForgePilot derives and records the exact node, plan binding, and authorization revision from the durable wait. Recording a declaration never resumes a run. |
+
+The request is strict JSON with `formatVersion: "forgepilot.execution-plan-request/v1"`, an embedded `goalPlanRequest` using `forgepilot.goal-preflight-request/v1`, an explicit `workerProfile`, explicit `caps`, and an absolute `expiresAt` in UTC RFC 3339 form. `workerProfile` supplies the Codex executable path, fixed model, `effort: "medium"`, and `sandbox: "workspace-write"`; no value is inferred from an earlier Gate or a local runtime default. The executable path must resolve to a regular executable file and its file digest is rechecked at authorization. `caps` explicitly supplies `maxSteps`, `maxTechnicalAttemptsPerNode`, `maxRuns`, `maxRecoveries`, `maxHandoffBytes`, `maxWriteBytes`, `maxRunBytes`, and `maxTotalBytes`. Every value must be positive and artifact bounds must be ordered. The exact expiry must be in the future and no more than fourteen days from the operation; it is never recomputed or extended during authorization.
+
+The preview token is a domain-separated digest, not a credential. It binds exact request bytes, current artifact digests, canonical workspace and Goal, the relevant Work Item/dependency registration, the observed absence of an existing authorization, explicit profile and caps, and exact expiry. Authorization rechecks those facts under the storage lock; stale input, another writer, invalid topology, or a save error publishes none of the aggregate. Authorization does not change Goal or Work Item lifecycle, Gate, Evidence, Human Review, or completion state, and it does not assign PraxisBound manifest or coverage semantics to ForgePilot.
+
+FP-53 records the explicitly requested Worker Profile and executable file digest, but does not claim an executable-reported version or managed ForgePilot engine generation. Since preview is read-only and may not launch a subprocess, the initial authorization is a plan/profile/caps binding, not a launchable worker authorization. FP-58 owns pinned engine-generation and selected executable identity validation; FP-54/58 admission must remain fail-closed until those checks pass. No mutable `launchable` flag is stored.
+
+State schema advances to v16 with an optional Goal-owned execution aggregate containing the initial plan binding, authorization, zero-use ledger, witness, and append-only stable-ID artifact-byte reservations. `migrate` backs up the prior snapshot before advancing; it does not infer or adopt a plan for existing Goals. A migrated v15 authorization has unknown historical artifact consumption, which fail-closes new execution and revision cap validation until explicit reauthorization; migration never scans run records or logs to manufacture that fact. Rollback remains manual restoration of the backup.
+
+### FP-56 Execution Control and waits
+
+State schema v17 fences the versioned `.forgepilot/execution-control.json`
+sidecar from older binaries. The sidecar is execution-control history only: it
+contains the active pause, the active human or external wait, and append-only
+External Fulfillment Declarations; it never contains a Work Item state,
+Evidence, Gate decision, review, or completion fact. Its own short-lived
+`execution-control.lock` serializes pause requests with the Runner's narrow
+worker-launch admission window. The long-lived workspace Runner lock remains
+the single-writer lock for Runner loops and is not reused for a stop request.
+
+An agent's `needs_human` result may name an `externalFact`. ForgePilot creates
+an external wait only after the result, its charged ACTION receipt, and the
+one-time needs-human disposition are durably confirmed. A result with no named
+external fact remains a human wait. Both consume the already-reserved action,
+step, duration, and artifact capacity; only the confirmed disposition removes
+the technical-attempt charge. Missing, malformed, or crashed results create no
+wait and retain that charge.
+
+Every Runner admission reads control while holding the control lock. A persisted
+pause or wait stops it before any new process; after a worker is launched its
+identity is saved before the lock is released. `execution stop` obtains that
+same lock, writes the pause atomically, then stops only an identity that passes
+the existing ownership check. Resume first settles pending cleanup, rechecks
+current plan and authorization, verifies an external declaration when one is
+required, and explicitly acknowledges/clears the control block only when it is
+safe to admit a new action. No declaration or restart resumes work implicitly.

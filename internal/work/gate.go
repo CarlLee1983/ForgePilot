@@ -172,6 +172,9 @@ func (s *State) OpenGate(workItemID, question string, options []string, rational
 	if item.Status == Done {
 		return Gate{}, fmt.Errorf("work item %q is DONE; a question that could block it can no longer be asked", workItemID)
 	}
+	if goal := s.goal(item.GoalID); goal == nil || goal.Status == GoalCompleted {
+		return Gate{}, fmt.Errorf("work item %q belongs to a completed Goal; a new Gate cannot be opened", workItemID)
+	}
 	if s.NextGateID < 1 {
 		s.NextGateID = 1
 	}

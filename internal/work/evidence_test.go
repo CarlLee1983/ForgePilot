@@ -166,8 +166,8 @@ func sharedRunValidationState() State {
 	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 	zero := 0
 	return State{
-		SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 3, NextGateID: 1, NextVerificationRunID: 2,
-		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerGoal}},
+		SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 3, NextGateID: 1, NextVerificationRunID: 2, NextGoalCompletionEvidenceID: 1,
+		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerGoal, CompletionPolicy: CompletionVerified}},
 		WorkItems: []Item{
 			{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Verified},
 			{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Verified},

@@ -200,7 +200,6 @@ func (fixture runnerFixture) seedGoal(t *testing.T, goalID string, items ...[]st
 		mustRun(t, fixture.binary, fixture.root, arguments...)
 	}
 }
-
 func write(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

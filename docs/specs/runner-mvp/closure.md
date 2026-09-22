@@ -22,7 +22,14 @@
 
 ## A. 結案範圍
 
-### 本期完成、且有證據的部分
+### 本期完成、且有證據的部分（MVP historical HUMAN boundary）
+
+本文件記錄的 smoke 與 closure 證據是在 ADR-0036 之前，以舊的
+`completion_policy=HUMAN` 產生的歷史結果；它們仍應如實保留
+`AWAITING_GOAL_REVIEW`。現在新建的 GOAL policy 預設使用
+`completion_policy=VERIFIED`，符合 current Candidate 條件時由獨立的
+`GOAL_COMPLETED` transaction 自動完成，不設人工 final-review 選項；逐件人工審查
+仍由 `WORK_ITEM` policy 提供。不能把本文件的歷史 stop reason 改寫成完成。
 
 從使用者明確啟動 `forgepilot run` 開始，到 Runner 停在
 `AWAITING_GOAL_REVIEW`（或停在需要人的條件、或撞到有界上限）為止：

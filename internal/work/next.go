@@ -13,20 +13,22 @@ const (
 	NextActionReverify        NextActionKind = "REVERIFY"
 	NextActionStart           NextActionKind = "START"
 	NextActionReconcile       NextActionKind = "RECONCILE"
+	NextActionCompleteGoal    NextActionKind = "COMPLETE_GOAL"
+	NextActionGoalCompleted   NextActionKind = "GOAL_ALREADY_COMPLETED"
 	NextActionWaitHumanReview NextActionKind = "WAIT_HUMAN_REVIEW"
-	NextActionWaitGoalReview  NextActionKind = "WAIT_GOAL_REVIEW"
 	NextActionWaitGate        NextActionKind = "WAIT_GATE"
 	NextActionWaitGoal        NextActionKind = "WAIT_GOAL"
 )
 
 // NextAction is the read-only answer to what an agent can legally do next.
-// Goal is populated only for a Goal final-review wait. Item is empty for that
-// action and when Kind is NextActionNone.
+// Goal is populated for Goal-level completion or an already-completed Goal.
+// Item is empty for those actions and when Kind is NextActionNone.
 type NextAction struct {
-	Item   Item
-	Goal   Goal
-	Kind   NextActionKind
-	Reason string
+	Item        Item
+	Goal        Goal
+	Kind        NextActionKind
+	Reason      string
+	EvidenceIDs []string
 }
 
 // ActionableNext selects one legal agent action without changing State. Running
@@ -74,8 +76,8 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 	// re-verified. Under GOAL policy every new Candidate makes earlier VERIFIED
 	// work stale, so putting those re-verifications first would re-check the whole
 	// queue between consecutive Work Items. Deferring them relaxes nothing: the
-	// Goal final-review boundary below still demands a current PASS for every
-	// Work Item, so each deferred re-verification is owed, not forgiven.
+	// Goal completion boundary below still demands a current PASS for every Work
+	// Item, so each deferred re-verification is owed, not forgiven.
 	//
 	// START and RECONCILE share one creation-ordered pass rather than two loops,
 	// so which of them is recommended never depends on loop order.
@@ -104,6 +106,11 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 			continue
 		}
 		goal := s.goal(item.GoalID)
+		if goal != nil && goal.Status == GoalCompleted {
+			// GOAL completion leaves its Work Items VERIFIED. They are immutable
+			// history, not a wait that should mask actionable work in another Goal.
+			continue
+		}
 		if goal != nil && goal.Status != GoalActive {
 			return NextAction{Item: item, Kind: NextActionWaitGoal, Reason: "goal " + goal.ID + " is " + string(goal.Status)}
 		}
@@ -125,8 +132,12 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 			continue
 		}
 		summary, err := s.GoalSummary(goal.ID, repository)
-		if err == nil && summary.Completion == GoalAwaitingFinalReview {
-			return NextAction{Goal: goal, Kind: NextActionWaitGoalReview, Reason: "goal final review required"}
+		if err != nil {
+			continue
+		}
+		switch summary.Completion {
+		case GoalReadyToComplete:
+			return NextAction{Goal: goal, Kind: NextActionCompleteGoal, EvidenceIDs: summary.VerificationEvidenceIDs, Reason: "all Work Items have fresh PASS Evidence and no open Gates"}
 		}
 	}
 

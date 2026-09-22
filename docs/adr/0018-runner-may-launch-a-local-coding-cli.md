@@ -2,7 +2,7 @@
 
 [ADR-0010](0010-no-outbound-network-requests.md) 把界線畫在「ForgePilot 不主動發出對外請求——不自行 HTTP，也不 spawn `gh`」。Long-running Runner 需要啟動 Codex 之類的本機 coding CLI，而那個 CLI 會連線到模型服務。這一份記錄界線如何被重新描述，以及哪一半沒有改變。
 
-沒有改變的那一半是重點：**核心治理命令與狀態判定不依賴模型服務**。`init`、`goal`、`work`、`next`、`start`、`reconcile`、`verify`、`gate`、`review`、`status` 全部維持離線可用，判定 PASS、VERIFIED、DONE、readiness 與 Goal final-review 的規則一行都不經過模型。ForgePilot 自己仍然沒有 HTTP client，`internal/repository` 仍然只呼叫 `git`。
+沒有改變的那一半是重點：**核心治理命令與狀態判定不依賴模型服務**。`init`、`goal`、`work`、`next`、`start`、`reconcile`、`verify`、`gate`、`review`、`status` 全部維持離線可用，判定 PASS、VERIFIED、DONE、readiness 與 Goal completion 的規則一行都不經過模型。ForgePilot 自己仍然沒有 HTTP client，`internal/repository` 仍然只呼叫 `git`。
 
 改變的那一半是：使用者明確執行 `forgepilot run` 時，Runner 可以以 executable 加 argument array 啟動一個指定的本機 coding CLI。那個 CLI 自己的網路行為屬於它，不屬於 ForgePilot；ForgePilot 不轉發、不代理、不解析模型回應以外的任何遠端狀態。
 

@@ -19,6 +19,7 @@ func TestDecodeResultAcceptsOnlyTheThreeOutcomes(t *testing.T) {
 		`{"outcome":"implementation_finished","summary":"did the thing"}`,
 		`{"outcome":"implementation_finished","summary":"partly","unfinished":["tests for the error path"]}`,
 		`{"outcome":"needs_human","summary":"stuck","needs_human":{"question":"which store?","options":["a","b"]}}`,
+		`{"outcome":"needs_human","summary":"stuck","needs_human":{"question":"is the deployment approved?","external_fact":"deployment_approved"}}`,
 		`{"outcome":"execution_failed","summary":"no toolchain","error":"go: command not found"}`,
 	}
 	for _, payload := range valid {
@@ -28,17 +29,19 @@ func TestDecodeResultAcceptsOnlyTheThreeOutcomes(t *testing.T) {
 	}
 
 	invalid := map[string]string{
-		"empty":                   ``,
-		"unknown outcome":         `{"outcome":"done","summary":"s"}`,
-		"missing outcome":         `{"summary":"s"}`,
-		"missing summary":         `{"outcome":"implementation_finished"}`,
-		"blank summary":           `{"outcome":"implementation_finished","summary":"   "}`,
-		"needs_human no question": `{"outcome":"needs_human","summary":"s"}`,
-		"failed without error":    `{"outcome":"execution_failed","summary":"s"}`,
-		"finished with question":  `{"outcome":"implementation_finished","summary":"s","needs_human":{"question":"q"}}`,
-		"unknown field":           `{"outcome":"implementation_finished","summary":"s","verified":true}`,
-		"trailing value":          `{"outcome":"implementation_finished","summary":"s"} {"outcome":"needs_human"}`,
-		"not an object":           `"implementation_finished"`,
+		"empty":                      ``,
+		"unknown outcome":            `{"outcome":"done","summary":"s"}`,
+		"missing outcome":            `{"summary":"s"}`,
+		"missing summary":            `{"outcome":"implementation_finished"}`,
+		"blank summary":              `{"outcome":"implementation_finished","summary":"   "}`,
+		"needs_human no question":    `{"outcome":"needs_human","summary":"s"}`,
+		"external fact with options": `{"outcome":"needs_human","summary":"s","needs_human":{"question":"q","external_fact":"release_approved","options":["a","b"]}}`,
+		"external fact with newline": `{"outcome":"needs_human","summary":"s","needs_human":{"question":"q","external_fact":"release\napproved"}}`,
+		"failed without error":       `{"outcome":"execution_failed","summary":"s"}`,
+		"finished with question":     `{"outcome":"implementation_finished","summary":"s","needs_human":{"question":"q"}}`,
+		"unknown field":              `{"outcome":"implementation_finished","summary":"s","verified":true}`,
+		"trailing value":             `{"outcome":"implementation_finished","summary":"s"} {"outcome":"needs_human"}`,
+		"not an object":              `"implementation_finished"`,
 	}
 	for name, payload := range invalid {
 		if _, err := DecodeResult([]byte(payload)); !IsProtocolError(err) {

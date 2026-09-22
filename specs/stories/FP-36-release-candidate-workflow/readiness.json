@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "story_ref": "specs/stories/FP-36-release-candidate-workflow",
+  "story_md_digest": "sha256:538f3f26b57711c939b93662747aca60fc5a3e3b4609215055ae4ad33e06e3a6",
+  "acceptance_md_digest": "sha256:658df41e2afab92136647088ada73e6dcfbba5e4eff72c02104f7e14a63f8a1e",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-002",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-003",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-004",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-005",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-006",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-007",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-008",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-009",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-010",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-011",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-012",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-013",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-014",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-015",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-016",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-017",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-018",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-019",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "fp31-trial-assets-contract",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp31-trial-assets-contract"
+        }
+      }
+    },
+    {
+      "id": "fp32-fixed-version-installer-contract",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp32-fixed-version-installer-contract"
+        }
+      }
+    },
+    {
+      "id": "adr-0024",
+      "source": {
+        "preexisting_artifact": {
+          "path": "docs/adr/0024-onboarding-stays-outside-the-offline-cli.md"
+        }
+      }
+    },
+    {
+      "id": "adr-0025",
+      "source": {
+        "preexisting_artifact": {
+          "path": "docs/adr/0025-formal-macos-release-trust.md"
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "fp36-release-candidate-workflow-contract"
+    }
+  ],
+  "decision_follow_ups": []
+}

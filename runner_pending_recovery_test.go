@@ -221,13 +221,13 @@ func TestAPendingExecutionWithNoObservedIdentityIsRefused(t *testing.T) {
 // read as "this run recorded nothing beyond its worker" — not as a claim that
 // the workspace is clear. A record that does not parse is not an empty one.
 func TestOlderRunRecordsStillRecoverTheWayTheyDid(t *testing.T) {
-	t.Run("a normal finished record still reads", func(t *testing.T) {
+	t.Run("a record without pending still permits the next run", func(t *testing.T) {
 		fixture := newRunnerFixture(t, "a.md")
 		mustRun(t, fixture.binary, fixture.root, "init")
 		fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
 		agent := fixture.fakeAgent(t, implementsCleanly)
-		if _, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot"); code != 0 {
-			t.Fatal("the seed run did not reach the review boundary")
+		if _, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot", "--max-steps", "1"); code != 3 {
+			t.Fatal("the seed run did not stop at its one-step budget")
 		}
 		runID := lastRun(t, fixture.root)
 		record := loadRunRecord(t, fixture.root, runID)

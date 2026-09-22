@@ -10,9 +10,9 @@ Runner 只保存 **execution history**——run id、step、attempt、預算消�
 
 **先限定 Goal，再套用既有規則。** Goal-scoped query 與全域 query 共用同一份 priority 與 legality 實作，差別只有「候選集合限定在這個 Goal」。它不是「取全域第一項，然後因為屬於別的 Goal 而停止」——那會讓同一個 repository 裡的第二個 Goal 製造假的停滯。篩掉的只有候選項，判斷依賴時讀到的仍是完整 state。
 
-**lifecycle 更新只走既有 transition。** Runner 不寫 VERIFIED、不寫 DONE、不核准 review、不解除 Gate、不完成 Goal。它能做的寫入只有四種，全部是既有的 transition：`StartWithRepository` 開始一件工作、`ReconcileGoalReadiness` 重算 readiness、既有 verification orchestration 產生 Evidence，以及 session 回報 `needs_human` 且列出至少兩個選項時，用既有 `OpenGate` 記下那個問題。除此之外它只讀。
+**lifecycle 更新只走 typed transition。** Runner 不寫 VERIFIED、不寫 DONE、不核准 review、不解除 Gate，也不直接改 Goal。它能做的寫入包含 `StartWithRepository` 開始一件工作、`ReconcileGoalReadiness` 重算 readiness、既有 verification orchestration 產生 Evidence、`completion_policy=VERIFIED` 的 `CompleteVerifiedGoal`，以及 session 回報 `needs_human` 且列出至少兩個選項時，用既有 `OpenGate` 記下那個問題。除此之外它只讀；Goal completion 的判定、Candidate facts 與 aggregate evidence 仍由 application／domain transaction 擁有。
 
-第四種寫入值得單獨說，因為它是模型的文字唯一一次變成持久化的治理狀態。它被接受的理由是方向：開 Gate 只會擋住工作，不會放行任何東西——`OpenGateCount > 0` 會讓 `advanceable`、`Verifiable` 與 Goal final-review projection 一致地拒絕前進。幻覺出來的問題因此最多造成一次需要人來 `gate cancel` 的停頓，不會造成一次不該發生的推進。代價是那個停頓確實需要人，所以 question 與 options 有長度與數量上限，Runner 不代答也不自行解除。
+第四種寫入值得單獨說，因為它是模型的文字唯一一次變成持久化的治理狀態。它被接受的理由是方向：開 Gate 只會擋住工作，不會放行任何東西——`OpenGateCount > 0` 會讓 `advanceable`、`Verifiable` 與 Goal completion-readiness projection 一致地拒絕前進。幻覺出來的問題因此最多造成一次需要人來 `gate cancel` 的停頓，不會造成一次不該發生的推進。代價是那個停頓確實需要人，所以 question 與 options 有長度與數量上限，Runner 不代答也不自行解除。Goal completion itself follows [ADR-0037](0037-goal-completion-has-no-human-final-review.md) and does not add a final Human Review stop.
 
 `--dry-run` 是同一條原則的檢驗：它跑得完整個判定路徑而不寫任何東西，因為判定本來就不屬於 Runner。
 

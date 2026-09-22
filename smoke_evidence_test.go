@@ -157,7 +157,7 @@ The ` + "`go test`" + ` console output and its exit code are produced by the pro
 that runs this test, so they cannot be written from inside it. Capture them
 alongside this directory and preserve the real exit code:
 
-    go test -count=1 -v -timeout=60m -run '^TestCodexSmokeDrivesDependentWorkToTheGoalReviewBoundary$' . > go-test.log 2>&1
+    go test -count=1 -v -timeout=60m -run '^TestCodexSmokeDrivesDependentWorkToGoalCompletion$' . > go-test.log 2>&1
     echo $? > go-test-exit-code.txt
 
 Piping through ` + "`tee`" + ` reports tee's exit code, not the test's.

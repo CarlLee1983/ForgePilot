@@ -189,8 +189,8 @@ fi`)
 	}
 	runID := lastRun(t, fixture.root)
 	output, code = fixture.runForge(t, agent, "run", "resume", runID)
-	if code != 0 || !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
-		t.Fatalf("resume exit = %d: a valid human wait consumed the technical retry\n%s", code, output)
+	if code != 0 || !strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatalf("resume exit = %d: a valid human wait consumed the technical retry or the Goal did not complete\n%s", code, output)
 	}
 	record := loadRunRecord(t, fixture.root, runID)
 	if record["attempts"].(map[string]any)["WI-001"] != float64(2) ||
@@ -295,7 +295,7 @@ fi
 		"--by", fixtureIdentity)
 
 	output, code = fixture.runForge(t, agent, "run", "resume", runID)
-	if code != 0 || !strings.Contains(output, "AWAITING_GOAL_REVIEW") {
+	if code != 0 || !strings.Contains(output, "GOAL_COMPLETED") {
 		t.Fatalf("resume exit = %d\n%s", code, output)
 	}
 	for _, itemID := range []string{"WI-001", "WI-002", "WI-003", "WI-004"} {
@@ -385,8 +385,8 @@ func TestMaxStepsStopsTheRun(t *testing.T) {
 	if !strings.Contains(output, "MAX_STEPS") {
 		t.Fatalf("output does not name MAX_STEPS:\n%s", output)
 	}
-	if strings.Contains(output, "AWAITING_GOAL_REVIEW") {
-		t.Fatalf("a step-limited stop was reported as the review boundary:\n%s", output)
+	if strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatalf("a step-limited stop was reported as Goal completion:\n%s", output)
 	}
 }
 
@@ -425,11 +425,9 @@ func TestRunnerArtifactsDoNotChangeTheCandidateDigest(t *testing.T) {
 	}
 }
 
-// `run status` must answer two different questions with two different fields:
-// what the run concluded when it stopped, and what the Goal's readiness is
-// right now. The workspace can move after the run ends, and a stored
-// conclusion must never be restated as if it still held.
-func TestRunStatusSeparatesTheStoredResultFromCurrentReadiness(t *testing.T) {
+// `run status` retains the run's committed completion result. A completed Goal
+// stays terminal even when the workspace later moves.
+func TestRunStatusKeepsCommittedGoalCompletionAfterWorkspaceMoves(t *testing.T) {
 	fixture := newRunnerFixture(t, "a.md")
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
@@ -445,11 +443,11 @@ func TestRunStatusSeparatesTheStoredResultFromCurrentReadiness(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run status exit = %d\n%s", code, text)
 	}
-	if !strings.Contains(text, "AWAITING_GOAL_REVIEW") {
+	if !strings.Contains(text, "GOAL_COMPLETED") {
 		t.Fatalf("run status does not show the stored stop reason:\n%s", text)
 	}
-	if !strings.Contains(text, "awaiting goal final review") {
-		t.Fatalf("run status does not show a separately-labelled current readiness:\n%s", text)
+	if !strings.Contains(text, "goal queue is done") {
+		t.Fatalf("run status does not show the completed Goal:\n%s", text)
 	}
 
 	jsonOutput, code := fixture.runForge(t, "", "run", "status", runID, "--json")
@@ -465,12 +463,12 @@ func TestRunStatusSeparatesTheStoredResultFromCurrentReadiness(t *testing.T) {
 	if !hasStopReason || !hasCurrentGoal {
 		t.Fatalf("run status --json is missing distinct stop_reason/current_goal_readiness keys: %v", view)
 	}
-	if stopReason != "AWAITING_GOAL_REVIEW" || currentGoal != "awaiting goal final review" {
+	if stopReason != "GOAL_COMPLETED" || currentGoal != "done" {
 		t.Fatalf("stop_reason = %v, current_goal_readiness = %v", stopReason, currentGoal)
 	}
 
-	// Move the workspace on: the stored conclusion must stay put while the
-	// current readiness reflects what changed.
+	// Move the workspace on: terminal completion and the stored stop reason stay
+	// put; current repository facts cannot reopen a completed Goal.
 	write(t, filepath.Join(fixture.root, "specs", "stories", "d.md"), "# story d\n")
 	commitAll(t, fixture.root, "add another story")
 
@@ -482,11 +480,40 @@ func TestRunStatusSeparatesTheStoredResultFromCurrentReadiness(t *testing.T) {
 	if err := json.Unmarshal([]byte(jsonAfter), &viewAfter); err != nil {
 		t.Fatalf("decode run status --json: %v\n%s", err, jsonAfter)
 	}
-	if viewAfter["stop_reason"] != "AWAITING_GOAL_REVIEW" {
+	if viewAfter["stop_reason"] != "GOAL_COMPLETED" {
 		t.Fatalf("stop_reason changed after the workspace moved on: %v", viewAfter["stop_reason"])
 	}
-	if viewAfter["current_goal_readiness"] == "awaiting goal final review" {
-		t.Fatalf("current_goal_readiness still reads as awaiting review after the workspace changed: %v", viewAfter)
+	if viewAfter["current_goal_readiness"] != "done" {
+		t.Fatalf("completed Goal readiness changed after the workspace moved on: %v", viewAfter)
+	}
+}
+
+func TestLegacyAwaitingGoalReviewStopRemainsReadable(t *testing.T) {
+	fixture := newRunnerFixture(t, "a.md")
+	mustRun(t, fixture.binary, fixture.root, "init")
+	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
+	runID := "run-20260919t000000-abcdef"
+	writeRunRecord(t, fixture.root, runID, map[string]any{
+		"run_id":    runID,
+		"workspace": fixture.root,
+		"goal_id":   "queue",
+		"stop": map[string]any{
+			"reason": "AWAITING_GOAL_REVIEW",
+			"detail": "historical Goal review boundary",
+			"at":     "2026-09-19T00:00:00Z",
+		},
+	})
+
+	output, code := fixture.runForge(t, "", "run", "status", runID, "--json")
+	if code != 0 {
+		t.Fatalf("legacy run status exit = %d\n%s", code, output)
+	}
+	var view map[string]any
+	if err := json.Unmarshal([]byte(output), &view); err != nil {
+		t.Fatalf("decode legacy run status --json: %v\n%s", err, output)
+	}
+	if view["stop_reason"] != "AWAITING_GOAL_REVIEW" || view["exit_code"] != float64(0) {
+		t.Fatalf("legacy stop = %v / %v, want AWAITING_GOAL_REVIEW / 0", view["stop_reason"], view["exit_code"])
 	}
 }
 
