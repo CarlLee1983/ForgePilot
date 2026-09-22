@@ -78,6 +78,26 @@ sha256_stdin() {
 	/usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
 }
 
+# setup_paths permits quote and backslash in HOME, so printf interpolation is
+# not a JSON encoder. NUL cannot occur in a POSIX path.
+json_string() {
+	printf '%s' "$1" | /usr/bin/awk '
+		BEGIN { ORS=""; printf "\"" }
+		{
+			if (NR > 1) printf "\\n"
+			for (position = 1; position <= length($0); position++) {
+				character = substr($0, position, 1)
+				if (character == "\\") printf "\\\\"
+				else if (character == "\"") printf "\\\""
+				else if (character == "\t") printf "\\t"
+				else if (character == "\r") printf "\\r"
+				else printf "%s", character
+			}
+		}
+		END { printf "\"" }
+	'
+}
+
 payload_digest() {
 	generation_dir=$1
 	safe_dir "$generation_dir"
@@ -158,6 +178,15 @@ verify_lock_path() {
 setup_paths() {
 	[ -n "${HOME:-}" ] || fail 'HOME is required'
 	case "$HOME" in /*) ;; *) fail 'HOME must be absolute' ;; esac
+	# JSON protocol paths cannot safely represent a POSIX control byte without
+	# widening this shell's byte-level encoder. Refuse it before layout
+	# inspection rather than emitting malformed machine JSON.
+	if printf '%s' "$HOME" | /usr/bin/grep '[[:cntrl:]]' >/dev/null; then
+		fail 'HOME contains a JSON control byte'
+	fi
+	if ! printf '%s' "$HOME" | /usr/bin/iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
+		fail 'HOME is not valid UTF-8'
+	fi
 	CURRENT_UID=$(/usr/bin/id -u) || fail 'cannot determine current user'
 	ROOT=$HOME/.local/share/forgepilot
 	VERSIONS=$ROOT/versions
@@ -250,8 +279,11 @@ generation_current() {
 		[ "$retention_before" = "$RETENTION_DIGEST" ] &&
 		[ "$retention_count_before" -eq "$RETENTION_COUNT" ] &&
 		[ "$generation_count_before" -eq "$GENERATION_COUNT" ] || fail 'managed state changed during generation discovery'
-	printf '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s/versions/%s/bin/forgepilot","helper_path":"%s/versions/%s/libexec/forgepilot-bootstrap"}\n' \
-		"$CURRENT_COMMIT" "$CURRENT_DIGEST" "$ROOT" "$CURRENT_COMMIT" "$ROOT" "$CURRENT_COMMIT"
+	printf '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":' "$CURRENT_COMMIT" "$CURRENT_DIGEST"
+	json_string "$ROOT/versions/$CURRENT_COMMIT/bin/forgepilot"
+	printf ',"helper_path":'
+	json_string "$ROOT/versions/$CURRENT_COMMIT/libexec/forgepilot-bootstrap"
+	printf '}\n'
 }
 
 read_retention_marker() {

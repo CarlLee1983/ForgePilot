@@ -7,6 +7,10 @@ import (
 )
 
 func main() {
+	if err := reexecCanonicalProcessImage(); err != nil {
+		os.Stderr.WriteString("forgepilot: " + err.Error() + "\n")
+		os.Exit(1)
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		os.Stderr.WriteString("forgepilot: get working directory: " + err.Error() + "\n")

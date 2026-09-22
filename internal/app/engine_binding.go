@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
@@ -42,28 +44,55 @@ type EngineGenerationResolver interface {
 	Resolve(context.Context) (ResolvedBootstrapGeneration, error)
 }
 
-// BootstrapGenerationResolver asks a managed, version-matched Bootstrap helper
-// for its current generation. The helper response must identify both the
-// running ForgePilot executable and the helper itself after symlink resolution;
-// this refuses a developer build, a stale helper, or an ambient command that
-// merely claims a managed tuple.
+// BootstrapProcessImage is the immutable ForgePilot image identity captured
+// when the process starts. It must never be reconstructed from a stable link
+// during admission: an upgrade may change current while this process still
+// runs an older generation.
+type BootstrapProcessImage struct {
+	executablePath string
+	homePath       string
+	managedRoot    string
+}
+
+// CaptureBootstrapProcessImage records the executable image before a caller
+// can begin work that relies on the managed Bootstrap generation. The managed root
+// is the Bootstrap-owned ~/.local/share/forgepilot root selected at startup.
+// The resolver deliberately does not call this itself, because that would
+// turn a later stable-link resolution into an authorization fact.
+func CaptureBootstrapProcessImage(home string) (BootstrapProcessImage, error) {
+	if !validAbsolutePath(home) {
+		return BootstrapProcessImage{}, errors.New("Bootstrap home must be an absolute clean path")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return BootstrapProcessImage{}, fmt.Errorf("discover ForgePilot process image: %w", err)
+	}
+	canonicalExecutable, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		return BootstrapProcessImage{}, fmt.Errorf("resolve ForgePilot process image: %w", err)
+	}
+	if canonicalExecutable != executable {
+		return BootstrapProcessImage{}, errors.New("ForgePilot process image was not canonicalized at startup")
+	}
+	if !validAbsolutePath(executable) {
+		return BootstrapProcessImage{}, errors.New("ForgePilot process image is not an absolute clean path")
+	}
+	return BootstrapProcessImage{executablePath: executable, homePath: home,
+		managedRoot: filepath.Join(home, ".local", "share", "forgepilot")}, nil
+}
+
+// BootstrapGenerationResolver asks only the helper adjacent to the generation
+// that launched this process. It never accepts a caller-selected helper or
+// resolves current: the process image anchors helper trust and makes an
+// upgrade between launch and admission fail closed.
 type BootstrapGenerationResolver struct {
-	HelperPath     string
-	ExecutablePath string
+	ProcessImage BootstrapProcessImage
 }
 
 func (resolver BootstrapGenerationResolver) Resolve(ctx context.Context) (ResolvedBootstrapGeneration, error) {
-	if !filepath.IsAbs(resolver.HelperPath) || strings.TrimSpace(resolver.HelperPath) != resolver.HelperPath ||
-		!filepath.IsAbs(resolver.ExecutablePath) || strings.TrimSpace(resolver.ExecutablePath) != resolver.ExecutablePath {
-		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap generation resolver paths must be absolute")
-	}
-	helperPath, err := filepath.EvalSymlinks(resolver.HelperPath)
+	generationID, helperPath, err := resolver.ProcessImage.generationHelperPath()
 	if err != nil {
-		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve Bootstrap helper path: %w", err)
-	}
-	executablePath, err := filepath.EvalSymlinks(resolver.ExecutablePath)
-	if err != nil {
-		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve ForgePilot executable path: %w", err)
+		return ResolvedBootstrapGeneration{}, err
 	}
 	output, err := exec.CommandContext(ctx, helperPath, "generation-v1", "current").Output()
 	if err != nil {
@@ -76,33 +105,174 @@ func (resolver BootstrapGenerationResolver) Resolve(ctx context.Context) (Resolv
 		ForgePilotPath  string `json:"forgepilot_path"`
 		HelperPath      string `json:"helper_path"`
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(output)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
+	if err := decodeStrictProtocolJSON(output, &result); err != nil {
 		return ResolvedBootstrapGeneration{}, fmt.Errorf("decode Bootstrap generation result: %w", err)
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap generation result contains extra JSON values")
-	}
 	generation := work.ExecutionEngineGeneration{SourceCommit: result.GenerationID, PayloadSHA256: result.PayloadDigest}
-	if !filepath.IsAbs(result.ForgePilotPath) || strings.TrimSpace(result.ForgePilotPath) != result.ForgePilotPath ||
-		!filepath.IsAbs(result.HelperPath) || strings.TrimSpace(result.HelperPath) != result.HelperPath {
+	expectedExecutable := resolver.ProcessImage.executablePath
+	if !validAbsolutePath(result.ForgePilotPath) || !validAbsolutePath(result.HelperPath) {
 		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap helper returned invalid managed paths")
 	}
-	reportedExecutable, err := filepath.EvalSymlinks(result.ForgePilotPath)
-	if err != nil {
-		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve reported ForgePilot path: %w", err)
-	}
-	reportedHelper, err := filepath.EvalSymlinks(result.HelperPath)
-	if err != nil {
-		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve reported Bootstrap helper path: %w", err)
-	}
 	if result.ProtocolVersion != 1 || !validEngineGeneration(generation) ||
-		reportedExecutable != executablePath || reportedHelper != helperPath {
+		generation.SourceCommit != generationID || result.ForgePilotPath != expectedExecutable || result.HelperPath != helperPath {
 		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap helper did not confirm the current managed ForgePilot generation")
 	}
 	return ResolvedBootstrapGeneration{Generation: generation, HelperPath: helperPath}, nil
+}
+
+func (image BootstrapProcessImage) generationHelperPath() (string, string, error) {
+	if !validAbsolutePath(image.executablePath) || !validAbsolutePath(image.homePath) || !validAbsolutePath(image.managedRoot) ||
+		image.managedRoot != filepath.Join(image.homePath, ".local", "share", "forgepilot") {
+		return "", "", errors.New("Bootstrap process image paths must be absolute clean paths")
+	}
+	relative, err := filepath.Rel(image.managedRoot, image.executablePath)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", "", errors.New("ForgePilot process image is outside the managed Bootstrap root")
+	}
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	if len(parts) != 4 || parts[0] != "versions" || !validEngineGeneration(work.ExecutionEngineGeneration{SourceCommit: parts[1], PayloadSHA256: "sha256:" + strings.Repeat("0", 64)}) ||
+		parts[2] != "bin" || parts[3] != "forgepilot" {
+		return "", "", errors.New("ForgePilot process image is not a managed generation executable")
+	}
+	helper := filepath.Join(image.managedRoot, "versions", parts[1], "libexec", "forgepilot-bootstrap")
+	stableHelper := filepath.Join(image.homePath, ".local", "bin", "forgepilot-bootstrap")
+	if err := validateManagedHelperPaths(image, helper); err != nil {
+		return "", "", err
+	}
+	if err := safeManagedSymlink(stableHelper, os.Getuid()); err != nil {
+		return "", "", err
+	}
+	target, err := os.Readlink(stableHelper)
+	if err != nil || target != filepath.Join(image.managedRoot, "current", "libexec", "forgepilot-bootstrap") {
+		return "", "", errors.New("Bootstrap stable helper link is missing or drifted")
+	}
+	anchoredHelper, err := filepath.EvalSymlinks(stableHelper)
+	canonicalHelper, canonicalErr := filepath.EvalSymlinks(helper)
+	if err != nil || canonicalErr != nil || anchoredHelper != canonicalHelper {
+		return "", "", errors.New("Bootstrap stable helper does not select the process generation")
+	}
+	return parts[1], helper, nil
+}
+
+// validateManagedHelperPaths checks the metadata facts Bootstrap itself relies
+// on before executing the generation-local shell helper. This is intentionally
+// not a second manifest/payload implementation: Bootstrap remains the sole
+// owner of that validation, but a substituted or unsafe path must never be
+// executed to reach it.
+func validateManagedHelperPaths(image BootstrapProcessImage, helper string) error {
+	uid := os.Getuid()
+	for _, path := range []struct {
+		path    string
+		private bool
+	}{
+		{image.homePath, false},
+		{filepath.Join(image.homePath, ".local"), false},
+		{filepath.Join(image.homePath, ".local", "share"), false},
+		{filepath.Join(image.homePath, ".local", "bin"), false},
+		{image.managedRoot, true},
+		{filepath.Join(image.managedRoot, "versions"), true},
+		{filepath.Join(image.managedRoot, "versions", filepath.Base(filepath.Dir(filepath.Dir(helper)))), true},
+		{filepath.Dir(helper), true},
+	} {
+		if err := safeManagedDirectory(path.path, uid, path.private); err != nil {
+			return err
+		}
+	}
+	for _, path := range []string{image.executablePath, helper} {
+		if err := safeManagedExecutable(path, uid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func safeManagedDirectory(path string, uid int, private bool) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("managed directory %q is missing or unsafe", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != uid || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0700 != 0700 ||
+		(private && info.Mode().Perm()&0077 != 0) {
+		return fmt.Errorf("managed directory %q has unsafe ownership or mode", path)
+	}
+	return nil
+}
+
+func safeManagedExecutable(path string, uid int) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0111 == 0 {
+		return fmt.Errorf("managed executable %q is missing or unsafe", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != uid || stat.Nlink != 1 || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0400 == 0 {
+		return fmt.Errorf("managed executable %q has unsafe ownership, mode, or links", path)
+	}
+	return nil
+}
+
+func safeManagedSymlink(path string, uid int) error {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("managed symlink %q is missing or unsafe", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != uid {
+		return fmt.Errorf("managed symlink %q has unexpected ownership", path)
+	}
+	return nil
+}
+
+func validAbsolutePath(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && strings.TrimSpace(path) == path
+}
+
+// decodeStrictProtocolJSON accepts exactly one JSON object, rejects duplicate
+// member names before they are collapsed by encoding/json, then preserves the
+// existing unknown-field rejection on the typed protocol result.
+func decodeStrictProtocolJSON(input []byte, destination any) error {
+	decoder := json.NewDecoder(strings.NewReader(string(input)))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+		return errors.New("protocol result must be a JSON object")
+	}
+	members := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return errors.New("protocol result has a non-string member name")
+		}
+		if _, duplicate := members[name]; duplicate {
+			return fmt.Errorf("protocol result has duplicate member %q", name)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+		members[name] = value
+	}
+	if token, err := decoder.Token(); err != nil {
+		return err
+	} else if delimiter, ok := token.(json.Delim); !ok || delimiter != '}' {
+		return errors.New("protocol result did not end its object")
+	}
+	if token, err := decoder.Token(); !errors.Is(err, io.EOF) || token != nil {
+		return errors.New("protocol result contains extra JSON values")
+	}
+	normalized, err := json.Marshal(members)
+	if err != nil {
+		return err
+	}
+	decoder = json.NewDecoder(strings.NewReader(string(normalized)))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(destination)
 }
 
 // BootstrapRetention uses the versioned Bootstrap helper protocol. The helper
@@ -133,14 +303,8 @@ func (retention BootstrapRetention) Acquire(ctx context.Context, generation work
 		GenerationID    string `json:"generation_id"`
 		PayloadDigest   string `json:"payload_digest"`
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(output)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
+	if err := decodeStrictProtocolJSON(output, &result); err != nil {
 		return fmt.Errorf("decode Bootstrap retention result: %w", err)
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("Bootstrap retention result contains extra JSON values")
 	}
 	if result.ProtocolVersion != 1 || (result.Result != "acquired" && result.Result != "already_acquired") ||
 		result.GenerationID != generation.SourceCommit || result.PayloadDigest != generation.PayloadSHA256 {

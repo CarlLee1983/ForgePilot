@@ -39,7 +39,16 @@ forgepilot-bootstrap retention-v1 release --generation <lowercase-40-character-s
 managed-layout validation as `status`, it emits exactly one JSON value with `protocol_version: 1`, the exact
 current `generation_id` and `payload_digest`, and absolute generation-local `forgepilot_path` and `helper_path`.
 The paths are the immutable `versions/<commit>/` members observed in that read; callers must compare them to
-their own resolved executable and helper rather than re-resolving `current` or using PATH.
+the process image captured when ForgePilot started and its adjacent generation-local helper, rather than
+re-resolving `current` or using PATH. Callers treat only the fixed managed Bootstrap stable link as the helper
+anchor and require its one resolution to be that adjacent helper; any changed generation fails closed. The result
+is one strict JSON object: every string is JSON-escaped and duplicate keys, unknown keys, and trailing JSON
+values are protocol errors. A `HOME` containing a JSON control byte or non-UTF-8 bytes is refused before layout
+inspection rather than emitting an ambiguous v1 path string.
+
+The ForgePilot entrypoint first re-execs a stable CLI link to its exact generation-local image before command
+processing. A source build that is already an exact path is not re-execed, but cannot be treated as a managed
+generation later. This leaves no later `current` resolution in engine discovery.
 
 `retention-v1` emits one JSON result with `protocol_version: 1`; it accepts no source, target, or repository path and
 does not invoke a build, verification, Git, network, or credential helper. The reference is a random

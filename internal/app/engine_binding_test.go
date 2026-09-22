@@ -155,8 +155,25 @@ printf '%%s\n' '{"protocol_version":1,"result":"acquired","generation_id":"%s","
 	}
 }
 
-func TestBootstrapGenerationResolverAcceptsOnlyTheCurrentManagedExecutable(t *testing.T) {
-	root := t.TempDir()
+func TestBootstrapRetentionRejectsDuplicateJSONKeys(t *testing.T) {
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	reference := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	helper := filepath.Join(t.TempDir(), "forgepilot-bootstrap")
+	script := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' '{"protocol_version":1,"result":"acquired","result":"acquired","generation_id":"%s","payload_digest":"%s"}'
+`, generation.SourceCommit, generation.PayloadSHA256)
+	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := (BootstrapRetention{HelperPath: helper}).Acquire(t.Context(), generation, reference); err == nil {
+		t.Fatal("retention protocol accepted duplicate JSON keys")
+	}
+}
+
+func TestBootstrapGenerationResolverAcceptsOnlyItsProcessGenerationHelper(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".local", "share", "forgepilot")
 	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	managedExecutable := filepath.Join(root, "versions", generation.SourceCommit, "bin", "forgepilot")
@@ -170,35 +187,144 @@ func TestBootstrapGenerationResolverAcceptsOnlyTheCurrentManagedExecutable(t *te
 	if err := os.WriteFile(managedExecutable, []byte("managed CLI"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	helper := managedHelper
 	script := fmt.Sprintf(`#!/bin/sh
 [ "$1" = generation-v1 ] && [ "$2" = current ] || exit 9
 printf '%%s\n' '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s","helper_path":"%s"}'
 `, generation.SourceCommit, generation.PayloadSHA256, managedExecutable, managedHelper)
-	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+	if err := os.WriteFile(managedHelper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".local", "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("versions/"+generation.SourceCommit, filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "current", "libexec", "forgepilot-bootstrap"), filepath.Join(home, ".local", "bin", "forgepilot-bootstrap")); err != nil {
 		t.Fatal(err)
 	}
 
-	resolved, err := (BootstrapGenerationResolver{HelperPath: helper, ExecutablePath: managedExecutable}).Resolve(t.Context())
+	image := BootstrapProcessImage{executablePath: managedExecutable, homePath: home, managedRoot: root}
+	resolved, err := (BootstrapGenerationResolver{ProcessImage: image}).Resolve(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalHelper, err := filepath.EvalSymlinks(managedHelper)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved.Generation != generation || resolved.HelperPath != canonicalHelper {
+	if resolved.Generation != generation || resolved.HelperPath != managedHelper {
 		t.Fatalf("resolved generation = %#v", resolved)
 	}
 
-	unmanagedExecutable := filepath.Join(root, "unmanaged", "forgepilot")
-	if err := os.MkdirAll(filepath.Dir(unmanagedExecutable), 0700); err != nil {
+	fabricatedHelper := filepath.Join(root, "unmanaged", "forgepilot-bootstrap")
+	if err := os.MkdirAll(filepath.Dir(fabricatedHelper), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unmanagedExecutable, []byte("unmanaged CLI"), 0700); err != nil {
+	fabricatedMarker := filepath.Join(root, "fabricated-helper-ran")
+	if err := os.WriteFile(fabricatedHelper, []byte("#!/bin/sh\ntouch "+fabricatedMarker+"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (BootstrapGenerationResolver{HelperPath: helper, ExecutablePath: unmanagedExecutable}).Resolve(t.Context()); err == nil {
-		t.Fatal("unmanaged executable was accepted as a managed generation")
+	if _, err := (BootstrapGenerationResolver{ProcessImage: image}).Resolve(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(fabricatedMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("resolver invoked a fabricated helper")
+	}
+
+	managedMarker := filepath.Join(root, "unsafe-managed-helper-ran")
+	if err := os.WriteFile(managedHelper, []byte("#!/bin/sh\ntouch "+managedMarker+"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(managedHelper, filepath.Join(root, "helper-hard-link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (BootstrapGenerationResolver{ProcessImage: image}).Resolve(t.Context()); err == nil {
+		t.Fatal("resolver accepted a hard-linked managed helper")
+	}
+	if _, err := os.Stat(managedMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("resolver executed an unsafe managed helper")
+	}
+}
+
+func TestBootstrapGenerationResolverRefusesAChangedCurrentGenerationAfterProcessStart(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".local", "share", "forgepilot")
+	oldGeneration := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	newGeneration := work.ExecutionEngineGeneration{SourceCommit: "cccccccccccccccccccccccccccccccccccccccccccc",
+		PayloadSHA256: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+	oldExecutable := filepath.Join(root, "versions", oldGeneration.SourceCommit, "bin", "forgepilot")
+	oldHelper := filepath.Join(root, "versions", oldGeneration.SourceCommit, "libexec", "forgepilot-bootstrap")
+	newExecutable := filepath.Join(root, "versions", newGeneration.SourceCommit, "bin", "forgepilot")
+	newHelper := filepath.Join(root, "versions", newGeneration.SourceCommit, "libexec", "forgepilot-bootstrap")
+	for _, path := range []string{oldExecutable, newExecutable} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("managed CLI"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(newHelper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newHelper, []byte("managed helper"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+[ "$1" = generation-v1 ] && [ "$2" = current ] || exit 9
+printf '%%s\n' '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s","helper_path":"%s"}'
+`, newGeneration.SourceCommit, newGeneration.PayloadSHA256, newExecutable, newHelper)
+	if err := os.MkdirAll(filepath.Dir(oldHelper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldHelper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".local", "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("versions/"+newGeneration.SourceCommit, filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "current", "libexec", "forgepilot-bootstrap"), filepath.Join(home, ".local", "bin", "forgepilot-bootstrap")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := (BootstrapGenerationResolver{ProcessImage: BootstrapProcessImage{executablePath: oldExecutable, homePath: home, managedRoot: root}}).Resolve(t.Context())
+	if err == nil {
+		t.Fatal("resolver accepted the generation selected after its process started")
+	}
+}
+
+func TestBootstrapGenerationResolverRejectsDuplicateJSONKeys(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".local", "share", "forgepilot")
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	executable := filepath.Join(root, "versions", generation.SourceCommit, "bin", "forgepilot")
+	helper := filepath.Join(root, "versions", generation.SourceCommit, "libexec", "forgepilot-bootstrap")
+	for _, path := range []string{executable, helper} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("managed"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' '{"protocol_version":1,"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s","helper_path":"%s"}'
+`, generation.SourceCommit, generation.PayloadSHA256, executable, helper)
+	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".local", "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("versions/"+generation.SourceCommit, filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "current", "libexec", "forgepilot-bootstrap"), filepath.Join(home, ".local", "bin", "forgepilot-bootstrap")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (BootstrapGenerationResolver{ProcessImage: BootstrapProcessImage{executablePath: executable, homePath: home, managedRoot: root}}).Resolve(t.Context()); err == nil {
+		t.Fatal("resolver accepted duplicate JSON keys")
 	}
 }

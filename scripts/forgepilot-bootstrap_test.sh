@@ -139,6 +139,33 @@ assert_output "$output" "\"payload_digest\":\"$digest_a\""
 assert_output "$output" "\"forgepilot_path\":\"$root/versions/$generation_a/bin/forgepilot\""
 assert_output "$output" "\"helper_path\":\"$root/versions/$generation_a/libexec/forgepilot-bootstrap\""
 
+# A valid HOME can contain JSON-significant bytes. Use a complete isolated
+# managed layout so this tests generation-v1, not a synthetic string encoder.
+escaped_home=$fixture/'home"quote\slash'
+/bin/cp -pR "$home" "$escaped_home"
+escaped_root=$escaped_home/.local/share/forgepilot
+rm "$escaped_home/.local/bin/forgepilot" "$escaped_home/.local/bin/forgepilot-bootstrap" "$escaped_home/.agents/skills/forgepilot-onboarding"
+ln -s "$escaped_root/current/bin/forgepilot" "$escaped_home/.local/bin/forgepilot"
+ln -s "$escaped_root/current/libexec/forgepilot-bootstrap" "$escaped_home/.local/bin/forgepilot-bootstrap"
+ln -s "$escaped_root/current/skills/codex/forgepilot-onboarding" "$escaped_home/.agents/skills/forgepilot-onboarding"
+output=$(HOME="$escaped_home" "$bootstrap" generation-v1 current) || fail 'escaped-path generation discovery failed'
+assert_output "$output" 'home\"quote\\slash'
+assert_output "$output" '"forgepilot_path":"'
+assert_output "$output" '"helper_path":"'
+
+# Control bytes are valid POSIX path bytes but unsupported by this v1 machine
+# string encoder; reject them before layout inspection instead of emitting bad JSON.
+control_home=$fixture/'home-control'$(printf '\001')'byte'
+if output=$(HOME="$control_home" "$bootstrap" generation-v1 current 2>&1); then
+	fail 'generation discovery accepted a control byte in HOME'
+fi
+assert_output "$output" 'HOME contains a JSON control byte'
+invalid_utf8_home=$fixture/'home-invalid'$(printf '\200')'byte'
+if output=$(HOME="$invalid_utf8_home" "$bootstrap" generation-v1 current 2>&1); then
+	fail 'generation discovery accepted non-UTF-8 HOME bytes'
+fi
+assert_output "$output" 'HOME is not valid UTF-8'
+
 decode_action_plan() {
 	assert_action_file=$1
 	assert_plan_id=$2
