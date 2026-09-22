@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,79 @@ import (
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
+
+type staticGenerationResolver struct {
+	resolved app.ResolvedBootstrapGeneration
+	err      error
+	calls    *int
+}
+
+func (resolver staticGenerationResolver) Resolve(context.Context) (app.ResolvedBootstrapGeneration, error) {
+	if resolver.calls != nil {
+		(*resolver.calls)++
+	}
+	return resolver.resolved, resolver.err
+}
+
+func TestRunnerBindsManagedGenerationBeforePersistingRunIntent(t *testing.T) {
+	root, runtimeCommand, _, now, _ := newUnresolvedExecutionRunnerFixture(t)
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := state.Goals[0].Execution.Authorizations[0]
+	generation := work.ExecutionEngineGeneration{SourceCommit: strings.Repeat("a", 40), PayloadSHA256: "sha256:" + strings.Repeat("b", 64)}
+	identity := app.RunnerIdentity{Runtime: authorization.WorkerProfile.Runtime, ExecutablePath: authorization.WorkerProfile.ExecutablePath,
+		Version: "test-codex 1", Sandbox: authorization.WorkerProfile.Sandbox}
+	calls := 0
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	options.GenerationResolver = staticGenerationResolver{resolved: app.ResolvedBootstrapGeneration{Generation: generation, HelperPath: runtimeCommand}, calls: &calls}
+	const crash = "after-run-intent"
+	options.testCrashAt = func(point string) {
+		if point == crash {
+			panic(crash)
+		}
+	}
+	panicked := false
+	func() {
+		defer func() {
+			if recover() == crash {
+				panicked = true
+			}
+		}()
+		if _, err := newRunner(options); err != nil {
+			t.Fatalf("new Runner before crash = %v", err)
+		}
+	}()
+	if !panicked {
+		t.Fatal("new Runner did not reach the run-intent crash boundary")
+	}
+	if calls != 1 {
+		t.Fatalf("generation resolver calls = %d; want exactly one before intent", calls)
+	}
+	after, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := after.Goals[0].Execution.Authorizations[0]
+	if bound.WorkerIdentity == nil || bound.EngineGeneration == nil || *bound.EngineGeneration != generation {
+		t.Fatalf("run intent persisted before managed identity binding: %#v", bound)
+	}
+	runIDs, err := storage.ListRuns(root)
+	if err != nil || len(runIDs) != 1 {
+		t.Fatalf("run intents = %v, err=%v", runIDs, err)
+	}
+	record, err := LoadRecord(root, runIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.RunPreparationState != RunPreparationPendingCharge || record.ExecutionAuthorizationDigest != bound.Digest {
+		t.Fatalf("run intent did not use bound authorization: %#v", record)
+	}
+	if after.Goals[0].Execution.Ledger.RunsConsumed != 0 || len(after.Goals[0].Execution.Ledger.Reservations) != 0 {
+		t.Fatalf("RUN reservation preceded its durable intent: %#v", after.Goals[0].Execution.Ledger)
+	}
+}
 
 func TestUnauthorisedGoalRefusesDirectAndLegacyExactRunBeforeWorkerLaunch(t *testing.T) {
 	root, runtimeCommand, sentinel, now, execution := newUnresolvedExecutionRunnerFixture(t)
@@ -145,13 +219,14 @@ func TestLegacyRunIntentDoesNotAdoptAuthorizationAddedAfterCrash(t *testing.T) {
 func TestChargedStartAndForgedResumeRefuseBeforeLaunchingWorker(t *testing.T) {
 	root, runtimeCommand, sentinel, now, execution := newUnresolvedExecutionRunnerFixture(t)
 	options := Options{Root: root, GoalID: execution.GoalID, RuntimeName: "codex", RuntimeCommand: runtimeCommand, Snapshot: true,
-		Budget: testBudget(), Limits: testLimits(), Now: func() time.Time { return now }}
+		Budget: testBudget(), Limits: testLimits(), Now: func() time.Time { return now },
+		GenerationResolver: staticGenerationResolver{}, testExecutionIdentity: &app.RunnerIdentity{Model: "wrong", Effort: "wrong"}}
 	before, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Start(options); err == nil || !strings.Contains(err.Error(), "not launchable until WorkerIdentity and engine generation are resolved") {
-		t.Fatalf("charged Start error = %v, want fail-closed unresolved identity refusal", err)
+	if _, err := Start(options); err == nil || !strings.Contains(err.Error(), "runner runtime does not match the current execution Worker Profile") {
+		t.Fatalf("charged Start error = %v, want fail-closed runtime identity refusal", err)
 	}
 	afterStart, err := storage.Load(root)
 	if err != nil {
@@ -874,8 +949,7 @@ func TestResumeAuthorizationGoalSelectsTheLatestStoppedChargedRun(t *testing.T) 
 		t.Fatalf("stored continuation anchor workspace differs from canonical root: %q / %q", stored.Workspace, canonicalRoot)
 	}
 
-	resumed, err := ResumeAuthorizationGoal(Options{Root: root, Now: func() time.Time { return now },
-		testExecutionIdentity: &identity}, execution.GoalID)
+	resumed, err := ResumeAuthorizationGoal(chargedRunnerTestOptions(root, runtimeCommand, now, identity), execution.GoalID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1198,6 +1272,10 @@ func newUnresolvedExecutionRunnerFixture(t *testing.T) (root, runtimeCommand, se
 	t.Setenv("FORGEPILOT_LAUNCH_SENTINEL", sentinel)
 	runtimeContents := []byte(`#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'test-codex 1\n'; exit 0; fi
+if [ "$1" = "retention-v1" ] && [ "$2" = "acquire" ] && [ "$3" = "--generation" ] && [ "$5" = "--payload-digest" ] && [ "$7" = "--reference" ]; then
+  printf '{"protocol_version":1,"result":"acquired","generation_id":"%s","payload_digest":"%s"}\n' "$4" "$6"
+  exit 0
+fi
 result=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--output-last-message" ]; then shift; result="$1"; fi
@@ -1314,8 +1392,13 @@ func resolveExecutionIdentityForRunnerTest(t *testing.T, root string, now time.T
 
 func chargedRunnerTestOptions(root, runtimeCommand string, now time.Time, identity app.RunnerIdentity) Options {
 	budget := testBudget()
+	resolver := staticGenerationResolver{}
+	if identity.EngineGeneration != nil {
+		resolver.resolved = app.ResolvedBootstrapGeneration{Generation: *identity.EngineGeneration, HelperPath: runtimeCommand}
+	}
 	return Options{Root: root, GoalID: "g", RuntimeName: "codex", RuntimeCommand: runtimeCommand, Snapshot: true,
-		Budget: budget, Limits: testLimits(), Now: func() time.Time { return now }, testExecutionIdentity: &identity}
+		Budget: budget, Limits: testLimits(), Now: func() time.Time { return now }, GenerationResolver: resolver,
+		testExecutionIdentity: &identity}
 }
 
 func executionDigestForRunnerTest(t *testing.T, domain string, value any) string {

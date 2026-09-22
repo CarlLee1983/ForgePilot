@@ -30,6 +30,9 @@ type Options struct {
 	Snapshot       bool
 	Budget         Budget
 	Limits         storage.ArtifactLimits
+	// GenerationResolver resolves the immutable managed ForgePilot generation
+	// that must be retained before this Runner can bind or charge execution.
+	GenerationResolver app.EngineGenerationResolver
 	// Output receives progress, and the verification command's own presentation
 	// passes through to it as well.
 	Output io.Writer
@@ -472,6 +475,17 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 			expectedDigest := existing.ExecutionAuthorizationDigest
 			identity := runner.identityWithTestFacts(app.RunnerIdentity{Runtime: runner.runtime.Name(), ExecutablePath: executable,
 				Version: version, Sandbox: string(runner.runtime.SessionEnvironment().Sandbox)})
+			if !authorizationChanged && expectedDigest != "" {
+				bound, ensuredIdentity, ensureErr := app.ReacquireExecutionLaunchIdentity(context.Background(), options.Root, existing.GoalID,
+					expectedDigest, identity, runner.options.GenerationResolver, runner.now())
+				if ensureErr != nil {
+					return ensureErr
+				}
+				if bound.Digest != expectedDigest {
+					return errors.New("execution authorization changed while reacquiring its managed generation")
+				}
+				identity = ensuredIdentity
+			}
 			if err := runner.finishPendingRunPreparation(identity, expectedDigest); err != nil {
 				return err
 			}
@@ -544,13 +558,22 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		if err != nil {
 			return err
 		}
+		identity := runner.identityWithTestFacts(app.RunnerIdentity{Runtime: runner.runtime.Name(), ExecutablePath: executable, Version: version,
+			Sandbox: string(runner.runtime.SessionEnvironment().Sandbox)})
+		bound, identity, err := app.ReacquireExecutionLaunchIdentity(context.Background(), options.Root, existing.GoalID,
+			existing.ExecutionAuthorizationDigest, identity, runner.options.GenerationResolver, runner.now())
+		if err != nil {
+			return err
+		}
+		if bound.Digest != existing.ExecutionAuthorizationDigest {
+			return errors.New("execution authorization changed while reacquiring its managed generation")
+		}
 		_, err = app.ValidateRunnerResume(options.Root, existing.GoalID, existing.RunID,
 			existing.ExecutionAuthorizationDigest, existing.RunReservationID, existing.ReservationReceipts,
 			work.ExecutionArtifactLimits{MaxHandoffBytes: existing.Budget.MaxHandoffBytes,
 				MaxWriteBytes: int(existing.Limits.MaxWriteBytes), MaxRunBytes: int(existing.Limits.MaxRunBytes),
 				MaxTotalBytes: int(existing.Limits.MaxTotalBytes)},
-			runner.identityWithTestFacts(app.RunnerIdentity{Runtime: runner.runtime.Name(), ExecutablePath: executable, Version: version,
-				Sandbox: string(runner.runtime.SessionEnvironment().Sandbox)}), runner.now())
+			identity, runner.now())
 		if err != nil {
 			return err
 		}
@@ -792,12 +815,11 @@ func newRunner(options Options) (*Runner, error) {
 	if !runner.now().Before(currentAuthorization.ExpiresAt) {
 		return nil, fmt.Errorf("execution authorization for goal %q has expired", goal.ID)
 	}
-	if err := app.ValidateCurrentExecutionBindings(options.Root, goal.ID, currentAuthorization.Digest); err != nil {
+	pending, err := findPendingRunPreparation(options.Root, options.GoalID)
+	if err != nil {
 		return nil, err
 	}
-	if pending, err := findPendingRunPreparation(options.Root, options.GoalID); err != nil {
-		return nil, err
-	} else if pending != nil {
+	if pending != nil {
 		if err := validatePendingRunPreparationRecord(*pending); err != nil {
 			return nil, err
 		}
@@ -807,10 +829,33 @@ func newRunner(options Options) (*Runner, error) {
 		if pending.RunPreparationState == RunPreparationPendingClassification && goal.Execution != nil {
 			return nil, fmt.Errorf("run %s execution authorization changed after the Run Record intent was saved; refuse stale legacy recovery", pending.RunID)
 		}
+		if pending.ExecutionAuthorizationDigest != currentAuthorization.Digest {
+			return nil, fmt.Errorf("run %s execution authorization changed after the Run Record intent was saved", pending.RunID)
+		}
+	}
+	ensureLaunchIdentity := app.EnsureExecutionLaunchIdentity
+	if pending != nil {
+		ensureLaunchIdentity = app.ReacquireExecutionLaunchIdentity
+	}
+	bound, identity, err := ensureLaunchIdentity(context.Background(), options.Root, goal.ID,
+		currentAuthorization.Digest, identity, options.GenerationResolver, runner.now())
+	if err != nil {
+		return nil, err
+	}
+	goal, err = app.RunnableGoal(options.Root, options.GoalID)
+	if err != nil {
+		return nil, err
+	}
+	currentAuthorization = goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
+	if currentAuthorization.Digest != bound.Digest {
+		return nil, errors.New("execution authorization changed while binding its managed generation")
+	}
+	if err := app.ValidateCurrentExecutionBindings(options.Root, goal.ID, currentAuthorization.Digest); err != nil {
+		return nil, err
+	}
+	if pending != nil {
 		runner.record = pending
-		expectedDigest := ""
-		expectedDigest = pending.ExecutionAuthorizationDigest
-		if err := runner.finishPendingRunPreparation(identity, expectedDigest); err != nil {
+		if err := runner.finishPendingRunPreparation(identity, pending.ExecutionAuthorizationDigest); err != nil {
 			return nil, err
 		}
 		runner.crashAt("after-run-record")

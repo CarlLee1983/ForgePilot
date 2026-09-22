@@ -22,7 +22,7 @@ const (
 	executionDeclareUsage         = "usage: forgepilot execution declare --request <path> --json"
 )
 
-func executionCommand(args []string, root string, output io.Writer) error {
+func executionCommand(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	if len(args) == 0 {
 		return errors.New("usage: forgepilot execution <plan|authorize|revise|resume|stop|declare>")
 	}
@@ -34,7 +34,7 @@ func executionCommand(args []string, root string, output io.Writer) error {
 	case "revise":
 		return reviseExecution(args[1:], root, output)
 	case "resume":
-		return resumeExecution(args[1:], root, output)
+		return resumeExecution(args[1:], root, output, resolver)
 	case "stop":
 		return stopExecution(args[1:], root, output)
 	case "declare":
@@ -110,7 +110,7 @@ func declareExecution(args []string, root string, output io.Writer) error {
 	}{Version: "forgepilot.external-fulfillment-declaration/v1", Declaration: declaration})
 }
 
-func resumeExecution(args []string, root string, output io.Writer) error {
+func resumeExecution(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	args, jsonOutput, err := takeJSONFlag(args)
 	if err != nil {
 		return err
@@ -131,6 +131,7 @@ func resumeExecution(args []string, root string, output io.Writer) error {
 	}
 	record, err := runner.ResumeAuthorizationGoal(runner.Options{
 		Root: root, Output: runOutput, Now: now, Stop: stop, Signalled: signalled,
+		GenerationResolver: resolver,
 	}, goalID)
 	if jsonOutput && err == nil {
 		if record.Stop == nil {

@@ -16,7 +16,18 @@ import (
 )
 
 func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
-	err := run(args, cwd, stdout)
+	return execute(args, cwd, stdout, stderr, nil)
+}
+
+// ExecuteWithGenerationResolver supplies the immutable Bootstrap generation
+// captured by the process entrypoint. Only Runner admission consumes it; other
+// commands retain Execute's ordinary local CLI behavior.
+func ExecuteWithGenerationResolver(args []string, cwd string, stdout, stderr io.Writer, resolver app.EngineGenerationResolver) int {
+	return execute(args, cwd, stdout, stderr, resolver)
+}
+
+func execute(args []string, cwd string, stdout, stderr io.Writer, resolver app.EngineGenerationResolver) int {
+	err := run(args, cwd, stdout, resolver)
 	if err == nil {
 		return 0
 	}
@@ -81,7 +92,7 @@ a network request; the run command launches the local coding CLI you name, and
 that CLI may contact a model service of its own.
 `
 
-func run(args []string, cwd string, output io.Writer) error {
+func run(args []string, cwd string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	if len(args) == 0 {
 		return errors.New(usageSummary)
 	}
@@ -119,9 +130,9 @@ func run(args []string, cwd string, output io.Writer) error {
 	case "verify":
 		return verify(args[1:], root, output)
 	case "run":
-		return runCommand(args[1:], root, output)
+		return runCommand(args[1:], root, output, resolver)
 	case "execution":
-		return executionCommand(args[1:], root, output)
+		return executionCommand(args[1:], root, output, resolver)
 	case "gate":
 		return gate(args[1:], root, output)
 	case "review":

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	"github.com/CarlLee1983/ForgePilot/internal/app"
 	"github.com/CarlLee1983/ForgePilot/internal/cli"
 )
 
@@ -16,5 +17,49 @@ func main() {
 		os.Stderr.WriteString("forgepilot: get working directory: " + err.Error() + "\n")
 		os.Exit(1)
 	}
-	os.Exit(cli.Execute(os.Args[1:], cwd, os.Stdout, os.Stderr))
+	resolver, err := runnerGenerationResolver(os.Args[1:])
+	if err != nil {
+		os.Stderr.WriteString("forgepilot: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	os.Exit(cli.ExecuteWithGenerationResolver(os.Args[1:], cwd, os.Stdout, os.Stderr, resolver))
+}
+
+// Runner admission needs a process-image fact that cannot be reconstructed
+// after a Bootstrap upgrade. Capture it before command dispatch, but leave
+// ordinary local commands usable from an unmanaged development binary.
+func runnerGenerationResolver(args []string) (app.EngineGenerationResolver, error) {
+	if !requiresRunnerGeneration(args) {
+		return nil, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	image, err := app.CaptureBootstrapProcessImage(home)
+	if err != nil {
+		return nil, err
+	}
+	return app.BootstrapGenerationResolver{ProcessImage: image}, nil
+}
+
+func requiresRunnerGeneration(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "execution" {
+		return len(args) > 1 && args[1] == "resume"
+	}
+	if args[0] != "run" || len(args) < 2 || args[1] == "status" {
+		return false
+	}
+	if args[1] == "resume" {
+		return true
+	}
+	for _, arg := range args[1:] {
+		if arg == "--dry-run" {
+			return false
+		}
+	}
+	return true
 }

@@ -60,13 +60,13 @@ func defaultLimits() storage.ArtifactLimits {
 	}
 }
 
-func runCommand(args []string, root string, output io.Writer) error {
+func runCommand(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "status":
 			return runStatus(args[1:], root, output)
 		case "resume":
-			return runResume(args[1:], root, output)
+			return runResume(args[1:], root, output, resolver)
 		}
 	}
 	options, dryRun, err := parseRunOptions(args, root, output)
@@ -76,6 +76,7 @@ func runCommand(args []string, root string, output io.Writer) error {
 	if dryRun {
 		return printPlan(options, output)
 	}
+	options.GenerationResolver = resolver
 	stop, signalled, release := signalStop()
 	defer release()
 	options.Stop, options.Signalled = stop, signalled
@@ -83,14 +84,14 @@ func runCommand(args []string, root string, output io.Writer) error {
 	return reportRun(record, err, output)
 }
 
-func runResume(args []string, root string, output io.Writer) error {
+func runResume(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	if len(args) != 1 || strings.HasPrefix(args[0], "--") {
 		return errors.New("usage: forgepilot run resume <run-id>")
 	}
 	stop, signalled, release := signalStop()
 	defer release()
 	record, err := runner.Resume(runner.Options{
-		Root: root, Output: output, Now: now, Stop: stop, Signalled: signalled, Limits: defaultLimits(),
+		Root: root, Output: output, Now: now, Stop: stop, Signalled: signalled, Limits: defaultLimits(), GenerationResolver: resolver,
 	}, args[0])
 	return reportRun(record, err, output)
 }

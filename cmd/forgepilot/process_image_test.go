@@ -62,3 +62,24 @@ func TestReexecProcessImagePassesCanonicalImageArgsAndEnvironment(t *testing.T) 
 		t.Fatalf("reexec error = %v, want sentinel", err)
 	}
 }
+
+func TestRequiresRunnerGenerationOnlyForMutatingRunnerCommands(t *testing.T) {
+	for _, test := range []struct {
+		arguments []string
+		want      bool
+	}{
+		{nil, false},
+		{[]string{"status"}, false},
+		{[]string{"run"}, false},
+		{[]string{"run", "status", "run-1"}, false},
+		{[]string{"run", "--goal", "g", "--runtime", "fake", "--snapshot", "--dry-run"}, false},
+		{[]string{"run", "resume", "run-1"}, true},
+		{[]string{"run", "--goal", "g", "--runtime", "fake", "--snapshot"}, true},
+		{[]string{"execution", "plan", "--request", "request.json", "--json"}, false},
+		{[]string{"execution", "resume", "--goal", "g"}, true},
+	} {
+		if got := requiresRunnerGeneration(test.arguments); got != test.want {
+			t.Errorf("requiresRunnerGeneration(%q) = %t, want %t", test.arguments, got, test.want)
+		}
+	}
+}

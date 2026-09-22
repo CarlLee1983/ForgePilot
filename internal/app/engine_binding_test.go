@@ -24,6 +24,88 @@ type recordingGenerationRetention struct {
 	err      error
 }
 
+type staticBootstrapGenerationResolver struct {
+	resolved ResolvedBootstrapGeneration
+	calls    int
+	err      error
+}
+
+func (resolver *staticBootstrapGenerationResolver) Resolve(context.Context) (ResolvedBootstrapGeneration, error) {
+	resolver.calls++
+	return resolver.resolved, resolver.err
+}
+
+func TestEnsureExecutionLaunchIdentityReacquiresBeforeAndAfterAuthorizationBinding(t *testing.T) {
+	fixture := newExecutionTestFixture(t)
+	preview, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(preview.Diagnostics) != 0 {
+		t.Fatalf("plan = %#v, err=%v", preview, err)
+	}
+	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := before.Goals[0].Execution.Authorizations[0]
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	helper := filepath.Join(t.TempDir(), "forgepilot-bootstrap")
+	script := `#!/bin/sh
+[ "$1" = retention-v1 ] && [ "$2" = acquire ] && [ "$3" = --generation ] && [ "$5" = --payload-digest ] && [ "$7" = --reference ] || exit 9
+printf '{"protocol_version":1,"result":"acquired","generation_id":"%s","payload_digest":"%s"}\n' "$4" "$6"
+`
+	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	resolver := &staticBootstrapGenerationResolver{resolved: ResolvedBootstrapGeneration{Generation: generation, HelperPath: helper}}
+	identity := RunnerIdentity{Runtime: authorization.WorkerProfile.Runtime, ExecutablePath: authorization.WorkerProfile.ExecutablePath,
+		Version: "codex 1.2.3", Model: authorization.WorkerProfile.Model, Effort: authorization.WorkerProfile.Effort,
+		Sandbox: authorization.WorkerProfile.Sandbox}
+	if _, _, err := ReacquireExecutionLaunchIdentity(t.Context(), fixture.root, before.Goals[0].ID, authorization.Digest,
+		identity, resolver, time.Now().UTC()); err == nil || resolver.calls != 0 {
+		t.Fatalf("unbound exact resume = %v, resolver calls=%d; want refusal before discovery", err, resolver.calls)
+	}
+
+	bound, admitted, err := EnsureExecutionLaunchIdentity(t.Context(), fixture.root, before.Goals[0].ID, authorization.Digest,
+		identity, resolver, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 1 || admitted.EngineGeneration == nil || *admitted.EngineGeneration != generation {
+		t.Fatalf("admission resolver or identity = calls %d, identity %#v", resolver.calls, admitted)
+	}
+	if bound.Digest == authorization.Digest {
+		t.Fatal("initial admission did not reseal its authorization")
+	}
+
+	stable, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := EnsureExecutionLaunchIdentity(t.Context(), fixture.root, before.Goals[0].ID, bound.Digest,
+		identity, resolver, time.Now().UTC()); err != nil {
+		t.Fatalf("exact retry = %v", err)
+	}
+	if resolver.calls != 2 || !bytes.Equal(marshalState(t, stable), marshalState(t, mustLoadExecutionState(t, fixture.root))) {
+		t.Fatalf("exact retry calls=%d or changed state", resolver.calls)
+	}
+	if _, _, err := EnsureExecutionLaunchIdentity(t.Context(), fixture.root, before.Goals[0].ID, authorization.Digest,
+		identity, resolver, time.Now().UTC()); err == nil || resolver.calls != 2 {
+		t.Fatalf("stale admission = %v, resolver calls=%d; want refusal before discovery", err, resolver.calls)
+	}
+}
+
+func mustLoadExecutionState(t *testing.T, root string) work.State {
+	t.Helper()
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
 func (retention *recordingGenerationRetention) Acquire(_ context.Context, generation work.ExecutionEngineGeneration, reference string) error {
 	retention.acquires = append(retention.acquires, recordedRetentionAcquire{generation: generation, reference: reference})
 	return retention.err

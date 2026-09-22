@@ -44,6 +44,72 @@ type EngineGenerationResolver interface {
 	Resolve(context.Context) (ResolvedBootstrapGeneration, error)
 }
 
+// EnsureExecutionLaunchIdentity is the only Runner-facing orchestration for
+// managed-generation admission. It resolves the generation, acquires its
+// retention marker through the exact helper that resolved it, and only then
+// reseals the current authorization with the immutable engine identity.
+// expectedAuthorizationDigest prevents an old Run intent or exact resume from
+// binding a newer authorization on its behalf.
+func EnsureExecutionLaunchIdentity(ctx context.Context, root, goalID, expectedAuthorizationDigest string,
+	identity RunnerIdentity, resolver EngineGenerationResolver, now time.Time) (work.ExecutionAuthorization, RunnerIdentity, error) {
+	return ensureExecutionLaunchIdentity(ctx, root, goalID, expectedAuthorizationDigest, identity, resolver, now, false)
+}
+
+// ReacquireExecutionLaunchIdentity is the exact-run counterpart to
+// EnsureExecutionLaunchIdentity. An exact or pending resume may renew the
+// deterministic retention marker, but it must never turn an older Run Record
+// into a first binding for the current authorization.
+func ReacquireExecutionLaunchIdentity(ctx context.Context, root, goalID, expectedAuthorizationDigest string,
+	identity RunnerIdentity, resolver EngineGenerationResolver, now time.Time) (work.ExecutionAuthorization, RunnerIdentity, error) {
+	return ensureExecutionLaunchIdentity(ctx, root, goalID, expectedAuthorizationDigest, identity, resolver, now, true)
+}
+
+func ensureExecutionLaunchIdentity(ctx context.Context, root, goalID, expectedAuthorizationDigest string,
+	identity RunnerIdentity, resolver EngineGenerationResolver, now time.Time, requireExistingBinding bool) (work.ExecutionAuthorization, RunnerIdentity, error) {
+	if resolver == nil {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, errors.New("managed ForgePilot generation resolver is required")
+	}
+	if expectedAuthorizationDigest == "" {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, errors.New("expected execution authorization digest is required")
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, err
+	}
+	goal, ok := state.GoalByID(goalID)
+	if !ok || goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, fmt.Errorf("goal %q has no current execution authorization", goalID)
+	}
+	current := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
+	if current.Digest != expectedAuthorizationDigest {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, errors.New("runner is bound to a different execution authorization")
+	}
+	if requireExistingBinding && (current.WorkerIdentity == nil || current.EngineGeneration == nil) {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, errors.New("exact Runner resume requires an existing managed launch identity")
+	}
+	// Model and effort are authorized profile selections in this Runner MVP;
+	// their command-line controls are intentionally deferred. Fill only absent
+	// values so a future observed or explicitly configured mismatch remains a
+	// fail-closed identity error at the binding boundary.
+	if identity.Model == "" {
+		identity.Model = current.WorkerProfile.Model
+	}
+	if identity.Effort == "" {
+		identity.Effort = current.WorkerProfile.Effort
+	}
+	resolved, err := resolver.Resolve(ctx)
+	if err != nil {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, fmt.Errorf("resolve managed ForgePilot generation: %w", err)
+	}
+	bound, err := BindExecutionLaunchIdentity(ctx, root, goalID, identity, resolved.Generation,
+		BootstrapRetention{HelperPath: resolved.HelperPath}, now)
+	if err != nil {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, err
+	}
+	identity.EngineGeneration = &resolved.Generation
+	return bound, identity, nil
+}
+
 // BootstrapProcessImage is the immutable ForgePilot image identity captured
 // when the process starts. It must never be reconstructed from a stable link
 // during admission: an upgrade may change current while this process still
