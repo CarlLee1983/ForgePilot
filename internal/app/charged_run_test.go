@@ -55,16 +55,16 @@ func TestChargedRunAdmissionRejectsUnresolvedIdentityAndProfileMismatch(t *testi
 		t.Fatal("unresolved run identity mutated ledger state")
 	}
 
-	if _, err := PrepareChargedAction(fixture.root, authorized.GoalID, "run-001", "RESUME", before.WorkItems[0].ID, 1,
+	if _, _, err := PrepareChargedWorker(fixture.root, authorized.GoalID, "run-001", "RESUME", before.WorkItems[0].ID, 1, 1,
 		before.Goals[0].Execution.Authorizations[0].Digest, identity, now); err == nil {
-		t.Fatal("charged action admitted before WorkerIdentity and EngineGeneration were resolved")
+		t.Fatal("charged worker admitted before WorkerIdentity and EngineGeneration were resolved")
 	}
 	afterUnresolvedAction, err := storage.Load(fixture.root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(marshalState(t, before), marshalState(t, afterUnresolvedAction)) {
-		t.Fatal("unresolved action identity mutated ledger state")
+		t.Fatal("unresolved worker identity mutated ledger state")
 	}
 	if _, err := PrepareChargedStep(fixture.root, authorized.GoalID, "run-001", 1, "START", before.WorkItems[0].ID,
 		before.Goals[0].Execution.Authorizations[0].Digest, identity, now); err == nil {

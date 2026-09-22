@@ -513,15 +513,8 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		if completed, err := runner.repairCompletedGoal(); completed || err != nil {
 			return err
 		}
-		legacyResume, err := isLegacyRunResume(options.Root, existing)
-		if err != nil {
-			return err
-		}
-		if legacyResume {
-			runner.record.Stop = nil
-			if stopped, err := runner.checkReadiness(); stopped || err != nil {
-				return err
-			}
+		if existing.ExecutionAuthorizationDigest == "" || existing.RunReservationID != existing.RunID+":run" {
+			return fmt.Errorf("run %s has no current execution authorization", existing.RunID)
 		}
 		// Exact resume is not a new run and cannot spend a replacement run unit.
 		// Recovery and already-committed completion are deliberately handled first:
@@ -553,16 +546,14 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		}
 		// Only an admitted exact resume consumes the prior stop. Keep it durable
 		// if authorization or accounting validation above rejects the request.
-		if !legacyResume && runner.record.Stop != nil {
+		if runner.record.Stop != nil {
 			runner.record.Stop = nil
 			if err := runner.save(); err != nil {
 				return err
 			}
 		}
-		if !legacyResume {
-			if stopped, err := runner.checkReadiness(); stopped || err != nil {
-				return err
-			}
+		if stopped, err := runner.checkReadiness(); stopped || err != nil {
+			return err
 		}
 		return runner.loop()
 	}
@@ -720,18 +711,6 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 	return record, err
 }
 
-func isLegacyRunResume(root string, record Record) (bool, error) {
-	if record.ExecutionAuthorizationDigest != "" || record.RunReservationID != "" || len(record.ReservationReceipts) != 0 {
-		return false, nil
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		return false, err
-	}
-	goal, ok := state.GoalByID(record.GoalID)
-	return ok && goal.Execution == nil, nil
-}
-
 // resumeOptions takes the execution settings from the record rather than from
 // the command line: a resume must not quietly switch Goal, runtime or budget.
 func resumeOptions(options Options, record Record) Options {
@@ -756,6 +735,9 @@ func newRunner(options Options) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	if goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
+		return nil, fmt.Errorf("goal %q has no current execution authorization", goal.ID)
+	}
 	runtime, err := agent.Resolve(options.RuntimeName, options.RuntimeCommand)
 	if err != nil {
 		return nil, err
@@ -779,18 +761,13 @@ func newRunner(options Options) (*Runner, error) {
 	runner := &Runner{options: options, runtime: runtime}
 	identity := runner.identityWithTestFacts(app.RunnerIdentity{Runtime: runtime.Name(), ExecutablePath: executable, Version: version,
 		Sandbox: string(runtime.SessionEnvironment().Sandbox)})
-	if goal.Execution != nil {
-		authorizations := goal.Execution.Authorizations
-		if len(authorizations) == 0 {
-			return nil, fmt.Errorf("goal %q has inconsistent execution authorization state", goal.ID)
-		}
-		currentAuthorization := authorizations[len(authorizations)-1]
-		if !runner.now().Before(currentAuthorization.ExpiresAt) {
-			return nil, fmt.Errorf("execution authorization for goal %q has expired", goal.ID)
-		}
-		if err := app.ValidateCurrentExecutionBindings(options.Root, goal.ID, currentAuthorization.Digest); err != nil {
-			return nil, err
-		}
+	authorizations := goal.Execution.Authorizations
+	currentAuthorization := authorizations[len(authorizations)-1]
+	if !runner.now().Before(currentAuthorization.ExpiresAt) {
+		return nil, fmt.Errorf("execution authorization for goal %q has expired", goal.ID)
+	}
+	if err := app.ValidateCurrentExecutionBindings(options.Root, goal.ID, currentAuthorization.Digest); err != nil {
+		return nil, err
 	}
 	if pending, err := findPendingRunPreparation(options.Root, options.GoalID); err != nil {
 		return nil, err
@@ -823,19 +800,12 @@ func newRunner(options Options) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	preparationState := RunPreparationPendingClassification
-	authorizationDigest, runReservationID := "", ""
-	if goal.Execution != nil {
-		if len(goal.Execution.Authorizations) == 0 {
-			return nil, fmt.Errorf("goal %q has inconsistent execution authorization state", goal.ID)
-		}
-		authorizationDigest = goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1].Digest
-		if authorizationDigest == "" {
-			return nil, fmt.Errorf("goal %q has an execution authorization without a durable digest", goal.ID)
-		}
-		runReservationID = runID + ":run"
-		preparationState = RunPreparationPendingCharge
+	authorizationDigest := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1].Digest
+	if authorizationDigest == "" {
+		return nil, fmt.Errorf("goal %q has an execution authorization without a durable digest", goal.ID)
 	}
+	runReservationID := runID + ":run"
+	preparationState := RunPreparationPendingCharge
 	runner.record = &Record{
 		RunID: runID, Workspace: root, GoalID: goal.ID, GoalTitle: goal.Title, CompletionPolicy: goal.CompletionPolicy, Scope: scope,
 		RuntimeName: runtime.Name(), RuntimeExecutable: executable, RuntimeVersion: version,
