@@ -25,7 +25,7 @@
 | `AC-002` | test | `internal/app/execution_authorize_test.go` | `complete-approved-plan-fixture` | `single-atomic-revision-one-publication` |
 | `AC-003` | test | `internal/app/execution_authorize_test.go` | `ambiguous-mapping-fixtures` | `explicit-one-to-one-mapping-required` |
 | `AC-004` | test | `internal/app/execution_authorize_test.go` | `failure-and-contention-fixtures` | `no-partial-durable-state` |
-| `AC-005` | test | `internal/cli/execution_plan_test.go` | `read-only-ownership-fixture` | `no-write-or-semantic-inference` |
+| `AC-005` | test | `internal/cli/execution_test.go` | `read-only-ownership-fixture` | `no-write-or-semantic-inference` |
 
 ## Verification Notes
 
