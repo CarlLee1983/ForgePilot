@@ -1291,7 +1291,7 @@ func resolveExecutionIdentityForRunnerTest(t *testing.T, root string, now time.T
 				ExecutablePath: authorization.WorkerProfile.ExecutablePath, ExecutableSHA256: authorization.WorkerProfile.ExecutableSHA256,
 				ReportedVersion: "test-codex 1", ObservedAt: now,
 			}
-			generation := &work.ExecutionEngineGeneration{SourceCommit: "test-engine", PayloadSHA256: strings.Repeat("b", 64)}
+			generation := &work.ExecutionEngineGeneration{SourceCommit: strings.Repeat("a", 40), PayloadSHA256: "sha256:" + strings.Repeat("b", 64)}
 			authorization.EngineGeneration = generation
 			authorization.Digest = ""
 			authorization.Digest = executionDigestForRunnerTest(t, "forgepilot.execution-authorization/v1", *authorization)

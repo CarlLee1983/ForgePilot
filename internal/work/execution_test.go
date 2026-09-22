@@ -79,7 +79,7 @@ func TestAdoptInitialExecutionRejectsInvalidAggregateWithoutMutation(t *testing.
 		}},
 		{name: "unobserved engine generation", mutate: func(execution *GoalExecution) {
 			execution.Authorizations[0].EngineGeneration = &ExecutionEngineGeneration{
-				SourceCommit: "self-declared-commit", PayloadSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PayloadSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			}
 		}},
 		{name: "expiry outside maximum", mutate: func(execution *GoalExecution) {

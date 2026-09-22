@@ -95,6 +95,9 @@ type ResolvedWorkerIdentity struct {
 }
 
 type ExecutionEngineGeneration struct {
+	// SourceCommit and PayloadSHA256 are the immutable tuple that the
+	// Bootstrap retention protocol accepts. PayloadSHA256 includes its
+	// sha256: prefix, matching the helper's machine protocol.
 	SourceCommit  string `json:"source_commit"`
 	PayloadSHA256 string `json:"payload_sha256"`
 }
@@ -338,6 +341,65 @@ func (s *State) ReviseExecution(goalID string, binding GoalPlanBinding, authoriz
 	return nil
 }
 
+// BindCurrentExecutionIdentity records the first directly observed Worker and
+// Bootstrap generation identities for the current authorization. It is a
+// narrow, idempotent transition: authorization approval creates an unlaunchable
+// declaration, and only the application layer may later bind the facts it
+// observed before a current-authorization Runner reservation exists. It never
+// changes a historical authorization or an already pinned current
+// authorization.
+func (s *State) BindCurrentExecutionIdentity(goalID string, identity ResolvedWorkerIdentity, generation ExecutionEngineGeneration) (ExecutionAuthorization, error) {
+	goal := s.goal(goalID)
+	if goal == nil || goal.Execution == nil {
+		return ExecutionAuthorization{}, fmt.Errorf("goal %q has no execution authorization", goalID)
+	}
+	if goal.Status != GoalActive {
+		return ExecutionAuthorization{}, fmt.Errorf("goal %q is not active", goalID)
+	}
+	execution := goal.Execution
+	if len(execution.PlanBindings) == 0 || len(execution.PlanBindings) != len(execution.Authorizations) {
+		return ExecutionAuthorization{}, errors.New("execution revision history is inconsistent")
+	}
+	current := &execution.Authorizations[len(execution.Authorizations)-1]
+	if identity.ExecutablePath != current.WorkerProfile.ExecutablePath ||
+		identity.ExecutableSHA256 != current.WorkerProfile.ExecutableSHA256 ||
+		!validExecutionIdentifier(identity.ReportedVersion) || identity.ObservedAt.IsZero() {
+		return ExecutionAuthorization{}, errors.New("resolved Worker identity does not match the requested profile")
+	}
+	if !validExecutionEngineGeneration(generation) {
+		return ExecutionAuthorization{}, errors.New("ForgePilot engine generation identity is invalid")
+	}
+	if current.WorkerIdentity != nil || current.EngineGeneration != nil {
+		if current.WorkerIdentity != nil && current.EngineGeneration != nil &&
+			*current.WorkerIdentity == identity && *current.EngineGeneration == generation {
+			return *current, nil
+		}
+		return ExecutionAuthorization{}, errors.New("current execution authorization is already bound to a different Worker or engine identity")
+	}
+	updated := cloneGoalExecution(*execution)
+	updatedCurrent := &updated.Authorizations[len(updated.Authorizations)-1]
+	updatedCurrent.WorkerIdentity = &identity
+	updatedCurrent.EngineGeneration = &generation
+	updatedCurrent.Digest = ""
+	digest, err := authorizationDigest(*updatedCurrent)
+	if err != nil {
+		return ExecutionAuthorization{}, err
+	}
+	updatedCurrent.Digest = digest
+	if err := resealExecutionLedgerAndWitness(&updated); err != nil {
+		return ExecutionAuthorization{}, err
+	}
+	items := make(map[string]Item, len(s.WorkItems))
+	for _, item := range s.WorkItems {
+		items[item.ID] = item
+	}
+	if err := validateGoalExecution(updated, *goal, items); err != nil {
+		return ExecutionAuthorization{}, err
+	}
+	*execution = updated
+	return *updatedCurrent, nil
+}
+
 // ValidateExecutionPlanRegistration checks the explicit complete mapping at
 // preview time without attaching authorization or changing durable state.
 func (s State) ValidateExecutionPlanRegistration(goalID string, nodes []ExecutionPlanNodeBinding) error {
@@ -514,7 +576,7 @@ func validateAuthorization(authorization ExecutionAuthorization, binding GoalPla
 			return errors.New("resolved Worker identity does not match the requested profile")
 		}
 	}
-	if generation := authorization.EngineGeneration; generation != nil && (!validHexDigest(generation.PayloadSHA256) || generation.SourceCommit == "") {
+	if generation := authorization.EngineGeneration; generation != nil && !validExecutionEngineGeneration(*generation) {
 		return errors.New("ForgePilot engine generation identity is invalid")
 	}
 	if !validBoundDigest(authorization.Digest) {
@@ -1151,6 +1213,13 @@ func validHexDigest(value string) bool {
 	}
 	decoded, err := hex.DecodeString(value)
 	return err == nil && hex.EncodeToString(decoded) == value
+}
+
+func validExecutionEngineGeneration(generation ExecutionEngineGeneration) bool {
+	if len(generation.SourceCommit) != 40 || strings.Trim(generation.SourceCommit, "0123456789abcdef") != "" {
+		return false
+	}
+	return validBoundDigest(generation.PayloadSHA256)
 }
 
 func validArtifactPath(value string) bool {
