@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -355,6 +356,183 @@ func TestChargedRunReceiptAuditRequiresEveryActionAndStepReservation(t *testing.
 	if err := refuseUnrecordedChargedRun(fixture.root, authorized.GoalID); err == nil ||
 		!strings.Contains(err.Error(), "no Run Record receipt for charged reservation") {
 		t.Fatalf("incomplete Run Record error = %v, want missing ACTION/STEP receipt refusal", err)
+	}
+}
+
+func TestChargedRunAuditRejectsNeedsHumanDispositionWithoutRunRecordResult(t *testing.T) {
+	fixture := newExecutionTestFixture(t)
+	preview, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(preview.Diagnostics) != 0 {
+		t.Fatalf("plan = %#v, err=%v", preview, err)
+	}
+	authorized, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workItemID := state.WorkItems[0].ID
+	planNodeRef, err := state.ExecutionPlanNodeRef(authorized.GoalID, workItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const runID = "run-unconfirmed-disposition"
+	now := time.Now().UTC()
+	var reservations []work.ExecutionReservation
+	if err := storage.Update(fixture.root, func(state *work.State) error {
+		requests := []work.ExecutionReservation{
+			{ID: runID + ":run", Kind: work.ExecutionReservationRun, RunID: runID, CreatedAt: now},
+			{ID: runID + ":action:RESUME:" + planNodeRef + ":1", Kind: work.ExecutionReservationAction, RunID: runID, PlanNodeRef: planNodeRef, CreatedAt: now},
+			{ID: runID + ":step:1:RESUME:" + planNodeRef, Kind: work.ExecutionReservationStep, RunID: runID, PlanNodeRef: planNodeRef, CreatedAt: now},
+		}
+		for _, request := range requests {
+			reservation, prepareErr := state.PrepareExecutionReservation(authorized.GoalID, request)
+			if prepareErr != nil {
+				return prepareErr
+			}
+			reservations = append(reservations, reservation)
+		}
+		// This state transition is structurally valid, but it bypasses the app
+		// boundary that first requires a durable needs_human Run Record result.
+		// Admission must therefore fail closed instead of accepting its refunded
+		// technical-attempt capacity.
+		receipt, receiptErr := work.ExecutionReservationReceiptFor(reservations[1])
+		if receiptErr != nil {
+			return receiptErr
+		}
+		return state.ConfirmNeedsHumanDisposition(authorized.GoalID, runID, receipt)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	receipts := make([]work.ExecutionReservationReceipt, 0, len(reservations))
+	for _, reservation := range reservations {
+		receipt, receiptErr := work.ExecutionReservationReceiptFor(reservation)
+		if receiptErr != nil {
+			t.Fatal(receiptErr)
+		}
+		receipts = append(receipts, receipt)
+	}
+	record, err := json.Marshal(runnerRunRecordAudit{
+		RunID: runID, GoalID: authorized.GoalID, ExecutionAuthorizationDigest: authorized.Authorizations[0].Digest,
+		RunReservationID: reservations[0].ID, ReservationReceipts: receipts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteRunArtifact(fixture.root, runID, "run.json", record, storage.ArtifactLimits{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckRunnerRunAdmissionIntegrity(fixture.root, authorized.GoalID); err == nil ||
+		!strings.Contains(err.Error(), "without a durable Run Record result") {
+		t.Fatalf("unconfirmed needs_human disposition admission error = %v, want fail-closed audit refusal", err)
+	}
+}
+
+func TestChargedRunAuditAcceptsRetainedNeedsHumanDispositionLinks(t *testing.T) {
+	fixture := newExecutionTestFixture(t)
+	preview, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(preview.Diagnostics) != 0 {
+		t.Fatalf("plan = %#v, err=%v", preview, err)
+	}
+	authorized, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workItemID := state.WorkItems[0].ID
+	planNodeRef, err := state.ExecutionPlanNodeRef(authorized.GoalID, workItemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		runID            = "run-retained-dispositions"
+		retainedAttempts = 5 // internal/runner.RetainedAttempts; app cannot import runner.
+	)
+	now := time.Now().UTC()
+	var reservations []work.ExecutionReservation
+	var humanWaitReservationIDs []string
+	var humanWaitReceipts []work.ExecutionReservationReceipt
+	if err := storage.Update(fixture.root, func(state *work.State) error {
+		run, prepareErr := state.PrepareExecutionReservation(authorized.GoalID, work.ExecutionReservation{
+			ID: runID + ":run", Kind: work.ExecutionReservationRun, RunID: runID, CreatedAt: now,
+		})
+		if prepareErr != nil {
+			return prepareErr
+		}
+		reservations = append(reservations, run)
+		for attempt := 1; attempt <= retainedAttempts+1; attempt++ {
+			at := now.Add(time.Duration(attempt) * time.Second)
+			action, actionErr := state.PrepareExecutionReservation(authorized.GoalID, work.ExecutionReservation{
+				ID:   fmt.Sprintf("%s:action:RESUME:%s:%d", runID, planNodeRef, attempt),
+				Kind: work.ExecutionReservationAction, RunID: runID, PlanNodeRef: planNodeRef, CreatedAt: at,
+			})
+			if actionErr != nil {
+				return actionErr
+			}
+			step, stepErr := state.PrepareExecutionReservation(authorized.GoalID, work.ExecutionReservation{
+				ID:   fmt.Sprintf("%s:step:%d:RESUME:%s", runID, attempt, planNodeRef),
+				Kind: work.ExecutionReservationStep, RunID: runID, PlanNodeRef: planNodeRef, CreatedAt: at,
+			})
+			if stepErr != nil {
+				return stepErr
+			}
+			receipt, receiptErr := work.ExecutionReservationReceiptFor(action)
+			if receiptErr != nil {
+				return receiptErr
+			}
+			if dispositionErr := state.ConfirmNeedsHumanDisposition(authorized.GoalID, runID, receipt); dispositionErr != nil {
+				return dispositionErr
+			}
+			reservations = append(reservations, action, step)
+			humanWaitReservationIDs = append(humanWaitReservationIDs, action.ID)
+			humanWaitReceipts = append(humanWaitReceipts, receipt)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	receipts := make([]work.ExecutionReservationReceipt, 0, len(reservations))
+	for _, reservation := range reservations {
+		receipt, receiptErr := work.ExecutionReservationReceiptFor(reservation)
+		if receiptErr != nil {
+			t.Fatal(receiptErr)
+		}
+		receipts = append(receipts, receipt)
+	}
+	// `Record.History` retains only five entries per Work Item, so the first
+	// confirmed result is intentionally absent here. The unbounded durable ID
+	// list is the recovery/audit linkage for every settled disposition.
+	history := make([]runnerAttemptRecordAudit, 0, retainedAttempts)
+	for index := 1; index < len(humanWaitReceipts); index++ {
+		receipt := humanWaitReceipts[index]
+		history = append(history, runnerAttemptRecordAudit{WorkItemID: workItemID, Number: index + 1,
+			Outcome: "needs_human", ActionReservationReceipt: &receipt})
+	}
+	if len(humanWaitReceipts) != retainedAttempts+1 || len(history) != retainedAttempts {
+		t.Fatalf("retained history fixture = %d receipts, %d attempts", len(humanWaitReceipts), len(history))
+	}
+	record, err := json.Marshal(runnerRunRecordAudit{
+		RunID: runID, GoalID: authorized.GoalID, ExecutionAuthorizationDigest: authorized.Authorizations[0].Digest,
+		RunReservationID: reservations[0].ID, ReservationReceipts: receipts,
+		HumanWaitReservationIDs: humanWaitReservationIDs, History: history,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteRunArtifact(fixture.root, runID, "run.json", record, storage.ArtifactLimits{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckRunnerRunAdmissionIntegrity(fixture.root, authorized.GoalID); err != nil {
+		t.Fatalf("retained needs_human disposition links blocked direct charged admission: %v", err)
 	}
 }
 

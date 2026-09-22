@@ -618,6 +618,7 @@ type runnerRunRecordAudit struct {
 	ExecutionAuthorizationDigest string                             `json:"execution_authorization_digest"`
 	RunReservationID             string                             `json:"run_reservation_id"`
 	ReservationReceipts          []work.ExecutionReservationReceipt `json:"reservation_receipts"`
+	HumanWaitReservationIDs      []string                           `json:"human_wait_reservation_ids"`
 	RunPreparationState          string                             `json:"run_preparation_state"`
 	Steps                        int                                `json:"steps"`
 	Worker                       *json.RawMessage                   `json:"worker"`
@@ -662,7 +663,8 @@ func refuseUnrecordedChargedRunForIntent(root, goalID, allowedPendingRunID strin
 				return fmt.Errorf("run %s has an unknown Run preparation state", runID)
 			}
 			if runID != allowedPendingRunID || record.GoalID != goalID || record.Steps != 0 ||
-				record.Worker != nil || len(record.Pending) != 0 || len(record.ReservationReceipts) != 0 {
+				record.Worker != nil || len(record.Pending) != 0 || len(record.ReservationReceipts) != 0 ||
+				len(record.HumanWaitReservationIDs) != 0 {
 				return fmt.Errorf("run %s has an unfinished Run preparation; recover that exact intent before new admission", runID)
 			}
 			if record.RunPreparationState == "PENDING_CHARGE" &&
@@ -679,7 +681,8 @@ func refuseUnrecordedChargedRunForIntent(root, goalID, allowedPendingRunID strin
 	if goal.Execution == nil {
 		for runID, record := range records {
 			if record.GoalID == goalID && (record.ExecutionAuthorizationDigest != "" || record.RunReservationID != "" ||
-				len(record.ReservationReceipts) != 0 || hasNeedsHumanAttemptReceipt(record.History)) {
+				len(record.ReservationReceipts) != 0 || len(record.HumanWaitReservationIDs) != 0 ||
+				hasNeedsHumanAttemptReceipt(record.History)) {
 				return fmt.Errorf("run %s has charged metadata but Goal %q has no execution authorization", runID, goalID)
 			}
 		}
@@ -795,6 +798,7 @@ func auditNeedsHumanAttemptDispositions(goalID, allowedPendingRunID string,
 	for _, disposition := range dispositions {
 		dispositionsByID[disposition.ReservationID] = disposition
 	}
+	confirmed := make(map[string]bool, len(dispositions))
 	for runID, record := range records {
 		if record.GoalID != goalID {
 			continue
@@ -842,6 +846,48 @@ func auditNeedsHumanAttemptDispositions(goalID, allowedPendingRunID string,
 			if disposition.RunID != runID || disposition.ReservationDigest != receipt.ReservationDigest {
 				return fmt.Errorf("run %s needs_human disposition does not match its recorded ACTION result", runID)
 			}
+			confirmed[receipt.ReservationID] = true
+		}
+		if len(record.HumanWaitReservationIDs) > 0 {
+			if _, exists := authorizations[record.ExecutionAuthorizationDigest]; !exists {
+				return fmt.Errorf("run %s durable needs_human receipts refer to an unknown execution authorization", runID)
+			}
+		}
+		seenHumanWait := make(map[string]bool, len(record.HumanWaitReservationIDs))
+		for _, reservationID := range record.HumanWaitReservationIDs {
+			if reservationID == "" || seenHumanWait[reservationID] {
+				return fmt.Errorf("run %s has an invalid or duplicate durable needs_human receipt", runID)
+			}
+			seenHumanWait[reservationID] = true
+			receipt, ok := findReservationReceipt(record.ReservationReceipts, reservationID)
+			if !ok {
+				return fmt.Errorf("run %s durable needs_human receipt is missing from its Run Record", runID)
+			}
+			var reservation *work.ExecutionReservation
+			for i := range reservationsByRun[runID] {
+				candidate := &reservationsByRun[runID][i]
+				if candidate.ID == reservationID {
+					reservation = candidate
+					break
+				}
+			}
+			if reservation == nil || reservation.Kind != work.ExecutionReservationAction || reservation.RunID != runID {
+				return fmt.Errorf("run %s durable needs_human receipt has no matching ACTION reservation", runID)
+			}
+			expectedReceipt, err := work.ExecutionReservationReceiptFor(*reservation)
+			if err != nil || expectedReceipt != receipt {
+				return fmt.Errorf("run %s durable needs_human receipt does not match its ACTION reservation", runID)
+			}
+			disposition, exists := dispositionsByID[reservationID]
+			if !exists || disposition.RunID != runID || disposition.ReservationDigest != receipt.ReservationDigest {
+				return fmt.Errorf("run %s durable needs_human receipt does not match its ledger disposition", runID)
+			}
+			confirmed[reservationID] = true
+		}
+	}
+	for reservationID, disposition := range dispositionsByID {
+		if !confirmed[reservationID] {
+			return fmt.Errorf("run %s has a needs_human disposition without a durable Run Record result", disposition.RunID)
 		}
 	}
 	return nil
