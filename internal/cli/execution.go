@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/CarlLee1983/ForgePilot/internal/app"
+	"github.com/CarlLee1983/ForgePilot/internal/control"
 	"github.com/CarlLee1983/ForgePilot/internal/runner"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
@@ -17,11 +18,13 @@ const (
 	executionRevisePlanUsage      = "usage: forgepilot execution revise plan --request <path> --json"
 	executionReviseAuthorizeUsage = "usage: forgepilot execution revise authorize --request <path> --approval-token <token> --by <name> --json"
 	executionResumeUsage          = "usage: forgepilot execution resume --goal <goal-id> [--json]"
+	executionStopUsage            = "usage: forgepilot execution stop --goal <goal-id> --by <name> --reason <reason> [--json]"
+	executionDeclareUsage         = "usage: forgepilot execution declare --request <path> --json"
 )
 
 func executionCommand(args []string, root string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot execution <plan|authorize|revise|resume>")
+		return errors.New("usage: forgepilot execution <plan|authorize|revise|resume|stop|declare>")
 	}
 	switch args[0] {
 	case "plan":
@@ -32,9 +35,79 @@ func executionCommand(args []string, root string, output io.Writer) error {
 		return reviseExecution(args[1:], root, output)
 	case "resume":
 		return resumeExecution(args[1:], root, output)
+	case "stop":
+		return stopExecution(args[1:], root, output)
+	case "declare":
+		return declareExecution(args[1:], root, output)
 	default:
 		return fmt.Errorf("unknown execution subcommand %q", args[0])
 	}
+}
+
+func stopExecution(args []string, root string, output io.Writer) error {
+	args, jsonOutput, err := takeJSONFlag(args)
+	if err != nil {
+		return err
+	}
+	values, err := flags(args, map[string]bool{"goal": false, "by": false, "reason": false})
+	if err != nil {
+		return errors.New(executionStopUsage)
+	}
+	goalID, requestedBy, reason := values.one("goal"), values.one("by"), values.one("reason")
+	if goalID == "" || requestedBy == "" || reason == "" {
+		return errors.New(executionStopUsage)
+	}
+	stopResult, stopErr := runner.RequestStopResult(root, goalID, requestedBy, reason, now())
+	if stopErr != nil {
+		if !jsonOutput {
+			return stopErr
+		}
+		if writeErr := writeJSON(output, struct {
+			Version          string `json:"version"`
+			GoalID           string `json:"goalId"`
+			Paused           bool   `json:"paused"`
+			CleanupConfirmed bool   `json:"cleanupConfirmed"`
+			Error            string `json:"error"`
+		}{Version: "forgepilot.execution-stop/v1", GoalID: goalID, Paused: stopResult.Pause.GoalID == goalID, CleanupConfirmed: stopResult.CleanupConfirmed, Error: stopErr.Error()}); writeErr != nil {
+			return writeErr
+		}
+		if stopResult.Pause.GoalID != goalID {
+			return stopErr
+		}
+		return &exitStatus{code: runner.StopNeedsHuman.ExitCode(), err: stopErr}
+	}
+	if jsonOutput {
+		return writeJSON(output, struct {
+			Version          string `json:"version"`
+			GoalID           string `json:"goalId"`
+			Paused           bool   `json:"paused"`
+			CleanupConfirmed bool   `json:"cleanupConfirmed"`
+		}{Version: "forgepilot.execution-stop/v1", GoalID: goalID, Paused: stopResult.Pause.GoalID == goalID, CleanupConfirmed: stopResult.CleanupConfirmed})
+	}
+	_, err = fmt.Fprintf(output, "Execution for Goal %s paused.\n", goalID)
+	return err
+}
+
+func declareExecution(args []string, root string, output io.Writer) error {
+	args, jsonOutput, err := takeJSONFlag(args)
+	if err != nil {
+		return err
+	}
+	if !jsonOutput {
+		return errors.New(executionDeclareUsage)
+	}
+	values, err := flags(args, map[string]bool{"request": false})
+	if err != nil || values.one("request") == "" {
+		return errors.New(executionDeclareUsage)
+	}
+	declaration, err := app.DeclareExternalFulfillmentFile(context.Background(), root, values.one("request"))
+	if err != nil {
+		return err
+	}
+	return writeJSON(output, struct {
+		Version     string                      `json:"version"`
+		Declaration control.ExternalDeclaration `json:"declaration"`
+	}{Version: "forgepilot.external-fulfillment-declaration/v1", Declaration: declaration})
 }
 
 func resumeExecution(args []string, root string, output io.Writer) error {

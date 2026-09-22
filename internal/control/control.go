@@ -85,6 +85,13 @@ func (state *State) SetPause(pause Pause) error {
 	if state == nil {
 		return errors.New("nil execution control state")
 	}
+	if state.Pause != nil {
+		if state.Pause.GoalID == pause.GoalID && state.Pause.RunID == pause.RunID && state.Pause.WaitID == pause.WaitID &&
+			state.Pause.Reason == pause.Reason && state.Pause.RequestedBy == pause.RequestedBy && state.Pause.RequestedAt.Equal(pause.RequestedAt) {
+			return nil
+		}
+		return fmt.Errorf("execution control is already paused for Goal %q Run %q", state.Pause.GoalID, state.Pause.RunID)
+	}
 	pause.Revision = state.Revision + 1
 	if err := validatePause(pause); err != nil {
 		return err
@@ -271,6 +278,9 @@ func validateDeclarationAgainstWait(declaration ExternalDeclaration, waits map[s
 	if declaration.NodeID != wait.NodeID || declaration.PlanDigest != wait.PlanDigest ||
 		declaration.AuthorizationRevision != wait.AuthorizationRevision || declaration.AuthorizationDigest != wait.AuthorizationDigest {
 		return fmt.Errorf("external declaration %q does not exactly bind wait %q", declaration.ID, declaration.WaitID)
+	}
+	if declaration.FactName != wait.ExpectedFact {
+		return fmt.Errorf("external declaration %q fact does not match wait %q", declaration.ID, declaration.WaitID)
 	}
 	return nil
 }

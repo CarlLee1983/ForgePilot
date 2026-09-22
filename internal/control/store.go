@@ -68,7 +68,10 @@ func UpdateLocked(root string, operation func(*State) error) error {
 		return nil
 	}
 	next.Revision = before.Revision + 1
-	if next.Pause != nil && !reflect.DeepEqual(before.Pause, next.Pause) {
+	if next.Pause != nil {
+		// Revision names the enclosing sidecar commit, not only the commit that
+		// first created the pause. Appending a wait or declaration while paused
+		// must keep the pause internally consistent with the new state revision.
 		next.Pause.Revision = next.Revision
 	}
 	if err := next.Validate(); err != nil {

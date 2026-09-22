@@ -62,8 +62,10 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
                                     preview a reviewed Goal Plan without mutation
   execution authorize --request <path> --approval-token <token> --by <name> --json
                                     atomically adopt and authorize an initial Goal Plan
-	  execution resume --goal <goal-id> [--json]
-	                                    continue through the current execution authorization
+  execution resume --goal <goal-id> [--json]
+                                    continue through the current execution authorization
+  execution stop --goal <goal-id> --by <name> --reason <reason> [--json]
+  execution declare --request <path> --json
 
   execution revise plan --request <path> --json
   execution revise authorize --request <path> --approval-token <token> --by <name> --json

@@ -10,18 +10,31 @@ import (
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 )
 
+// StopResult reports the exact pause persisted by RequestStop and whether the
+// owned worker was confirmed settled. A cleanup error never rolls back Pause.
+type StopResult struct {
+	Pause            control.Pause
+	CleanupConfirmed bool
+}
+
 // RequestStop records a user's stop intent before it attempts to terminate the
 // current worker for goalID. The durable intent is deliberately not rolled back
 // when ownership is incomplete or cleanup cannot be confirmed: proceeding
 // after either answer would be less safe than requiring human recovery.
 func RequestStop(root, goalID, requestedBy, reason string, now time.Time) error {
+	_, err := RequestStopResult(root, goalID, requestedBy, reason, now)
+	return err
+}
+
+func RequestStopResult(root, goalID, requestedBy, reason string, now time.Time) (StopResult, error) {
 	if strings.TrimSpace(goalID) == "" {
-		return errors.New("goal ID is required")
+		return StopResult{}, errors.New("goal ID is required")
 	}
 	if now.IsZero() {
-		return errors.New("stop request time is required")
+		return StopResult{}, errors.New("stop request time is required")
 	}
 	var record Record
+	var result StopResult
 	if err := control.WithLock(root, func() error {
 		var err error
 		record, err = currentLiveRun(root, goalID)
@@ -34,21 +47,30 @@ func RequestStop(root, goalID, requestedBy, reason string, now time.Time) error 
 		}); err != nil {
 			return err
 		}
+		state, err := control.ReadLocked(root)
+		if err != nil {
+			return err
+		}
+		if state.Pause == nil {
+			return errors.New("execution pause was not durable after stop request")
+		}
+		result.Pause = *state.Pause
 		return nil
 	}); err != nil {
-		return err
+		return StopResult{}, err
 	}
 	// The pause is now durable and runner admission can no longer pass its
 	// control-lock check. Do not keep that lock while terminating: process
 	// cleanup can take its bounded grace period, and it must not serialize an
 	// unrelated read of the durable control fact.
 	if record.Worker == nil {
-		return fmt.Errorf("run %s for goal %s has no recorded worker; stop intent is durable but worker ownership cannot be confirmed", record.RunID, goalID)
+		return result, fmt.Errorf("run %s for goal %s has no recorded worker; stop intent is durable but worker ownership cannot be confirmed", record.RunID, goalID)
 	}
 	if err := settleExecution(record.Worker.Identity); err != nil {
-		return fmt.Errorf("run %s for goal %s stop intent is durable but worker could not be settled: %w", record.RunID, goalID, err)
+		return result, fmt.Errorf("run %s for goal %s stop intent is durable but worker could not be settled: %w", record.RunID, goalID, err)
 	}
-	return nil
+	result.CleanupConfirmed = true
+	return result, nil
 }
 
 // currentLiveRun finds the one record that can still drive a Goal. A stopped
@@ -81,15 +103,17 @@ func currentLiveRun(root, goalID string) (Record, error) {
 }
 
 func pauseFor(root, goalID, runID string) (*control.Pause, error) {
-	state, err := control.Read(root)
-	if err != nil || state.Pause == nil || state.Pause.GoalID != goalID {
-		return nil, err
-	}
-	if runID != "" && state.Pause.RunID != runID {
-		return nil, nil
-	}
-	pause := *state.Pause
-	return &pause, nil
+	var pause *control.Pause
+	err := control.WithLock(root, func() error {
+		state, err := control.ReadLocked(root)
+		if err != nil || state.Pause == nil || state.Pause.GoalID != goalID || (runID != "" && state.Pause.RunID != runID) {
+			return err
+		}
+		copy := *state.Pause
+		pause = &copy
+		return nil
+	})
+	return pause, err
 }
 
 func (runner *Runner) honorPause() (bool, error) {

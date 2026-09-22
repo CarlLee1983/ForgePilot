@@ -149,6 +149,17 @@ type Attempt struct {
 	Summary                  string                            `json:"summary"`
 	At                       time.Time                         `json:"at"`
 	ActionReservationReceipt *work.ExecutionReservationReceipt `json:"action_reservation_receipt,omitempty"`
+	// NeedsHuman preserves the validated wait payload so a crash after the
+	// charged disposition but before the control sidecar write can be repaired
+	// without guessing an external fact from the bounded summary.
+	NeedsHuman *NeedsHumanRequest `json:"needs_human,omitempty"`
+}
+
+type NeedsHumanRequest struct {
+	Question     string   `json:"question"`
+	Options      []string `json:"options,omitempty"`
+	Context      string   `json:"context,omitempty"`
+	ExternalFact string   `json:"external_fact,omitempty"`
 }
 
 // AttemptSummaryBytes bounds one stored attempt summary.

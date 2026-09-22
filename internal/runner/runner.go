@@ -14,6 +14,7 @@ import (
 
 	"github.com/CarlLee1983/ForgePilot/internal/agent"
 	"github.com/CarlLee1983/ForgePilot/internal/app"
+	"github.com/CarlLee1983/ForgePilot/internal/control"
 	"github.com/CarlLee1983/ForgePilot/internal/process"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
@@ -47,6 +48,10 @@ type Options struct {
 	// The following instance-scoped seams are only used by package tests to
 	// exercise charged Runner paths before FP-58 supplies runtime identity and
 	// to terminate a helper process at a durable crash boundary.
+	// controlResumeRunID is set only by authorization-level successor resume;
+	// it permits that exact paused anchor through admission so the pause can be
+	// acknowledged after the successor RUN intent is durable.
+	controlResumeRunID    string
 	testExecutionIdentity *app.RunnerIdentity
 	testCrashAt           func(string)
 	testNewRunner         func(Options) (*Runner, error)
@@ -235,7 +240,7 @@ func startWithWorkspaceLock(options Options, lockHeld bool) (Record, error) {
 		}
 		if pause, err := pauseFor(options.Root, options.GoalID, ""); err != nil {
 			return err
-		} else if pause != nil {
+		} else if pause != nil && pause.RunID != options.controlResumeRunID {
 			at := time.Now().UTC()
 			if effectiveOptions.Now != nil {
 				at = effectiveOptions.Now().UTC()
@@ -267,6 +272,11 @@ func startWithWorkspaceLock(options Options, lockHeld bool) (Record, error) {
 			return err
 		}
 		defer func() { record = *runner.record }()
+		if options.controlResumeRunID != "" {
+			if err := app.AcknowledgeExecutionResume(options.Root, options.GoalID, options.controlResumeRunID); err != nil {
+				return err
+			}
+		}
 		for {
 			if err := runner.loop(); err != nil {
 				return err
@@ -407,9 +417,6 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		// This run's own worker is left to recover() below.
 		runner := &Runner{options: resumeOptions(options, existing), record: &existing}
 		defer func() { record = *runner.record }()
-		if stopped, err := runner.honorPause(); stopped || err != nil {
-			return err
-		}
 		blocked, err := settleWorkspace(runner.options, runID)
 		if err != nil {
 			return err
@@ -479,6 +486,9 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 			if err := reconcileRecordedNeedsHumanDispositions(options.Root, &existing); err != nil {
 				return err
 			}
+			if err := reconcileRecordedNeedsHumanWaits(options.Root, existing); err != nil {
+				return err
+			}
 			reservationSnapshot, err = app.ReconcileRunnerReservationReceipts(options.Root, existing.GoalID,
 				existing.RunID, existing.RunReservationID, existing.ReservationReceipts)
 			if err != nil {
@@ -542,6 +552,9 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 			runner.identityWithTestFacts(app.RunnerIdentity{Runtime: runner.runtime.Name(), ExecutablePath: executable, Version: version,
 				Sandbox: string(runner.runtime.SessionEnvironment().Sandbox)}), runner.now())
 		if err != nil {
+			return err
+		}
+		if err := app.AcknowledgeExecutionResume(options.Root, existing.GoalID, existing.RunID); err != nil {
 			return err
 		}
 		// Only an admitted exact resume consumes the prior stop. Keep it durable
@@ -616,6 +629,18 @@ func resumeAuthorizationWithWorkspaceLock(options Options, anchorRunID string, l
 		if anchor.Stop == nil {
 			return fmt.Errorf("run %s is not stopped; resume that exact run before authorizing a successor", anchorRunID)
 		}
+		// Recovery is a prerequisite to clearing the control pause. A successor
+		// must never erase the only durable stop marker and then discover that an
+		// older pending worker cannot be confirmed gone.
+		if blocked, err := settleWorkspace(options, ""); err != nil {
+			return err
+		} else if blocked != nil {
+			record = *blocked
+			return nil
+		}
+		if err := app.ValidateExecutionResumeControl(options.Root, anchor.GoalID, anchor.RunID); err != nil {
+			return err
+		}
 
 		record, err = startAuthorizationSuccessorWithLock(options, anchor, current, true)
 		return err
@@ -653,6 +678,7 @@ func startAuthorizationSuccessorWithLock(options Options, anchor Record, authori
 	successor := resumeOptions(options, anchor)
 	successor.RuntimeName = authorization.WorkerProfile.Runtime
 	successor.RuntimeCommand = authorization.WorkerProfile.ExecutablePath
+	successor.controlResumeRunID = anchor.RunID
 	return startWithWorkspaceLock(successor, lockHeld)
 }
 
@@ -1664,52 +1690,82 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 			return digestErr
 		}
 	}
-	session, err := agent.Start(runner.runtime, request, startedAt)
-	if err != nil {
-		if saveErr := runner.withdrawUnstartedWorker(pendingID); saveErr != nil {
-			return saveErr
-		}
-		return runner.stopNow(StopAgentExecutionFailed, fmt.Sprintf("%s: %v", itemID, err))
-	}
-	if actionReceipt != nil {
-		runner.crashAt("after-worker-launch")
-	}
-	// The identity is written the moment it exists: a crash after this point is
-	// recoverable, and one before it leaves a worker record with no identity,
-	// which recovery treats as unconfirmable rather than as absent.
+	// The final pause check, process launch, identity observation, and identity
+	// checkpoint are one control-lock critical section. A stop racing this
+	// boundary therefore either prevents launch or sees a fully recorded worker
+	// before it starts cancellation; it can never leave an unrecorded writer.
+	var session *agent.Session
+	var agentStartErr error
+	blockedByPause := false
+	blockedByDeadline := false
 	incomplete := false
-	runner.record.Worker.Identity = session.Started()
-	if pendingID != "" {
-		runner.record.updatePending(pendingID, func(pending *PendingExecution) {
-			pending.Identity = session.Started()
-			pending.Phase = PhaseRunning
-		})
-	}
-	if !runner.record.Worker.Identity.Recorded() {
-		// The operating system could not be asked what it had just started —
-		// usually because the process was gone before `ps` ran. Nothing is broken
-		// yet, but a crash from here on will be unrecoverable without a person, so
-		// say so now rather than at recovery time.
-		runner.print("  warning: could not record an identity for the worker (pid %d); a crash before it finishes will need manual confirmation\n",
-			runner.record.Worker.Identity.PID)
-		incomplete = true
-	}
-	if stopped, err := runner.checkpoint(); stopped || err != nil {
+	launchErr := control.WithLock(runner.options.Root, func() error {
+		controlState, err := control.ReadLocked(runner.options.Root)
+		if err != nil {
+			return err
+		}
+		if controlState.Pause != nil && controlState.Pause.GoalID == runner.record.GoalID && controlState.Pause.RunID == runner.record.RunID {
+			blockedByPause = true
+			return nil
+		}
+		if !runner.now().Before(runner.record.Deadline) {
+			blockedByDeadline = true
+			return nil
+		}
+		session, agentStartErr = agent.Start(runner.runtime, request, startedAt)
+		if agentStartErr != nil {
+			return agentStartErr
+		}
+		if actionReceipt != nil {
+			runner.crashAt("after-worker-launch")
+		}
+		// The identity is written the moment it exists: a crash after this point
+		// is recoverable, and one before it leaves a worker record with no identity.
+		runner.record.Worker.Identity = session.Started()
+		if pendingID != "" {
+			runner.record.updatePending(pendingID, func(pending *PendingExecution) {
+				pending.Identity = session.Started()
+				pending.Phase = PhaseRunning
+			})
+		}
+		if !runner.record.Worker.Identity.Recorded() {
+			runner.print("  warning: could not record an identity for the worker (pid %d); a crash before it finishes will need manual confirmation\n",
+				runner.record.Worker.Identity.PID)
+			incomplete = true
+		}
+		_, err = runner.checkpoint()
+		return err
+	})
+	if launchErr != nil {
+		if session == nil {
+			if saveErr := runner.withdrawUnstartedWorker(pendingID); saveErr != nil {
+				return saveErr
+			}
+			if agentStartErr != nil {
+				return runner.stopNow(StopAgentExecutionFailed, fmt.Sprintf("%s: %v", itemID, agentStartErr))
+			}
+			return launchErr
+		}
 		// The worker is running but cannot be recorded. Stopping it is the only
 		// honest move: leaving it alive with no durable identity would make the
-		// next recovery unable to tell whether anything still writes here. When
-		// even that cannot be confirmed, the refusal is the answer — swallowing it
-		// would hand the next run a workspace with an invisible writer in it.
-		// Whatever happens to the process, this handle is let go of: Wait is never
-		// reached on this path, and it is Wait that would otherwise have released
-		// the output pipe and the session log.
+		// next recovery unable to tell whether anything still writes here.
 		defer session.Discard()
 		if terminateErr := agent.TerminateOwned(session.Started()); terminateErr != nil {
 			return runner.stopNow(StopRecoveryBlocked, fmt.Sprintf(
 				"%s could not be recorded (%v) and its worker could not be stopped: %v. Confirm pid %d yourself before running anything else",
-				itemID, err, terminateErr, session.Started().PID))
+				itemID, launchErr, terminateErr, session.Started().PID))
 		}
-		return err
+		return launchErr
+	}
+	if blockedByPause || blockedByDeadline {
+		if saveErr := runner.withdrawUnstartedWorker(pendingID); saveErr != nil {
+			return saveErr
+		}
+		if blockedByPause {
+			return runner.stopNow(StopUserPaused, "execution pause became active before worker launch")
+		}
+		return runner.stopNow(StopMaxDuration,
+			fmt.Sprintf("the run passed its deadline of %s; resuming does not extend it", runner.record.Deadline.Format(time.RFC3339)))
 	}
 	if actionReceipt != nil {
 		runner.crashAt("after-worker-identity-save")
@@ -1816,7 +1872,7 @@ func (runner *Runner) afterSession(itemID string, attempt int, result agent.Resu
 		return runner.stopNow(reason, fmt.Sprintf(
 			"%s attempt %d was stopped; its process group was terminated. Resume this run with `forgepilot run resume %s`", itemID, attempt, runner.record.RunID))
 	case agent.IsProtocolError(waitErr):
-		if err := runner.recordAttempt(itemID, attempt, "protocol_error", waitErr.Error(), nil); err != nil {
+		if err := runner.recordAttempt(itemID, attempt, "protocol_error", waitErr.Error(), nil, nil); err != nil {
 			return err
 		}
 		if runner.record.Stop != nil {
@@ -1834,7 +1890,7 @@ func (runner *Runner) afterSession(itemID string, attempt int, result agent.Resu
 		// Persist the validated result and its ACTION receipt before the Goal
 		// ledger disposition. Resume can then finish the exact transition if the
 		// process crashes between these two durable writes.
-		if err := runner.recordAttempt(itemID, attempt, string(result.Outcome), result.Summary, actionReceipt); err != nil {
+		if err := runner.recordAttempt(itemID, attempt, string(result.Outcome), result.Summary, actionReceipt, result.Question); err != nil {
 			return err
 		}
 		runner.crashAt("after-human-result-record")
@@ -1846,13 +1902,16 @@ func (runner *Runner) afterSession(itemID string, attempt int, result agent.Resu
 		if err := runner.recordChargedHumanWait(itemID, *actionReceipt); err != nil {
 			return err
 		}
+		if err := runner.ensureControlWait(itemID, attempt, result, *actionReceipt); err != nil {
+			return err
+		}
 		if stopped, err := runner.checkpoint(); stopped || err != nil {
 			return err
 		}
 		return runner.needsHuman(itemID, result)
 	}
 
-	if err := runner.recordAttempt(itemID, attempt, string(result.Outcome), result.Summary, nil); err != nil {
+	if err := runner.recordAttempt(itemID, attempt, string(result.Outcome), result.Summary, nil, result.Question); err != nil {
 		return err
 	}
 	if runner.record.Stop != nil {
@@ -1862,6 +1921,9 @@ func (runner *Runner) afterSession(itemID string, attempt int, result agent.Resu
 	case agent.NeedsHuman:
 		if actionReceipt == nil {
 			runner.record.recordHumanWait(itemID)
+		}
+		if err := runner.ensureControlWait(itemID, attempt, result, receiptOrZero(actionReceipt)); err != nil {
+			return err
 		}
 		if stopped, err := runner.checkpoint(); stopped || err != nil {
 			return err
@@ -1900,15 +1962,37 @@ func (runner *Runner) needsHuman(itemID string, result agent.Result) error {
 }
 
 func (runner *Runner) recordAttempt(itemID string, attempt int, outcome, summary string,
-	actionReceipt *work.ExecutionReservationReceipt) error {
+	actionReceipt *work.ExecutionReservationReceipt, question *agent.Question) error {
 	recordedAttempt := Attempt{WorkItemID: itemID, Number: attempt, Outcome: outcome,
 		Summary: summary, At: runner.now()}
 	if actionReceipt != nil {
 		receipt := *actionReceipt
 		recordedAttempt.ActionReservationReceipt = &receipt
 	}
+	if question != nil {
+		recordedAttempt.NeedsHuman = &NeedsHumanRequest{Question: question.Question,
+			Options: append([]string(nil), question.Options...), Context: question.Context,
+			ExternalFact: question.ExternalFact}
+	}
 	runner.record.recordAttempt(recordedAttempt)
 	_, err := runner.checkpoint()
+	return err
+}
+
+func receiptOrZero(receipt *work.ExecutionReservationReceipt) work.ExecutionReservationReceipt {
+	if receipt == nil {
+		return work.ExecutionReservationReceipt{}
+	}
+	return *receipt
+}
+
+func (runner *Runner) ensureControlWait(itemID string, attempt int, result agent.Result, receipt work.ExecutionReservationReceipt) error {
+	if result.Question == nil {
+		return errors.New("needs_human result has no question")
+	}
+	_, err := app.EnsureRunnerNeedsHumanWait(runner.options.Root, runner.record.GoalID, runner.record.RunID,
+		itemID, attempt, runner.record.ExecutionAuthorizationDigest, app.RunnerWaitInput{Question: result.Question.Question, Context: result.Question.Context,
+			ExternalFact: result.Question.ExternalFact, ReceiptID: receipt.ReservationID, ReceiptDigest: receipt.ReservationDigest}, runner.now())
 	return err
 }
 
@@ -2126,6 +2210,28 @@ func reconcileRecordedNeedsHumanDispositions(root string, record *Record) error 
 			attempt.WorkItemID, attempt.Number, *attempt.ActionReservationReceipt); err != nil {
 			return fmt.Errorf("reconcile run %s needs_human result for %s attempt %d: %w",
 				record.RunID, attempt.WorkItemID, attempt.Number, err)
+		}
+	}
+	return nil
+}
+
+func reconcileRecordedNeedsHumanWaits(root string, record Record) error {
+	for _, attempt := range record.History {
+		if attempt.Outcome != string(agent.NeedsHuman) || attempt.NeedsHuman == nil {
+			continue
+		}
+		var receiptID string
+		if attempt.ActionReservationReceipt != nil {
+			receiptID = attempt.ActionReservationReceipt.ReservationID
+		} else {
+			return fmt.Errorf("reconcile run %s needs_human wait for %s attempt %d: missing charged ACTION receipt", record.RunID, attempt.WorkItemID, attempt.Number)
+		}
+		_, err := app.EnsureRunnerNeedsHumanWait(root, record.GoalID, record.RunID, attempt.WorkItemID,
+			attempt.Number, record.ExecutionAuthorizationDigest, app.RunnerWaitInput{Question: attempt.NeedsHuman.Question, Context: attempt.NeedsHuman.Context,
+				ExternalFact: attempt.NeedsHuman.ExternalFact, ReceiptID: receiptID, ReceiptDigest: attempt.ActionReservationReceipt.ReservationDigest}, attempt.At)
+		if err != nil {
+			return fmt.Errorf("reconcile run %s needs_human wait for %s attempt %d: %w", record.RunID,
+				attempt.WorkItemID, attempt.Number, err)
 		}
 	}
 	return nil

@@ -177,7 +177,7 @@ func testPause() Pause {
 }
 
 func testExternalWait() Wait {
-	return Wait{ID: "wait-001", Kind: WaitExternal, GoalID: "G-001", RunID: "run-001", NodeID: "node-001", PlanDigest: "sha256:plan", AuthorizationRevision: 1, AuthorizationDigest: "sha256:authorization", Question: "What happened?", Context: "deployment", ExpectedFact: "production deployment complete"}
+	return Wait{ID: "wait-001", Kind: WaitExternal, GoalID: "G-001", RunID: "run-001", NodeID: "node-001", PlanDigest: "sha256:plan", AuthorizationRevision: 1, AuthorizationDigest: "sha256:authorization", Question: "What happened?", Context: "deployment", ExpectedFact: "production-deployment"}
 }
 
 func testDeclaration() ExternalDeclaration {
