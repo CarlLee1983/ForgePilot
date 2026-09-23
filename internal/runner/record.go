@@ -210,6 +210,20 @@ type Stop struct {
 	EvidenceIDs []string `json:"evidence_ids,omitempty"`
 }
 
+// RetentionClosure is written only after this Run cannot launch or recover
+// under its original authorization and every owned process is settled. It is
+// independent of Stop, which can represent a resumable wait.
+type RetentionClosure struct {
+	Reason          string    `json:"reason"`
+	At              time.Time `json:"at"`
+	SuccessorDigest string    `json:"successor_digest,omitempty"`
+}
+
+const (
+	RetentionClosedBySupersession = "AUTHORIZATION_SUPERSEDED"
+	RetentionClosedByGoalTerminal = "GOAL_TERMINAL"
+)
+
 // RunPreparationState makes a new Run Record nonrunnable until its durable RUN
 // reservation has either been confirmed or legacy admission has been decided.
 // Empty is the historical/ready value; it is written only for a fully prepared
@@ -236,9 +250,16 @@ type Record struct {
 	// ExecutionAuthorizationDigest and RunReservationID bind a charged run to
 	// the ledger entry that paid for it. They are not counters: ledger remains
 	// the sole cross-run budget authority.
-	ExecutionAuthorizationDigest string                             `json:"execution_authorization_digest,omitempty"`
-	RunReservationID             string                             `json:"run_reservation_id,omitempty"`
-	ReservationReceipts          []work.ExecutionReservationReceipt `json:"reservation_receipts,omitempty"`
+	ExecutionAuthorizationDigest string `json:"execution_authorization_digest,omitempty"`
+	// EngineGeneration is the immutable managed ForgePilot generation observed
+	// for this charged run. It is a binding fact, not a retention reference.
+	EngineGeneration *work.ExecutionEngineGeneration `json:"engine_generation,omitempty"`
+	// RetentionAcquired proves this Run's own marker preceded its tuple write.
+	// Missing on migrated records means unknown ownership, never permission.
+	RetentionAcquired   bool                               `json:"retention_acquired,omitempty"`
+	RetentionClosure    *RetentionClosure                  `json:"retention_closure,omitempty"`
+	RunReservationID    string                             `json:"run_reservation_id,omitempty"`
+	ReservationReceipts []work.ExecutionReservationReceipt `json:"reservation_receipts,omitempty"`
 	// RunPreparationState keeps an initial record nonrunnable across the
 	// record/ledger transaction boundary. A retry must finish this exact intent
 	// before it can create another run or launch a worker.

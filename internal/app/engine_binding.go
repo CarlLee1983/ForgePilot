@@ -84,6 +84,9 @@ func ensureExecutionLaunchIdentity(ctx context.Context, root, goalID, expectedAu
 	if current.Digest != expectedAuthorizationDigest {
 		return work.ExecutionAuthorization{}, RunnerIdentity{}, errors.New("runner is bound to a different execution authorization")
 	}
+	if current.EngineGeneration == nil || !current.RetentionAcquired {
+		return work.ExecutionAuthorization{}, RunnerIdentity{}, errors.New("current execution authorization has no approved managed ForgePilot generation")
+	}
 	if requireExistingBinding && (current.WorkerIdentity == nil || current.EngineGeneration == nil) {
 		return work.ExecutionAuthorization{}, RunnerIdentity{}, errors.New("exact Runner resume requires an existing managed launch identity")
 	}
@@ -379,6 +382,39 @@ func (retention BootstrapRetention) Acquire(ctx context.Context, generation work
 	return nil
 }
 
+// Release removes only the exact Bootstrap marker identified by generation and
+// reference. Its caller must have durably closed that owner first: a failed
+// release leaves the marker in place, which is safer than reconstructing it.
+func (retention BootstrapRetention) Release(ctx context.Context, generation work.ExecutionEngineGeneration, reference string) error {
+	if !filepath.IsAbs(retention.HelperPath) || strings.TrimSpace(retention.HelperPath) != retention.HelperPath {
+		return errors.New("Bootstrap retention helper path must be absolute")
+	}
+	command := exec.CommandContext(ctx, retention.HelperPath,
+		"retention-v1", "release",
+		"--generation", generation.SourceCommit,
+		"--payload-digest", generation.PayloadSHA256,
+		"--reference", reference,
+	)
+	output, err := command.Output()
+	if err != nil {
+		return fmt.Errorf("release Bootstrap generation retention: %w", err)
+	}
+	var result struct {
+		ProtocolVersion int    `json:"protocol_version"`
+		Result          string `json:"result"`
+		GenerationID    string `json:"generation_id"`
+		PayloadDigest   string `json:"payload_digest"`
+	}
+	if err := decodeStrictProtocolJSON(output, &result); err != nil {
+		return fmt.Errorf("decode Bootstrap retention result: %w", err)
+	}
+	if result.ProtocolVersion != 1 || (result.Result != "released" && result.Result != "already_released") ||
+		result.GenerationID != generation.SourceCommit || result.PayloadDigest != generation.PayloadSHA256 {
+		return errors.New("Bootstrap retention helper returned an unexpected release result")
+	}
+	return nil
+}
+
 // BindExecutionLaunchIdentity acquires a generation-retention marker and then
 // atomically pins directly observed Worker and engine facts to the current
 // authorization. It deliberately leaves a marker behind when the state write
@@ -399,6 +435,9 @@ func BindExecutionLaunchIdentity(ctx context.Context, root, goalID string, ident
 		return work.ExecutionAuthorization{}, fmt.Errorf("goal %q has no current execution authorization", goalID)
 	}
 	current := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
+	if current.EngineGeneration == nil || !current.RetentionAcquired || *current.EngineGeneration != generation {
+		return work.ExecutionAuthorization{}, errors.New("current execution authorization has no matching approved managed ForgePilot generation")
+	}
 	if err := validateIdentityForBinding(current, identity, generation, now); err != nil {
 		return work.ExecutionAuthorization{}, err
 	}
@@ -410,7 +449,7 @@ func BindExecutionLaunchIdentity(ctx context.Context, root, goalID string, ident
 			current.WorkerIdentity.ReportedVersion == identity.Version &&
 			*current.EngineGeneration == generation {
 			exactlyBound = true
-		} else {
+		} else if current.WorkerIdentity != nil || current.EngineGeneration == nil || *current.EngineGeneration != generation {
 			return work.ExecutionAuthorization{}, errors.New("current execution authorization is already bound to a different Worker or engine identity")
 		}
 	}
@@ -447,6 +486,53 @@ func BindExecutionLaunchIdentity(ctx context.Context, root, goalID string, ident
 	return bound, nil
 }
 
+// AcquireExecutionRunRetention gives one supervised Run its own marker before
+// its Run Record can name the immutable engine tuple. Authorization and Run
+// references are intentionally distinct: closing a superseded authorization
+// must not make a recoverable historical Run prunable.
+func AcquireExecutionRunRetention(ctx context.Context, root, goalID, runID, expectedAuthorizationDigest string,
+	resolver EngineGenerationResolver) (work.ExecutionEngineGeneration, error) {
+	if resolver == nil {
+		return work.ExecutionEngineGeneration{}, errors.New("managed ForgePilot generation resolver is required")
+	}
+	if strings.TrimSpace(runID) == "" || runID != strings.TrimSpace(runID) {
+		return work.ExecutionEngineGeneration{}, errors.New("run ID is required")
+	}
+	if expectedAuthorizationDigest == "" {
+		return work.ExecutionEngineGeneration{}, errors.New("expected execution authorization digest is required")
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		return work.ExecutionEngineGeneration{}, err
+	}
+	goal, ok := state.GoalByID(goalID)
+	if !ok || goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
+		return work.ExecutionEngineGeneration{}, fmt.Errorf("goal %q has no current execution authorization", goalID)
+	}
+	authorization := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
+	if authorization.Digest != expectedAuthorizationDigest {
+		return work.ExecutionEngineGeneration{}, errors.New("runner is bound to a different execution authorization")
+	}
+	if authorization.EngineGeneration == nil || !authorization.RetentionAcquired {
+		return work.ExecutionEngineGeneration{}, errors.New("current execution authorization has no managed ForgePilot generation")
+	}
+	resolved, err := resolver.Resolve(ctx)
+	if err != nil {
+		return work.ExecutionEngineGeneration{}, fmt.Errorf("resolve managed ForgePilot generation for Run retention: %w", err)
+	}
+	if resolved.Generation != *authorization.EngineGeneration {
+		return work.ExecutionEngineGeneration{}, errors.New("managed ForgePilot generation drifted before Run retention")
+	}
+	reference, err := generationRunRetentionReference(authorization, runID, resolved.Generation)
+	if err != nil {
+		return work.ExecutionEngineGeneration{}, err
+	}
+	if err := (BootstrapRetention{HelperPath: resolved.HelperPath}).Acquire(ctx, resolved.Generation, reference); err != nil {
+		return work.ExecutionEngineGeneration{}, err
+	}
+	return resolved.Generation, nil
+}
+
 // generationRetentionReference is deterministic from immutable authorization
 // facts and the generation tuple. Its raw 256-bit value is passed only to the
 // Bootstrap helper; Bootstrap persists its hash and ForgePilot does not store
@@ -472,6 +558,24 @@ func generationRetentionReference(authorization work.ExecutionAuthorization, gen
 	}
 	hash := sha256.New()
 	_, _ = hash.Write([]byte("forgepilot.generation-retention-reference/v1"))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(encoded)
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func generationRunRetentionReference(authorization work.ExecutionAuthorization, runID string,
+	generation work.ExecutionEngineGeneration) (string, error) {
+	input := struct {
+		AuthorizationDigest string                         `json:"authorization_digest"`
+		RunID               string                         `json:"run_id"`
+		Generation          work.ExecutionEngineGeneration `json:"generation"`
+	}{AuthorizationDigest: authorization.Digest, RunID: runID, Generation: generation}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("forgepilot.run-generation-retention-reference/v1"))
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(encoded)
 	return hex.EncodeToString(hash.Sum(nil)), nil

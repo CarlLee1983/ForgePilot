@@ -86,7 +86,8 @@ func TestPrepareAuthorizedAgentLaunchReturnsTheDigestMatchedWorkerProfile(t *tes
 	if err != nil || len(preview.Diagnostics) != 0 {
 		t.Fatalf("plan = %#v, err=%v", preview, err)
 	}
-	authorized, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator")
+	seedResolver, _ := pinnedExecutionResolver(t, fixture)
+	authorized, err := AuthorizePinnedExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator", seedResolver)
 	if err != nil {
 		t.Fatal(err)
 	}

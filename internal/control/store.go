@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,74 @@ func ReadLocked(root string) (State, error) {
 		return State{}, err
 	}
 	return read(controlPath(root))
+}
+
+// ReadExactV2Locked is the engine-compatibility read. Legacy sidecars remain
+// readable for ordinary commands, but their in-memory upgrade cannot prove
+// that a candidate understands the durable v2 pause and ownership facts.
+func ReadExactV2Locked(root string) (State, error) {
+	root, err := canonicalRoot(root)
+	if err != nil {
+		return State{}, err
+	}
+	path := controlPath(root)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return State{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return State{}, errors.New("engine compatibility requires a regular v2 execution-control sidecar")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return State{}, err
+	}
+	if err := checkUniqueControlJSON(json.NewDecoder(bytes.NewReader(body)), 0); err != nil {
+		return State{}, fmt.Errorf("ambiguous execution-control sidecar: %w", err)
+	}
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(body, &header); err != nil || header.SchemaVersion != SchemaVersion {
+		return State{}, errors.New("engine compatibility requires a durable v2 execution-control sidecar")
+	}
+	return read(path)
+}
+
+func checkUniqueControlJSON(decoder *json.Decoder, depth int) error {
+	if depth > 64 {
+		return errors.New("JSON nesting exceeds compatibility limit")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if delim != '{' && delim != '[' {
+		return errors.New("invalid JSON container")
+	}
+	seen := make(map[string]bool)
+	for decoder.More() {
+		if delim == '{' {
+			key, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			name, ok := key.(string)
+			if !ok || seen[name] {
+				return errors.New("duplicate or invalid JSON object key")
+			}
+			seen[name] = true
+		}
+		if err := checkUniqueControlJSON(decoder, depth+1); err != nil {
+			return err
+		}
+	}
+	_, err = decoder.Token()
+	return err
 }
 
 // Update serializes a read-modify-write transaction with the distinct
@@ -133,6 +202,18 @@ func read(path string) (State, error) {
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return State{}, errors.New("execution-control sidecar contains extra JSON values")
 	}
+	if err := state.Validate(); err == nil {
+		return state, nil
+	} else if state.SchemaVersion != 1 {
+		return State{}, fmt.Errorf("invalid execution control: %w", err)
+	}
+	if state.Pause != nil && state.Pause.EngineRevision != nil {
+		return State{}, errors.New("v1 execution-control sidecar cannot carry engine revision intent")
+	}
+	// v1 had no engine-revision intent. Upgrade only in memory: reads must not
+	// silently rewrite the sidecar, and the next material Update writes v2 only
+	// after the legacy facts validate under the new schema.
+	state.SchemaVersion = SchemaVersion
 	if err := state.Validate(); err != nil {
 		return State{}, fmt.Errorf("invalid execution control: %w", err)
 	}

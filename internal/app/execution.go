@@ -20,18 +20,28 @@ import (
 )
 
 const (
-	executionPlanRequestVersion = "forgepilot.execution-plan-request/v1"
-	ExecutionPlanVersion        = "forgepilot.execution-plan/v1"
+	executionPlanRequestVersion = "forgepilot.execution-plan-request/v2"
+	ExecutionPlanVersion        = "forgepilot.execution-plan/v2"
 	maxExecutionRequestBytes    = 1 << 20
 )
 
 type executionPlanRequest struct {
-	FormatVersion               string                      `json:"formatVersion"`
-	ExpectedAuthorizationDigest string                      `json:"expectedAuthorizationDigest,omitempty"`
-	GoalPlanRequest             GoalPreflightRequest        `json:"goalPlanRequest"`
-	WorkerProfile               executionWorkerProfileInput `json:"workerProfile"`
-	Caps                        executionCapsInput          `json:"caps"`
-	ExpiresAt                   string                      `json:"expiresAt"`
+	FormatVersion               string                         `json:"formatVersion"`
+	ExpectedAuthorizationDigest string                         `json:"expectedAuthorizationDigest,omitempty"`
+	GoalPlanRequest             GoalPreflightRequest           `json:"goalPlanRequest"`
+	WorkerProfile               executionWorkerProfileInput    `json:"workerProfile"`
+	EngineGeneration            executionEngineGenerationInput `json:"engineGeneration"`
+	Caps                        executionCapsInput             `json:"caps"`
+	ExpiresAt                   string                         `json:"expiresAt"`
+}
+
+type executionEngineGenerationInput struct {
+	SourceCommit  string `json:"sourceCommit"`
+	PayloadSHA256 string `json:"payloadSHA256"`
+}
+
+func (input executionEngineGenerationInput) generation() work.ExecutionEngineGeneration {
+	return work.ExecutionEngineGeneration{SourceCommit: input.SourceCommit, PayloadSHA256: input.PayloadSHA256}
 }
 
 type executionWorkerProfileInput struct {
@@ -60,11 +70,13 @@ type ExecutionPlanProjection struct {
 	RequestSHA256              string                          `json:"requestSha256,omitempty"`
 	RegistrationSHA256         string                          `json:"registrationSha256,omitempty"`
 	CurrentAuthorizationDigest string                          `json:"currentAuthorizationDigest,omitempty"`
+	LegacyRetentionUnknown     bool                            `json:"legacyRetentionUnknown,omitempty"`
 	ApprovalToken              string                          `json:"approvalToken,omitempty"`
 	ExpiresAt                  string                          `json:"expiresAt,omitempty"`
 	GoalPlan                   *GoalPreflightProjection        `json:"goalPlan,omitempty"`
 	Artifacts                  []work.ExecutionArtifactBinding `json:"artifacts,omitempty"`
 	WorkerProfile              work.WorkerProfile              `json:"workerProfile"`
+	EngineGeneration           work.ExecutionEngineGeneration  `json:"engineGeneration"`
 	Caps                       work.ExecutionCaps              `json:"caps"`
 	RevisionDiff               *ExecutionRevisionDiff          `json:"revisionDiff,omitempty"`
 	Diagnostics                []GoalPreflightDiagnostic       `json:"diagnostics"`
@@ -74,11 +86,17 @@ type ExecutionPlanProjection struct {
 // execution contract and a proposed revision. It exists only for a valid
 // revision preview; authorization continues to bind the complete projection.
 type ExecutionRevisionDiff struct {
-	AddedNodes    []ExecutionRevisionAddedNode          `json:"addedNodes"`
-	Contract      *ExecutionRevisionContractChange      `json:"contract,omitempty"`
-	Caps          *ExecutionRevisionCapsChange          `json:"caps,omitempty"`
-	WorkerProfile *ExecutionRevisionWorkerProfileChange `json:"workerProfile,omitempty"`
-	ExpiresAt     *ExecutionRevisionExpiryChange        `json:"expiresAt,omitempty"`
+	AddedNodes       []ExecutionRevisionAddedNode             `json:"addedNodes"`
+	Contract         *ExecutionRevisionContractChange         `json:"contract,omitempty"`
+	Caps             *ExecutionRevisionCapsChange             `json:"caps,omitempty"`
+	WorkerProfile    *ExecutionRevisionWorkerProfileChange    `json:"workerProfile,omitempty"`
+	EngineGeneration *ExecutionRevisionEngineGenerationChange `json:"engineGeneration,omitempty"`
+	ExpiresAt        *ExecutionRevisionExpiryChange           `json:"expiresAt,omitempty"`
+}
+
+type ExecutionRevisionEngineGenerationChange struct {
+	Previous work.ExecutionEngineGeneration `json:"previous"`
+	Proposed work.ExecutionEngineGeneration `json:"proposed"`
 }
 
 type ExecutionRevisionAddedNode struct {
@@ -155,7 +173,7 @@ func planExecutionBytes(ctx context.Context, root string, body []byte, now time.
 		return projection, nil
 	}
 	if request.FormatVersion != executionPlanRequestVersion {
-		projection.fail("invalid-request", "formatVersion must be forgepilot.execution-plan-request/v1")
+		projection.fail("invalid-request", "formatVersion must be forgepilot.execution-plan-request/v2")
 		return projection, nil
 	}
 	caps, err := executionCaps(request.Caps)
@@ -182,6 +200,7 @@ func planExecutionBytes(ctx context.Context, root string, body []byte, now time.
 	projection.RequestSHA256 = "sha256:" + digest(body)
 	projection.ExpiresAt = expiresAt.Format(time.RFC3339Nano)
 	projection.WorkerProfile = profile
+	projection.EngineGeneration = request.EngineGeneration.generation()
 	projection.Caps = caps
 
 	goalPlan, err := PreflightGoalPlan(ctx, canonicalRoot, request.GoalPlanRequest)
@@ -215,7 +234,7 @@ func planExecutionBytes(ctx context.Context, root string, body []byte, now time.
 	tokenInput := executionApprovalInput{
 		RequestSHA256: projection.RequestSHA256, Workspace: canonicalRoot, GoalID: request.GoalPlanRequest.GoalID,
 		RegistrationSHA256: registrationDigest, AuthorizationPresent: false, ExpiresAt: projection.ExpiresAt,
-		Artifacts: projection.Artifacts, WorkerProfile: profile, Caps: caps,
+		Artifacts: projection.Artifacts, WorkerProfile: profile, EngineGeneration: projection.EngineGeneration, Caps: caps,
 	}
 	projection.ApprovalToken, err = executionDomainDigest("forgepilot.execution-plan-approval/v1", tokenInput)
 	if err != nil {
@@ -230,7 +249,7 @@ func parseExecutionPlanRequest(body []byte) (executionPlanRequest, error) {
 	if err != nil {
 		return request, err
 	}
-	if err := allowed(object, "formatVersion", "expectedAuthorizationDigest", "goalPlanRequest", "workerProfile", "caps", "expiresAt"); err != nil {
+	if err := allowed(object, "formatVersion", "expectedAuthorizationDigest", "goalPlanRequest", "workerProfile", "engineGeneration", "caps", "expiresAt"); err != nil {
 		return request, err
 	}
 	for _, field := range []struct {
@@ -240,12 +259,26 @@ func parseExecutionPlanRequest(body []byte) (executionPlanRequest, error) {
 		{"formatVersion", &request.FormatVersion},
 		{"goalPlanRequest", &request.GoalPlanRequest},
 		{"workerProfile", &request.WorkerProfile},
+		{"engineGeneration", &request.EngineGeneration},
 		{"caps", &request.Caps},
 		{"expiresAt", &request.ExpiresAt},
 	} {
 		if err := decodeRequired(object, field.name, field.into); err != nil {
 			return request, fmt.Errorf("request field %s is required or invalid", field.name)
 		}
+	}
+	if request.FormatVersion != executionPlanRequestVersion {
+		return request, fmt.Errorf("formatVersion must be %s", executionPlanRequestVersion)
+	}
+	engineObject, err := artifactObjectWithLimits(object["engineGeneration"], maxExecutionRequestBytes, maxGoalPlanJSONDepth)
+	if err != nil {
+		return request, fmt.Errorf("request field engineGeneration is invalid: %w", err)
+	}
+	if err := allowed(engineObject, "sourceCommit", "payloadSHA256"); err != nil {
+		return request, fmt.Errorf("request field engineGeneration is invalid: %w", err)
+	}
+	if err := work.ValidateExecutionEngineGeneration(request.EngineGeneration.generation()); err != nil {
+		return request, fmt.Errorf("request field engineGeneration is invalid: %w", err)
 	}
 	if raw, exists := object["expectedAuthorizationDigest"]; exists {
 		if err := json.Unmarshal(raw, &request.ExpectedAuthorizationDigest); err != nil {
@@ -342,6 +375,7 @@ type executionApprovalInput struct {
 	ExpiresAt            string                          `json:"expiresAt"`
 	Artifacts            []work.ExecutionArtifactBinding `json:"artifacts"`
 	WorkerProfile        work.WorkerProfile              `json:"workerProfile"`
+	EngineGeneration     work.ExecutionEngineGeneration  `json:"engineGeneration"`
 	Caps                 work.ExecutionCaps              `json:"caps"`
 }
 
@@ -599,7 +633,7 @@ func planExecutionRevisionForState(ctx context.Context, root string, body []byte
 		return projection, nil
 	}
 	if request.FormatVersion != executionPlanRequestVersion {
-		projection.fail("invalid-request", "formatVersion must be forgepilot.execution-plan-request/v1")
+		projection.fail("invalid-request", "formatVersion must be forgepilot.execution-plan-request/v2")
 		return projection, nil
 	}
 	goal, ok := state.GoalByID(request.GoalPlanRequest.GoalID)
@@ -634,7 +668,9 @@ func planExecutionRevisionForState(ctx context.Context, root string, body []byte
 	projection.Workspace, projection.GoalID = canonicalRoot, request.GoalPlanRequest.GoalID
 	projection.RequestSHA256 = "sha256:" + digest(body)
 	projection.CurrentAuthorizationDigest = currentAuthorization.Digest
+	projection.LegacyRetentionUnknown = !currentAuthorization.RetentionAcquired
 	projection.ExpiresAt, projection.WorkerProfile, projection.Caps = expiresAt.Format(time.RFC3339Nano), profile, caps
+	projection.EngineGeneration = request.EngineGeneration.generation()
 	goalPlan, err := preflightGoalPlanForState(ctx, canonicalRoot, request.GoalPlanRequest, state, func(manifest GoalPlanManifest) error {
 		return validateRevisionMapping(goal.Execution.PlanBindings[len(goal.Execution.PlanBindings)-1], manifest, request.GoalPlanRequest.NodeMappings)
 	})
@@ -655,11 +691,11 @@ func planExecutionRevisionForState(ctx context.Context, root string, body []byte
 	projection.Artifacts = executionArtifactDigests(goalPlan, request.GoalPlanRequest)
 	projection.RevisionDiff = executionRevisionDiff(
 		goal.Execution.PlanBindings[len(goal.Execution.PlanBindings)-1], currentAuthorization,
-		binding, profile, caps, projection.ExpiresAt,
+		binding, profile, projection.EngineGeneration, caps, projection.ExpiresAt,
 	)
 	tokenInput := executionApprovalInput{RequestSHA256: projection.RequestSHA256, Workspace: canonicalRoot, GoalID: goal.ID,
 		RegistrationSHA256: projection.RegistrationSHA256, AuthorizationPresent: true, ExpiresAt: projection.ExpiresAt,
-		Artifacts: projection.Artifacts, WorkerProfile: profile, Caps: caps}
+		Artifacts: projection.Artifacts, WorkerProfile: profile, EngineGeneration: projection.EngineGeneration, Caps: caps}
 	projection.ApprovalToken, err = executionDomainDigest("forgepilot.execution-revision-approval/v1", struct {
 		Input                      executionApprovalInput
 		CurrentAuthorizationDigest string
@@ -669,7 +705,7 @@ func planExecutionRevisionForState(ctx context.Context, root string, body []byte
 	return projection, err
 }
 
-func executionRevisionDiff(current work.GoalPlanBinding, currentAuthorization work.ExecutionAuthorization, proposed work.GoalPlanBinding, profile work.WorkerProfile, caps work.ExecutionCaps, expiresAt string) *ExecutionRevisionDiff {
+func executionRevisionDiff(current work.GoalPlanBinding, currentAuthorization work.ExecutionAuthorization, proposed work.GoalPlanBinding, profile work.WorkerProfile, generation work.ExecutionEngineGeneration, caps work.ExecutionCaps, expiresAt string) *ExecutionRevisionDiff {
 	diff := &ExecutionRevisionDiff{AddedNodes: make([]ExecutionRevisionAddedNode, 0)}
 	currentByRef := make(map[string]bool, len(current.Nodes))
 	for _, node := range current.Nodes {
@@ -693,6 +729,13 @@ func executionRevisionDiff(current work.GoalPlanBinding, currentAuthorization wo
 	}
 	if !reflect.DeepEqual(currentAuthorization.WorkerProfile, profile) {
 		diff.WorkerProfile = &ExecutionRevisionWorkerProfileChange{Previous: currentAuthorization.WorkerProfile, Proposed: profile}
+	}
+	if currentAuthorization.EngineGeneration == nil || *currentAuthorization.EngineGeneration != generation {
+		previous := work.ExecutionEngineGeneration{}
+		if currentAuthorization.EngineGeneration != nil {
+			previous = *currentAuthorization.EngineGeneration
+		}
+		diff.EngineGeneration = &ExecutionRevisionEngineGenerationChange{Previous: previous, Proposed: generation}
 	}
 	previousExpiry := currentAuthorization.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	if previousExpiry != expiresAt {
@@ -792,70 +835,81 @@ func ReviseExecutionFile(ctx context.Context, root, requestPath, approvalToken, 
 			if err != nil {
 				return err
 			}
-			binding, err := executionPlanBinding(*projection.GoalPlan, request.GoalPlanRequest, projection.RequestSHA256)
-			if err != nil {
-				return err
-			}
-			goal, _ := state.GoalByID(request.GoalPlanRequest.GoalID)
-			current := goal.Execution.PlanBindings[len(goal.Execution.PlanBindings)-1]
-			byRef := make(map[string]string, len(binding.Nodes))
-			for _, node := range binding.Nodes {
-				byRef[node.PlanNodeRef] = node.WorkItemID
-			}
-			pending := make(map[int]bool, len(binding.Nodes))
-			for i := range binding.Nodes {
-				if binding.Nodes[i].WorkItemID == "" {
-					pending[i] = true
-				}
-			}
-			for len(pending) > 0 {
-				progressed := false
-				for i := range binding.Nodes {
-					if !pending[i] {
-						continue
-					}
-					dependencies := make([]string, 0, len(binding.Nodes[i].DependsOn))
-					ready := true
-					for _, ref := range binding.Nodes[i].DependsOn {
-						id := byRef[ref]
-						if id == "" {
-							ready = false
-							break
-						}
-						dependencies = append(dependencies, id)
-					}
-					if !ready {
-						continue
-					}
-					item, err := state.AddWork(request.GoalPlanRequest.GoalID, binding.Nodes[i].StoryRef, dependencies, now)
-					if err != nil {
-						return err
-					}
-					binding.Nodes[i].WorkItemID, byRef[binding.Nodes[i].PlanNodeRef] = item.ID, item.ID
-					delete(pending, i)
-					progressed = true
-				}
-				if !progressed {
-					return errors.New("new Plan Nodes have unresolved dependencies")
-				}
-			}
-			authorizedAt := time.Now().UTC()
-			expiresAt, err := parseExecutionExpiry(request.ExpiresAt, authorizedAt)
-			if err != nil {
-				return fmt.Errorf("execution revision is no longer authorizable (invalid-expiry): %w", err)
-			}
-			binding.Revision, binding.AdoptedAt = current.Revision+1, authorizedAt
-			authorization := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
-			authorization.Revision, authorization.RequestSHA256, authorization.ApprovalToken = binding.Revision, binding.RequestSHA256, approvalToken
-			authorization.AuthorizedAt, authorization.ExpiresAt, authorization.Caps, authorization.WorkerProfile = binding.AdoptedAt, expiresAt, projection.Caps, projection.WorkerProfile
-			authorization.Approver = approver
-			authorization.WorkerIdentity, authorization.EngineGeneration = nil, nil
-			if err := state.ReviseExecution(goal.ID, binding, authorization); err != nil {
-				return err
-			}
-			committed = *goal.Execution
-			return nil
+			committed, err = applyExecutionRevision(state, projection, request, approvalToken, approver, now, nil)
+			return err
 		})
 	})
 	return committed, err
+}
+
+// applyExecutionRevision is shared by the ordinary and engine-changing
+// publication paths. Callers establish their respective retention boundary
+// before invoking it in the state transaction.
+func applyExecutionRevision(state *work.State, projection ExecutionPlanProjection, request executionPlanRequest,
+	approvalToken, approver string, now time.Time, generation *work.ExecutionEngineGeneration) (work.GoalExecution, error) {
+	binding, err := executionPlanBinding(*projection.GoalPlan, request.GoalPlanRequest, projection.RequestSHA256)
+	if err != nil {
+		return work.GoalExecution{}, err
+	}
+	goal, _ := state.GoalByID(request.GoalPlanRequest.GoalID)
+	current := goal.Execution.PlanBindings[len(goal.Execution.PlanBindings)-1]
+	byRef := make(map[string]string, len(binding.Nodes))
+	for _, node := range binding.Nodes {
+		byRef[node.PlanNodeRef] = node.WorkItemID
+	}
+	pending := make(map[int]bool, len(binding.Nodes))
+	for i := range binding.Nodes {
+		if binding.Nodes[i].WorkItemID == "" {
+			pending[i] = true
+		}
+	}
+	for len(pending) > 0 {
+		progressed := false
+		for i := range binding.Nodes {
+			if !pending[i] {
+				continue
+			}
+			dependencies := make([]string, 0, len(binding.Nodes[i].DependsOn))
+			ready := true
+			for _, ref := range binding.Nodes[i].DependsOn {
+				id := byRef[ref]
+				if id == "" {
+					ready = false
+					break
+				}
+				dependencies = append(dependencies, id)
+			}
+			if !ready {
+				continue
+			}
+			item, err := state.AddWork(request.GoalPlanRequest.GoalID, binding.Nodes[i].StoryRef, dependencies, now)
+			if err != nil {
+				return work.GoalExecution{}, err
+			}
+			binding.Nodes[i].WorkItemID, byRef[binding.Nodes[i].PlanNodeRef] = item.ID, item.ID
+			delete(pending, i)
+			progressed = true
+		}
+		if !progressed {
+			return work.GoalExecution{}, errors.New("new Plan Nodes have unresolved dependencies")
+		}
+	}
+	authorizedAt := now
+	expiresAt, err := parseExecutionExpiry(request.ExpiresAt, authorizedAt)
+	if err != nil {
+		return work.GoalExecution{}, fmt.Errorf("execution revision is no longer authorizable (invalid-expiry): %w", err)
+	}
+	binding.Revision, binding.AdoptedAt = current.Revision+1, authorizedAt
+	authorization := goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1]
+	authorization.Revision, authorization.RequestSHA256, authorization.ApprovalToken = binding.Revision, binding.RequestSHA256, approvalToken
+	authorization.AuthorizedAt, authorization.ExpiresAt, authorization.Caps, authorization.WorkerProfile = binding.AdoptedAt, expiresAt, projection.Caps, projection.WorkerProfile
+	authorization.Approver = approver
+	// Every revision creates a new retention owner. Its tuple may be
+	// published only when the caller already acquired that owner's marker.
+	authorization.WorkerIdentity, authorization.EngineGeneration = nil, generation
+	authorization.RetentionAcquired = generation != nil
+	if err := state.ReviseExecution(goal.ID, binding, authorization); err != nil {
+		return work.GoalExecution{}, err
+	}
+	return *goal.Execution, nil
 }

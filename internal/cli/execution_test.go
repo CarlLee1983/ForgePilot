@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,7 +12,17 @@ import (
 	"time"
 
 	"github.com/CarlLee1983/ForgePilot/internal/app"
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
+
+type executionTestGenerationResolver struct {
+	generation work.ExecutionEngineGeneration
+	helper     string
+}
+
+func (resolver executionTestGenerationResolver) Resolve(context.Context) (app.ResolvedBootstrapGeneration, error) {
+	return app.ResolvedBootstrapGeneration{Generation: resolver.generation, HelperPath: resolver.helper}, nil
+}
 
 func TestExecutionPlanEmitsVersionedReadOnlyPreview(t *testing.T) {
 	root := preflightCLIFixture(t)
@@ -33,6 +44,7 @@ func TestExecutionPlanEmitsVersionedReadOnlyPreview(t *testing.T) {
 		"workerProfile": map[string]any{
 			"runtime": "codex", "executablePath": executable, "model": "explicit-model", "effort": "medium", "sandbox": "workspace-write",
 		},
+		"engineGeneration": map[string]any{"sourceCommit": strings.Repeat("a", 40), "payloadSHA256": "sha256:" + strings.Repeat("b", 64)},
 		"caps": map[string]any{
 			"maxSteps": 500, "maxTechnicalAttemptsPerNode": 5, "maxRuns": 20, "maxRecoveries": 2,
 			"maxHandoffBytes": 65536, "maxWriteBytes": 1048576, "maxRunBytes": 16777216, "maxTotalBytes": 134217728,
@@ -112,7 +124,15 @@ func TestExecutionPlanEmitsVersionedReadOnlyPreview(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Execute([]string{"execution", "authorize", "--request", "execution-request.json", "--approval-token", projection.ApprovalToken, "--by", "operator", "--json"}, root, &stdout, &stderr)
+	helper := filepath.Join(t.TempDir(), "forgepilot-bootstrap")
+	if err := os.WriteFile(helper, []byte(`#!/bin/sh
+[ "$1" = retention-v1 ] && [ "$2" = acquire ] || exit 9
+printf '{"protocol_version":1,"result":"acquired","generation_id":"%s","payload_digest":"%s"}\n' "$4" "$6"
+`), 0700); err != nil {
+		t.Fatal(err)
+	}
+	resolver := executionTestGenerationResolver{generation: work.ExecutionEngineGeneration{SourceCommit: strings.Repeat("a", 40), PayloadSHA256: "sha256:" + strings.Repeat("b", 64)}, helper: helper}
+	code = ExecuteWithGenerationResolver([]string{"execution", "authorize", "--request", "execution-request.json", "--approval-token", projection.ApprovalToken, "--by", "operator", "--json"}, root, &stdout, &stderr, resolver)
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("authorize exit=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
 	}
@@ -120,9 +140,16 @@ func TestExecutionPlanEmitsVersionedReadOnlyPreview(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &authorization); err != nil {
 		t.Fatalf("authorize stdout is not one JSON record: %v; output=%q", err, stdout.String())
 	}
-	if authorization.Version != "forgepilot.execution-authorization/v1" || len(authorization.GoalExecution.Authorizations) != 1 ||
+	if authorization.Version != "forgepilot.execution-authorization/v2" || len(authorization.GoalExecution.Authorizations) != 1 ||
 		authorization.GoalExecution.Authorizations[0].Approver != "operator" {
 		t.Fatalf("authorization output = %#v", authorization)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = ExecuteWithGenerationResolver([]string{"execution", "retention", "reconcile", "--json"}, root, &stdout, &stderr, resolver)
+	if code != 0 || stderr.Len() != 0 || !bytes.Contains(stdout.Bytes(), []byte(`"authorizations":0`)) ||
+		!bytes.Contains(stdout.Bytes(), []byte(`"runs":0`)) {
+		t.Fatalf("active-owner reconciliation = exit %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
 	}
 
 	request["expectedAuthorizationDigest"] = authorization.GoalExecution.Authorizations[0].Digest
@@ -146,6 +173,30 @@ func TestExecutionPlanEmitsVersionedReadOnlyPreview(t *testing.T) {
 	if revision.RevisionDiff == nil {
 		t.Fatalf("revision plan JSON omitted revisionDiff: %#v", revision)
 	}
+	request["caps"].(map[string]any)["maxSteps"] = 501
+	requestBytes, err = json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "execution-request.json"), requestBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	revision, err = app.PlanExecutionRevisionFile(t.Context(), root, "execution-request.json")
+	if err != nil || len(revision.Diagnostics) != 0 {
+		t.Fatalf("changed revision preview = %#v, %v", revision, err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = ExecuteWithGenerationResolver([]string{"execution", "revise", "authorize", "--request", "execution-request.json",
+		"--approval-token", revision.ApprovalToken, "--by", "operator", "--json"}, root, &stdout, &stderr, resolver)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("revision commit with release warning = exit %d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	var committed executionAuthorizationOutput
+	if err := json.Unmarshal(stdout.Bytes(), &committed); err != nil || len(committed.GoalExecution.Authorizations) != 2 ||
+		committed.RetentionWarning == "" {
+		t.Fatalf("committed revision did not report retryable cleanup: %#v, %v", committed, err)
+	}
 }
 
 func TestExecutionResumeUsesGoalScopedContract(t *testing.T) {
@@ -163,4 +214,4 @@ func TestExecutionResumeUsesGoalScopedContract(t *testing.T) {
 	}
 }
 
-const executionPlanRequestFormatVersion = "forgepilot.execution-plan-request/v1"
+const executionPlanRequestFormatVersion = "forgepilot.execution-plan-request/v2"

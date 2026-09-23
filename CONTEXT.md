@@ -133,6 +133,12 @@ _Avoid_：Runner 啟動的 Agent Session、程序 supervisor、持久化進度�
 **Execution Authorization**（[ADR-0035](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：使用者對指定 workspace 與 Goal 給予的有界執行授權；每個可供 Runner launch 的版本綁定計畫、已解析的 Worker Profile、ForgePilot 引擎 generation、總額度與固定到期時間，累計消耗跨 run 與授權修訂保留。FP-53 revision one 只記錄明確要求的 profile 與額度，未宣稱已解析 worker／engine identity，因此不可 launch；FP-58 必須以 evidence-bearing transition 驗證並綁定這些 identity。它不授予 Human Decision、Human acceptance 或額外工程範圍。
 _Avoid_：Run Record、單次 run 預算、無限續跑、經過認證的身分
 
+**Engine Retention Owner**（[ADR-0039](docs/adr/0039-per-owner-engine-generation-retention.md)）：對一個 immutable ForgePilot engine generation 仍可啟動或恢復執行的明確持有人；current Execution Authorization 與一個尚未 durable-close 的 supervised Run 各自是不同 owner。owner 以 opaque Bootstrap retention marker 保護 generation，不保存 repository 或 holder identity 到 Bootstrap。
+_Avoid_：Bootstrap generation 本身、Run Record、可由歷史 Authorization 自動推測的 owner、reference token
+
+**Engine Compatibility Check**（[ADR-0039](docs/adr/0039-per-owner-engine-generation-retention.md)）：在 engine revision 前，candidate process 對目前的 execution state、control sidecar 與相關 Run Record 所做的 read-only、fail-closed 可讀性與 identity 檢查；它證明 candidate 可以接手，不是 canonical Verification、migration 或 Agent capability claim。
+_Avoid_：make verify、bootstrap install、runtime default、best-effort repair
+
 **Worker Profile**（[ADR-0035](docs/adr/0035-supervised-goal-execution-with-bounded-rollover.md)）：一個 Execution Authorization 版本內實作與修復共用、綁定解析後 executable 身分的 Agent runtime、model、effort 與權限選擇；resume 與跨 run 續接沿用同一份選擇。
 _Avoid_：Agent Session Check Profile、Verification Runtime Contract、調派模型
 
@@ -160,7 +166,7 @@ _Avoid_：Worker Verification、PASS claim、check attestation、repository comm
 **Agent Result**：一次 Agent Session 交回的結構化結果，為 `implementation_finished`、`needs_human` 或 `execution_failed`。它是未受信任的模型輸出，只作為摘要與停止理由；`implementation_finished` 只表示這次實作結束。
 _Avoid_：PASS、Evidence、完成宣告、授權
 
-**Run Record**：某一次 Runner 執行的持久化 execution history，存在 `.forgepilot/runs/<run-id>/`。恢復時以 ForgePilot 最新 domain state 為準，Run Record 只提供預算與程序 ownership 的核對材料。
+**Run Record**：某一次 Runner 執行的持久化 execution history，存在 `.forgepilot/runs/<run-id>/`。恢復時以 ForgePilot 最新 domain state 為準，Run Record 只提供預算、程序 ownership 與其 immutable authorization／engine binding 的核對材料；它不擁有 Goal ledger 或 Work Item lifecycle。
 
 **Pending Execution**：Run Record 裡一筆「Runner 啟動了某個外部程序，但還沒能確認它停下來」的紀錄——agent session、canonical check、runtime preflight 或 Git 子程序都算。它在程序啟動之前寫下，確認清理完成之後才移除，因此跨程序存活：重啟 CLI、換 run ID 或在同一個 workspace 換一個 Goal 都讀得到它。它與 **Stop Reason** 是兩件事——後者說「上一次為什麼結束」，`resume` 會清掉；恢復阻擋不會。
 _Avoid_：第二份 lifecycle、進度來源、Verification Log

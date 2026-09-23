@@ -403,6 +403,9 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		if err != nil {
 			return err
 		}
+		if existing.RetentionClosure != nil {
+			return fmt.Errorf("run %s has a durable engine-retention closure and cannot resume", runID)
+		}
 		root, err := filepath.EvalSymlinks(options.Root)
 		if err != nil {
 			return err
@@ -491,6 +494,9 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 				}
 				identity = ensuredIdentity
 				runner.launchIdentity = &identity
+				if err := runner.reacquireRunGenerationRetention(bound.EngineGeneration); err != nil {
+					return err
+				}
 			}
 			if err := runner.finishPendingRunPreparation(identity, expectedDigest); err != nil {
 				return err
@@ -575,6 +581,9 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 			return errors.New("execution authorization changed while reacquiring its managed generation")
 		}
 		runner.launchIdentity = &identity
+		if err := runner.reacquireRunGenerationRetention(bound.EngineGeneration); err != nil {
+			return err
+		}
 		_, err = app.ValidateRunnerResume(options.Root, existing.GoalID, existing.RunID,
 			existing.ExecutionAuthorizationDigest, existing.RunReservationID, existing.ReservationReceipts,
 			work.ExecutionArtifactLimits{MaxHandoffBytes: existing.Budget.MaxHandoffBytes,
@@ -656,7 +665,7 @@ func resumeAuthorizationWithWorkspaceLock(options Options, anchorRunID string, l
 			record, err = resumeWithWorkspaceLock(options, anchorRunID, true)
 			return err
 		}
-		if anchor.Stop == nil {
+		if anchor.Stop == nil && anchor.RetentionClosure == nil {
 			return fmt.Errorf("run %s is not stopped; resume that exact run before authorizing a successor", anchorRunID)
 		}
 		// Recovery is a prerequisite to clearing the control pause. A successor
@@ -690,6 +699,9 @@ func resumeAuthorizationWithWorkspaceLock(options Options, anchorRunID string, l
 // authorization digest is unchanged; authorization-level continuation must
 // create a separately charged successor instead.
 func exactAuthorizationResumeReusable(anchor Record, currentAuthorizationDigest string, now time.Time) bool {
+	if anchor.RetentionClosure != nil {
+		return false
+	}
 	if currentAuthorizationDigest == "" || currentAuthorizationDigest != anchor.ExecutionAuthorizationDigest {
 		return false
 	}
@@ -713,7 +725,8 @@ func startAuthorizationSuccessorWithLock(options Options, anchor Record, authori
 }
 
 // ResumeAuthorizationGoal is the public Goal-scoped continuation entrypoint.
-// It selects the most recently updated charged run for this Goal, then
+// It selects the latest run bound to the current authorization (or the latest
+// historical run if none exists), then
 // delegates the exact-versus-successor decision to ResumeAuthorization. The
 // latter rechecks recovery, bindings, identity, expiry, and cumulative caps at
 // the real admission boundary; this selection never authorizes a new contract.
@@ -751,8 +764,7 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 			if candidate.Workspace != root || candidate.GoalID != goalID || candidate.ExecutionAuthorizationDigest == "" {
 				continue
 			}
-			if selected == nil || candidate.UpdatedAt.After(selected.UpdatedAt) ||
-				(candidate.UpdatedAt.Equal(selected.UpdatedAt) && candidate.RunID > selected.RunID) {
+			if selected == nil || preferAuthorizationRun(candidate, *selected, goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1].Digest) {
 				copy := candidate
 				selected = &copy
 			}
@@ -765,6 +777,16 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 	}
 	err := storage.WithWorkspaceLock(options.Root, operation)
 	return record, err
+}
+
+func preferAuthorizationRun(candidate, selected Record, currentDigest string) bool {
+	candidateCurrent := candidate.ExecutionAuthorizationDigest == currentDigest
+	selectedCurrent := selected.ExecutionAuthorizationDigest == currentDigest
+	if candidateCurrent != selectedCurrent {
+		return candidateCurrent
+	}
+	return candidate.StartedAt.After(selected.StartedAt) ||
+		(candidate.StartedAt.Equal(selected.StartedAt) && candidate.RunID > selected.RunID)
 }
 
 // resumeOptions takes the execution settings from the record rather than from
@@ -863,6 +885,9 @@ func newRunner(options Options) (*Runner, error) {
 	}
 	if pending != nil {
 		runner.record = pending
+		if err := runner.reacquireRunGenerationRetention(bound.EngineGeneration); err != nil {
+			return nil, err
+		}
 		if err := runner.finishPendingRunPreparation(identity, pending.ExecutionAuthorizationDigest); err != nil {
 			return nil, err
 		}
@@ -883,13 +908,25 @@ func newRunner(options Options) (*Runner, error) {
 	if authorizationDigest == "" {
 		return nil, fmt.Errorf("goal %q has an execution authorization without a durable digest", goal.ID)
 	}
+	if bound.EngineGeneration == nil {
+		return nil, fmt.Errorf("goal %q has no bound managed ForgePilot generation", goal.ID)
+	}
+	engineGeneration := *bound.EngineGeneration
+	runGeneration, err := app.AcquireExecutionRunRetention(context.Background(), options.Root, goal.ID, runID,
+		authorizationDigest, options.GenerationResolver)
+	if err != nil {
+		return nil, err
+	}
+	if runGeneration != engineGeneration {
+		return nil, errors.New("managed ForgePilot generation drifted while preparing the Run intent")
+	}
 	runReservationID := runID + ":run"
 	preparationState := RunPreparationPendingCharge
 	runner.record = &Record{
 		RunID: runID, Workspace: root, GoalID: goal.ID, GoalTitle: goal.Title, CompletionPolicy: goal.CompletionPolicy, Scope: scope,
 		RuntimeName: runtime.Name(), RuntimeExecutable: executable, RuntimeVersion: version,
 		RuntimeCommand: options.RuntimeCommand, Snapshot: options.Snapshot,
-		ExecutionAuthorizationDigest: authorizationDigest, RunReservationID: runReservationID,
+		ExecutionAuthorizationDigest: authorizationDigest, EngineGeneration: &engineGeneration, RetentionAcquired: true, RunReservationID: runReservationID,
 		RunPreparationState: preparationState,
 		Budget:              options.Budget, Limits: options.Limits,
 		StartedAt: startedAt, Deadline: startedAt.Add(options.Budget.MaxDuration),
@@ -954,12 +991,35 @@ func validatePendingRunPreparationRecord(record Record) error {
 		return fmt.Errorf("run %s preparation has invalid artifact limits: %w", record.RunID, err)
 	}
 	if record.RunPreparationState == RunPreparationPendingCharge &&
-		(record.ExecutionAuthorizationDigest == "" || record.RunReservationID != record.RunID+":run") {
+		(record.ExecutionAuthorizationDigest == "" || record.RunReservationID != record.RunID+":run" || record.EngineGeneration == nil || !record.RetentionAcquired) {
 		return fmt.Errorf("run %s has an incomplete charged Run preparation intent", record.RunID)
 	}
 	if record.RunPreparationState == RunPreparationPendingClassification &&
-		(record.ExecutionAuthorizationDigest != "" || record.RunReservationID != "") {
+		(record.ExecutionAuthorizationDigest != "" || record.RunReservationID != "" || record.EngineGeneration != nil || record.RetentionAcquired) {
 		return fmt.Errorf("run %s has inconsistent Run preparation metadata", record.RunID)
+	}
+	return nil
+}
+
+// reacquireRunGenerationRetention repairs the process-local ownership marker
+// for a durable Run before it can charge, resume, or launch work. The record
+// carries only the immutable tuple, never Bootstrap's opaque reference, so
+// internal/app remains the sole authority that derives and speaks the
+// retention protocol.
+func (runner *Runner) reacquireRunGenerationRetention(bound *work.ExecutionEngineGeneration) error {
+	if runner.record.EngineGeneration == nil || !runner.record.RetentionAcquired {
+		return fmt.Errorf("run %s has no managed ForgePilot generation", runner.record.RunID)
+	}
+	if bound == nil || *runner.record.EngineGeneration != *bound {
+		return fmt.Errorf("run %s managed ForgePilot generation does not match its execution authorization", runner.record.RunID)
+	}
+	observed, err := app.AcquireExecutionRunRetention(context.Background(), runner.options.Root, runner.record.GoalID,
+		runner.record.RunID, runner.record.ExecutionAuthorizationDigest, runner.options.GenerationResolver)
+	if err != nil {
+		return err
+	}
+	if observed != *runner.record.EngineGeneration {
+		return fmt.Errorf("run %s managed ForgePilot generation drifted while restoring retention", runner.record.RunID)
 	}
 	return nil
 }

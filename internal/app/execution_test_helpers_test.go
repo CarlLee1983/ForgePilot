@@ -24,8 +24,9 @@ func newExecutionTestFixture(t *testing.T) executionTestFixture {
 		t.Fatal(err)
 	}
 	request := executionPlanRequest{
-		FormatVersion:   executionPlanRequestVersion,
-		GoalPlanRequest: planRequest,
+		FormatVersion:    executionPlanRequestVersion,
+		EngineGeneration: executionEngineGenerationInput{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		GoalPlanRequest:  planRequest,
 		WorkerProfile: executionWorkerProfileInput{
 			Runtime: "codex", ExecutablePath: executablePath, Model: "explicit-model", Effort: "medium", Sandbox: "workspace-write",
 		},

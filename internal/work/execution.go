@@ -72,7 +72,10 @@ type ExecutionAuthorization struct {
 	WorkerProfile     WorkerProfile              `json:"worker_profile"`
 	WorkerIdentity    *ResolvedWorkerIdentity    `json:"worker_identity"`
 	EngineGeneration  *ExecutionEngineGeneration `json:"engine_generation"`
-	Digest            string                     `json:"digest"`
+	// RetentionAcquired is true only for an authorization published after its
+	// own marker acquisition. Migrated history has false/unknown provenance.
+	RetentionAcquired bool   `json:"retention_acquired,omitempty"`
+	Digest            string `json:"digest"`
 }
 
 // WorkerProfile is the explicitly requested execution profile. Version
@@ -100,6 +103,16 @@ type ExecutionEngineGeneration struct {
 	// sha256: prefix, matching the helper's machine protocol.
 	SourceCommit  string `json:"source_commit"`
 	PayloadSHA256 string `json:"payload_sha256"`
+}
+
+// ValidateExecutionEngineGeneration validates the immutable tuple accepted by
+// Bootstrap retention. Execution-control revision intent binds this same
+// domain fact and must not duplicate its grammar.
+func ValidateExecutionEngineGeneration(generation ExecutionEngineGeneration) error {
+	if !validExecutionEngineGeneration(generation) {
+		return errors.New("invalid execution engine generation")
+	}
+	return nil
 }
 
 type ExecutionCaps struct {
@@ -224,8 +237,11 @@ func (s *State) AdoptInitialExecution(execution GoalExecution) error {
 		return fmt.Errorf("goal %q already has an execution authorization", goal.ID)
 	}
 	for _, authorization := range execution.Authorizations {
-		if authorization.WorkerIdentity != nil || authorization.EngineGeneration != nil {
-			return errors.New("initial execution cannot claim unobserved Worker or engine identities")
+		if authorization.WorkerIdentity != nil {
+			return errors.New("initial execution cannot claim an unobserved Worker identity")
+		}
+		if authorization.EngineGeneration != nil && !authorization.RetentionAcquired {
+			return errors.New("initial execution cannot claim an engine generation without retention provenance")
 		}
 	}
 	execution = cloneGoalExecution(execution)
@@ -361,6 +377,9 @@ func (s *State) BindCurrentExecutionIdentity(goalID string, identity ResolvedWor
 		return ExecutionAuthorization{}, errors.New("execution revision history is inconsistent")
 	}
 	current := &execution.Authorizations[len(execution.Authorizations)-1]
+	if !current.RetentionAcquired {
+		return ExecutionAuthorization{}, errors.New("current execution authorization has unknown generation retention provenance")
+	}
 	if identity.ExecutablePath != current.WorkerProfile.ExecutablePath ||
 		identity.ExecutableSHA256 != current.WorkerProfile.ExecutableSHA256 ||
 		!validExecutionIdentifier(identity.ReportedVersion) || identity.ObservedAt.IsZero() {
@@ -374,7 +393,9 @@ func (s *State) BindCurrentExecutionIdentity(goalID string, identity ResolvedWor
 			*current.WorkerIdentity == identity && *current.EngineGeneration == generation {
 			return *current, nil
 		}
-		return ExecutionAuthorization{}, errors.New("current execution authorization is already bound to a different Worker or engine identity")
+		if current.WorkerIdentity != nil || current.EngineGeneration == nil || *current.EngineGeneration != generation {
+			return ExecutionAuthorization{}, errors.New("current execution authorization is already bound to a different Worker or engine identity")
+		}
 	}
 	updated := cloneGoalExecution(*execution)
 	updatedCurrent := &updated.Authorizations[len(updated.Authorizations)-1]
@@ -578,6 +599,9 @@ func validateAuthorization(authorization ExecutionAuthorization, binding GoalPla
 	}
 	if generation := authorization.EngineGeneration; generation != nil && !validExecutionEngineGeneration(*generation) {
 		return errors.New("ForgePilot engine generation identity is invalid")
+	}
+	if authorization.RetentionAcquired && authorization.EngineGeneration == nil {
+		return errors.New("execution retention provenance requires an engine generation")
 	}
 	if !validBoundDigest(authorization.Digest) {
 		return errors.New("Execution Authorization digest is invalid")

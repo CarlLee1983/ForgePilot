@@ -25,9 +25,9 @@ func main() {
 	os.Exit(cli.ExecuteWithGenerationResolver(os.Args[1:], cwd, os.Stdout, os.Stderr, resolver))
 }
 
-// Runner admission needs a process-image fact that cannot be reconstructed
-// after a Bootstrap upgrade. Capture it before command dispatch, but leave
-// ordinary local commands usable from an unmanaged development binary.
+// Pinned authorization and Runner admission need a process-image fact that
+// cannot be reconstructed after a Bootstrap upgrade. Read-only previews and
+// other local commands remain usable from an unmanaged development binary.
 func runnerGenerationResolver(args []string) (app.EngineGenerationResolver, error) {
 	if !requiresRunnerGeneration(args) {
 		return nil, nil
@@ -48,7 +48,9 @@ func requiresRunnerGeneration(args []string) bool {
 		return false
 	}
 	if args[0] == "execution" {
-		return len(args) > 1 && args[1] == "resume"
+		return len(args) > 1 && (args[1] == "resume" || args[1] == "authorize" ||
+			(args[1] == "retention" && len(args) > 2 && args[2] == "reconcile") ||
+			(args[1] == "revise" && len(args) > 2 && args[2] == "authorize"))
 	}
 	if args[0] != "run" || len(args) < 2 || args[1] == "status" {
 		return false

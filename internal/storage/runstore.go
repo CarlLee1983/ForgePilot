@@ -137,6 +137,21 @@ func RunDirectory(root, runID string) (string, error) {
 	return filepath.Join(root, stateDirectory, runDirectory, runID), nil
 }
 
+// SyncRunRecordDirectory confirms a previously renamed Run Record is durable
+// before its closure can authorize release of an external retention marker.
+// A prior write may have returned an error after rename, leaving new bytes
+// visible but not yet safely persisted; this sync makes retry safe.
+func SyncRunRecordDirectory(root, runID string) error {
+	directory, err := RunDirectory(root, runID)
+	if err != nil {
+		return err
+	}
+	if err := syncDirectory(directory); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(directory))
+}
+
 // WriteRunArtifact replaces one artifact atomically: a reader sees either the
 // previous contents or the complete new ones. A run record written by halves is
 // worse than none, because recovery would trust it.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,27 @@ type staticBootstrapGenerationResolver struct {
 	err      error
 }
 
+func TestLegacyUnboundAuthorizationCannotSelectAnEngineAtAdmission(t *testing.T) {
+	fixture := newExecutionTestFixture(t)
+	preview, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(preview.Diagnostics) != 0 {
+		t.Fatalf("preview = %#v, %v", preview, err)
+	}
+	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	state := mustLoadExecutionState(t, fixture.root)
+	authorization := state.Goals[0].Execution.Authorizations[0]
+	resolver := &staticBootstrapGenerationResolver{resolved: ResolvedBootstrapGeneration{Generation: fixture.request.EngineGeneration.generation()}}
+	identity := RunnerIdentity{Runtime: authorization.WorkerProfile.Runtime, ExecutablePath: authorization.WorkerProfile.ExecutablePath,
+		Version: "codex 1", Model: authorization.WorkerProfile.Model, Effort: authorization.WorkerProfile.Effort,
+		Sandbox: authorization.WorkerProfile.Sandbox}
+	if _, _, err := EnsureExecutionLaunchIdentity(t.Context(), fixture.root, "goal", authorization.Digest,
+		identity, resolver, time.Now().UTC()); err == nil || resolver.calls != 0 {
+		t.Fatalf("legacy admission = %v, resolver calls=%d; want refusal before engine discovery", err, resolver.calls)
+	}
+}
+
 func (resolver *staticBootstrapGenerationResolver) Resolve(context.Context) (ResolvedBootstrapGeneration, error) {
 	resolver.calls++
 	return resolver.resolved, resolver.err
@@ -41,7 +63,8 @@ func TestEnsureExecutionLaunchIdentityReacquiresBeforeAndAfterAuthorizationBindi
 	if err != nil || len(preview.Diagnostics) != 0 {
 		t.Fatalf("plan = %#v, err=%v", preview, err)
 	}
-	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator"); err != nil {
+	seedResolver, _ := pinnedExecutionResolver(t, fixture)
+	if _, err := AuthorizePinnedExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator", seedResolver); err != nil {
 		t.Fatal(err)
 	}
 	before, err := storage.Load(fixture.root)
@@ -117,7 +140,8 @@ func TestBindExecutionLaunchIdentityRetainsBeforePinningAndRefusesDrift(t *testi
 	if err != nil || len(preview.Diagnostics) != 0 {
 		t.Fatalf("plan = %#v, err=%v", preview, err)
 	}
-	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator"); err != nil {
+	seedResolver, _ := pinnedExecutionResolver(t, fixture)
+	if _, err := AuthorizePinnedExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator", seedResolver); err != nil {
 		t.Fatal(err)
 	}
 	before, err := storage.Load(fixture.root)
@@ -195,7 +219,8 @@ func TestBindExecutionLaunchIdentityLeavesStateUnchangedWhenRetentionFails(t *te
 	if err != nil || len(preview.Diagnostics) != 0 {
 		t.Fatalf("plan = %#v, err=%v", preview, err)
 	}
-	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator"); err != nil {
+	seedResolver, _ := pinnedExecutionResolver(t, fixture)
+	if _, err := AuthorizePinnedExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator", seedResolver); err != nil {
 		t.Fatal(err)
 	}
 	before, err := storage.Load(fixture.root)
@@ -220,6 +245,68 @@ func TestBindExecutionLaunchIdentityLeavesStateUnchangedWhenRetentionFails(t *te
 	}
 }
 
+func TestAcquireExecutionRunRetentionUsesASeparateOpaqueOwnerReference(t *testing.T) {
+	fixture := newExecutionTestFixture(t)
+	preview, err := PlanExecutionFile(t.Context(), fixture.root, "execution-request.json")
+	if err != nil || len(preview.Diagnostics) != 0 {
+		t.Fatalf("plan = %#v, err=%v", preview, err)
+	}
+	seedResolver, _ := pinnedExecutionResolver(t, fixture)
+	if _, err := AuthorizePinnedExecutionFile(t.Context(), fixture.root, "execution-request.json", preview.ApprovalToken, "operator", seedResolver); err != nil {
+		t.Fatal(err)
+	}
+	before, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := before.Goals[0].Execution.Authorizations[0]
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	references := filepath.Join(t.TempDir(), "references")
+	helper := filepath.Join(t.TempDir(), "forgepilot-bootstrap")
+	script := fmt.Sprintf(`#!/bin/sh
+[ "$1" = retention-v1 ] && [ "$2" = acquire ] && [ "$3" = --generation ] && [ "$5" = --payload-digest ] && [ "$7" = --reference ] || exit 9
+printf '%%s\n' "$8" >> %q
+printf '%%s\n' '{"protocol_version":1,"result":"acquired","generation_id":"%s","payload_digest":"%s"}'
+`, references, generation.SourceCommit, generation.PayloadSHA256)
+	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	resolver := &staticBootstrapGenerationResolver{resolved: ResolvedBootstrapGeneration{Generation: generation, HelperPath: helper}}
+	profile := authorization.WorkerProfile
+	identity := RunnerIdentity{Runtime: profile.Runtime, ExecutablePath: profile.ExecutablePath, Version: "codex 1.2.3",
+		Model: profile.Model, Effort: profile.Effort, Sandbox: profile.Sandbox}
+	bound, _, err := EnsureExecutionLaunchIdentity(t.Context(), fixture.root, before.Goals[0].ID, authorization.Digest, identity, resolver, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stable, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireExecutionRunRetention(t.Context(), fixture.root, before.Goals[0].ID, "run-001", bound.Digest, resolver); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := strings.Fields(string(contents))
+	if len(refs) != 2 || len(refs[0]) != 64 || len(refs[1]) != 64 || refs[0] == refs[1] {
+		t.Fatalf("authorization and run retention references = %q", contents)
+	}
+	after, err := storage.Load(fixture.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(marshalState(t, stable), marshalState(t, after)) {
+		t.Fatal("run retention changed the authorization state")
+	}
+	if bytes.Contains(marshalState(t, after), []byte(refs[1])) {
+		t.Fatal("repository state persisted the raw Run retention reference")
+	}
+}
+
 func TestBootstrapRetentionUsesTheVersionedExactTupleProtocol(t *testing.T) {
 	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
@@ -234,6 +321,55 @@ printf '%%s\n' '{"protocol_version":1,"result":"acquired","generation_id":"%s","
 	}
 	if err := (BootstrapRetention{HelperPath: helper}).Acquire(t.Context(), generation, reference); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBootstrapRetentionReleasesTheVersionedExactTupleProtocol(t *testing.T) {
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	reference := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	helper := filepath.Join(t.TempDir(), "forgepilot-bootstrap")
+	script := fmt.Sprintf(`#!/bin/sh
+[ "$1" = retention-v1 ] && [ "$2" = release ] && [ "$3" = --generation ] && [ "$4" = %s ] && [ "$5" = --payload-digest ] && [ "$6" = %s ] && [ "$7" = --reference ] && [ "$8" = %s ] || exit 9
+printf '%%s\n' '{"protocol_version":1,"result":"released","generation_id":"%s","payload_digest":"%s"}'
+`, generation.SourceCommit, generation.PayloadSHA256, reference, generation.SourceCommit, generation.PayloadSHA256)
+	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := (BootstrapRetention{HelperPath: helper}).Release(t.Context(), generation, reference); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBootstrapRetentionReleaseRejectsUnexpectedProtocolResults(t *testing.T) {
+	generation := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	reference := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	valid := fmt.Sprintf(`{"protocol_version":1,"result":"released","generation_id":"%s","payload_digest":"%s"}`, generation.SourceCommit, generation.PayloadSHA256)
+	wrongTuple := fmt.Sprintf(`{"protocol_version":1,"result":"released","generation_id":"%s","payload_digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}`, generation.SourceCommit)
+	cases := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "already released", body: fmt.Sprintf("printf '%%s\\n' '%s'", strings.Replace(valid, `"released"`, `"already_released"`, 1))},
+		{name: "wrong tuple", body: fmt.Sprintf("printf '%%s\\n' '%s'", wrongTuple), wantErr: true},
+		{name: "unknown result", body: fmt.Sprintf("printf '%%s\\n' '%s'", strings.Replace(valid, `"released"`, `"deleted"`, 1)), wantErr: true},
+		{name: "duplicate member", body: fmt.Sprintf("printf '%%s\\n' '{\"protocol_version\":1,\"result\":\"released\",\"result\":\"released\",\"generation_id\":\"%s\",\"payload_digest\":\"%s\"}'", generation.SourceCommit, generation.PayloadSHA256), wantErr: true},
+		{name: "extra json", body: fmt.Sprintf("printf '%%s\\n%%s\\n' '%s' '{}'", valid), wantErr: true},
+		{name: "helper failure", body: "exit 7", wantErr: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			helper := filepath.Join(t.TempDir(), "forgepilot-bootstrap")
+			if err := os.WriteFile(helper, []byte("#!/bin/sh\n"+test.body+"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			err := (BootstrapRetention{HelperPath: helper}).Release(t.Context(), generation, reference)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("release error = %v; wantErr=%t", err, test.wantErr)
+			}
+		})
 	}
 }
 

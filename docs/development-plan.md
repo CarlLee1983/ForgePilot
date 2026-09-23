@@ -714,7 +714,7 @@ FP-53 adds two explicit commands:
 | `forgepilot execution stop --goal <goal-id> --by <name> --reason <reason> [--json]` | Persists one user-requested pause for the Goal's current run before it asks the owned worker process group to stop. It never clears a pending execution, edits lifecycle state, Evidence, Gate, or authorization, and it fails closed when worker ownership cannot be proved. |
 | `forgepilot execution declare --request <path> --json` | Validates and records one named External Fulfillment Declaration against an existing external wait. The strict `forgepilot.external-fulfillment-declaration/v1` request supplies `goalId`, `waitId`, `fact`, and `declaredBy`; ForgePilot derives and records the exact node, plan binding, and authorization revision from the durable wait. Recording a declaration never resumes a run. |
 
-The request is strict JSON with `formatVersion: "forgepilot.execution-plan-request/v1"`, an embedded `goalPlanRequest` using `forgepilot.goal-preflight-request/v1`, an explicit `workerProfile`, explicit `caps`, and an absolute `expiresAt` in UTC RFC 3339 form. `workerProfile` supplies the Codex executable path, fixed model, `effort: "medium"`, and `sandbox: "workspace-write"`; no value is inferred from an earlier Gate or a local runtime default. The executable path must resolve to a regular executable file and its file digest is rechecked at authorization. `caps` explicitly supplies `maxSteps`, `maxTechnicalAttemptsPerNode`, `maxRuns`, `maxRecoveries`, `maxHandoffBytes`, `maxWriteBytes`, `maxRunBytes`, and `maxTotalBytes`. Every value must be positive and artifact bounds must be ordered. The exact expiry must be in the future and no more than fourteen days from the operation; it is never recomputed or extended during authorization.
+The current request is strict JSON with `formatVersion: "forgepilot.execution-plan-request/v2"`, an embedded `goalPlanRequest` using `forgepilot.goal-preflight-request/v1`, an explicit `workerProfile`, an explicit immutable `engineGeneration`, explicit `caps`, and an absolute `expiresAt` in UTC RFC 3339 form. Historical v1 requests remain part of prior authorization evidence; new previews reject them. `workerProfile` supplies the Codex executable path, fixed model, `effort: "medium"`, and `sandbox: "workspace-write"`; no value is inferred from an earlier Gate or a local runtime default. The executable path must resolve to a regular executable file and its file digest is rechecked at authorization. `caps` explicitly supplies `maxSteps`, `maxTechnicalAttemptsPerNode`, `maxRuns`, `maxRecoveries`, `maxHandoffBytes`, `maxWriteBytes`, `maxRunBytes`, and `maxTotalBytes`. Every value must be positive and artifact bounds must be ordered. The exact expiry must be in the future and no more than fourteen days from the operation; it is never recomputed or extended during authorization.
 
 The preview token is a domain-separated digest, not a credential. It binds exact request bytes, current artifact digests, canonical workspace and Goal, the relevant Work Item/dependency registration, the observed absence of an existing authorization, explicit profile and caps, and exact expiry. Authorization rechecks those facts under the storage lock; stale input, another writer, invalid topology, or a save error publishes none of the aggregate. Authorization does not change Goal or Work Item lifecycle, Gate, Evidence, Human Review, or completion state, and it does not assign PraxisBound manifest or coverage semantics to ForgePilot.
 
@@ -749,3 +749,62 @@ the existing ownership check. Resume first settles pending cleanup, rechecks
 current plan and authorization, verifies an external declaration when one is
 required, and explicitly acknowledges/clears the control block only when it is
 safe to admit a new action. No declaration or restart resumes work implicitly.
+
+### FP-58 Pinned Engine Generation ownership
+
+FP-58 upgrades the execution request to strict
+`formatVersion: "forgepilot.execution-plan-request/v2"`. It retains every v1
+field and adds an explicit `engineGeneration` object with full lowercase
+`sourceCommit` and canonical `payloadSHA256`; no engine selection is inferred
+from Bootstrap `current`, an earlier authorization, Runner options, or the
+calling chat model. The v2 request is required for a new pinned authorization
+and for every authorization revision. The existing command names remain the
+contract surface:
+
+| Command | FP-58 contract |
+|---|---|
+| `forgepilot execution plan --request <path> --json` | A read-only v2 preview. It syntax-validates and displays the proposed engine tuple but neither resolves the Bootstrap helper nor acquires a marker. Its approval token binds that exact tuple. |
+| `forgepilot execution authorize --request <path> --approval-token <token> --by <name> --json` | Re-resolves the process-image-anchored managed helper and requires it to report the requested tuple. It acquires the authorization-owner marker before publishing the initial execution authorization. |
+| `forgepilot execution revise plan --request <path> --json` | A read-only v2 revision preview. Its diff explicitly says whether `engineGeneration` changes and its approval token binds both old and proposed tuple. |
+| `forgepilot execution revise authorize --request <path> --approval-token <token> --by <name> --json` | For an engine change, requires persisted pause, confirmed full-record cleanup, successful read-only Engine Compatibility Check, exact candidate tuple re-observation, and new authorization marker acquisition before appending the revision. It never clears the pause or silently substitutes a different generation. After commit it tries retention reconciliation; release failure is returned as `retentionWarning` beside the committed revision, for explicit retry. |
+| `forgepilot execution retention reconcile --json` | Rechecks durable authorization and Run closure, then idempotently releases only their exact Bootstrap markers. A failed release leaves closure intact for retry. |
+
+The authorization owner and every supervised Run owner use separate
+domain-separated opaque references. `run.json` records its immutable
+authorization digest and engine tuple before a worker starts, but never the raw
+reference. A Run remains an owner through ordinary stops, waits, recovery and
+unresolved cleanup; it closes only through a durable terminal disposition after
+the complete cleanup criterion succeeds. A current authorization closes only
+when safely superseded or its Goal becomes non-launchable. Closing is persisted
+before the idempotent Bootstrap `retention-v1 release` call, so every crash or
+release failure leaves at worst an extra marker. Historical authorization and
+Run bindings remain immutable.
+
+The Engine Compatibility Check is an `internal/app` read-only query under the
+workspace lock. It validates the candidate process image and strict readability
+of state, control sidecar and every ownership-relevant Run Record without
+migration, repair, Agent launch, Git, canonical verification or an ambient
+runtime probe. Unknown/malformed ownership, a missing record, a stale pause,
+uncertain cleanup, candidate drift or a failed marker operation rejects before
+any worker starts. The concrete ordering and trust boundary are fixed by
+[ADR-0039](adr/0039-per-owner-engine-generation-retention.md).
+
+The implementation advances state schema to v18 and execution-control schema
+to v2. Migration does not infer owner closure, engine tuples or cleanup from
+v17 state and old Run Records: it preserves readable history as unknown and
+blocks pinned launch, engine revision and release until a v2 authorization has
+established the required facts. An explicit v2 revision may first pin a migrated
+Goal only when its ledger has no charged execution and the workspace has no Run
+Records; unknown old ownership is never released. The migration backs up the prior state as usual;
+rollback restores that backup, while extra Bootstrap markers are safe to retain.
+
+Required focused coverage includes each acquire/state-write/Run-Record-save and
+closure/release crash boundary; release retry; old authorization and Run
+immutability; revision refusal for missing/stale pause, unsettled/malformed
+records, incompatibility, candidate drift and stale approval; credential
+redaction; and the fact that old run markers outlive authorization release until
+their own durable closure. The FP-58 acceptance commands remain
+`go test ./internal/agent ./internal/app`, `go test ./internal/app ./internal/storage`,
+`go test ./internal/app ./internal/runner`, and
+`scripts/forgepilot-bootstrap_test.sh`; repository-wide full and race gates
+remain FP-61 / final-acceptance work.

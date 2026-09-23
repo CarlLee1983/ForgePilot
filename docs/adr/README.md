@@ -44,6 +44,7 @@
 | [0036](0036-explicit-verified-goal-completion.md) | GOAL policy 以 current PASS Evidence 原子完成；其中可選 `HUMAN` 終審分支已由 0037 取代 | accepted（部分 superseded） |
 | [0037](0037-goal-completion-has-no-human-final-review.md) | GOAL completion 不設人工 final-review 分支；符合 current verification 條件即原子完成 | accepted |
 | [0038](0038-versioned-bootstrap-generation-retention.md) | Bootstrap generation 綁定 source commit 與 payload digest；版本化 retention protocol 與 installer 共用鎖及狀態 | accepted |
+| [0039](0039-per-owner-engine-generation-retention.md) | 每個 current authorization 與 supervised run 各自持有 engine retention marker；revision 先 pause／cleanup／compatibility 再切換 | accepted |
 
 ## 什麼時候該加一份
 

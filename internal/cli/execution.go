@@ -20,19 +20,22 @@ const (
 	executionResumeUsage          = "usage: forgepilot execution resume --goal <goal-id> [--json]"
 	executionStopUsage            = "usage: forgepilot execution stop --goal <goal-id> --by <name> --reason <reason> [--json]"
 	executionDeclareUsage         = "usage: forgepilot execution declare --request <path> --json"
+	executionRetentionUsage       = "usage: forgepilot execution retention reconcile --json"
 )
 
 func executionCommand(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot execution <plan|authorize|revise|resume|stop|declare>")
+		return errors.New("usage: forgepilot execution <plan|authorize|revise|retention|resume|stop|declare>")
 	}
 	switch args[0] {
 	case "plan":
 		return planExecution(args[1:], root, output)
 	case "authorize":
-		return authorizeExecution(args[1:], root, output)
+		return authorizeExecution(args[1:], root, output, resolver)
 	case "revise":
-		return reviseExecution(args[1:], root, output)
+		return reviseExecution(args[1:], root, output, resolver)
+	case "retention":
+		return reconcileExecutionRetention(args[1:], root, output, resolver)
 	case "resume":
 		return resumeExecution(args[1:], root, output, resolver)
 	case "stop":
@@ -42,6 +45,21 @@ func executionCommand(args []string, root string, output io.Writer, resolver app
 	default:
 		return fmt.Errorf("unknown execution subcommand %q", args[0])
 	}
+}
+
+func reconcileExecutionRetention(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
+	args, jsonOutput, err := takeJSONFlag(args)
+	if err != nil || !jsonOutput || len(args) != 1 || args[0] != "reconcile" {
+		return errors.New(executionRetentionUsage)
+	}
+	result, err := app.ReconcileExecutionRetention(context.Background(), root, resolver, runner.NewExecutionCleanupAuditor())
+	if err != nil {
+		return err
+	}
+	return writeJSON(output, struct {
+		Version string                       `json:"version"`
+		Result  app.ExecutionRetentionResult `json:"result"`
+	}{Version: "forgepilot.execution-retention-reconcile/v1", Result: result})
 }
 
 func stopExecution(args []string, root string, output io.Writer) error {
@@ -148,7 +166,7 @@ func resumeExecution(args []string, root string, output io.Writer, resolver app.
 	return reportRun(record, err, output)
 }
 
-func reviseExecution(args []string, root string, output io.Writer) error {
+func reviseExecution(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	if len(args) == 0 {
 		return errors.New("usage: forgepilot execution revise <plan|authorize>")
 	}
@@ -189,11 +207,33 @@ func reviseExecution(args []string, root string, output io.Writer) error {
 		if request == "" || token == "" || by == "" {
 			return errors.New(executionReviseAuthorizeUsage)
 		}
-		execution, err := app.ReviseExecutionFile(context.Background(), root, request, token, by)
+		preview, err := app.PlanExecutionRevisionFile(context.Background(), root, request)
 		if err != nil {
 			return err
 		}
-		return writeJSON(output, executionAuthorizationOutput{Version: "forgepilot.execution-revision/v1", GoalExecution: execution})
+		if len(preview.Diagnostics) != 0 {
+			return fmt.Errorf("execution revision is not authorizable (%s): %s", preview.Diagnostics[0].Code, preview.Diagnostics[0].Message)
+		}
+		var execution work.GoalExecution
+		if preview.LegacyRetentionUnknown {
+			execution, err = app.ReauthorizeLegacyExecutionFile(context.Background(), root, request, token, by,
+				resolver, runner.NewExecutionCleanupAuditor())
+		} else if preview.RevisionDiff != nil && preview.RevisionDiff.EngineGeneration != nil {
+			execution, err = app.ReviseExecutionEngineFile(context.Background(), root, request, token, by,
+				resolver, runner.NewExecutionCleanupAuditor())
+		} else {
+			execution, err = app.RevisePinnedExecutionFile(context.Background(), root, request, token, by, resolver)
+		}
+		if err != nil {
+			return err
+		}
+		result, cleanupErr := app.ReconcileExecutionRetention(context.Background(), root, resolver, runner.NewExecutionCleanupAuditor())
+		response := executionAuthorizationOutput{Version: "forgepilot.execution-revision/v2", GoalExecution: execution,
+			RetentionCleanup: &result}
+		if cleanupErr != nil {
+			response.RetentionWarning = cleanupErr.Error()
+		}
+		return writeJSON(output, response)
 	default:
 		return fmt.Errorf("unknown execution revise subcommand %q", args[0])
 	}
@@ -222,7 +262,7 @@ func planExecution(args []string, root string, output io.Writer) error {
 	return planErr
 }
 
-func authorizeExecution(args []string, root string, output io.Writer) error {
+func authorizeExecution(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	args, jsonOutput, err := takeJSONFlag(args)
 	if err != nil {
 		return err
@@ -238,14 +278,16 @@ func authorizeExecution(args []string, root string, output io.Writer) error {
 	if requestPath == "" || token == "" || approver == "" {
 		return errors.New(executionAuthorizeUsage)
 	}
-	execution, err := app.AuthorizeExecutionFile(context.Background(), root, requestPath, token, approver)
+	execution, err := app.AuthorizePinnedExecutionFile(context.Background(), root, requestPath, token, approver, resolver)
 	if err != nil {
 		return err
 	}
-	return writeJSON(output, executionAuthorizationOutput{Version: "forgepilot.execution-authorization/v1", GoalExecution: execution})
+	return writeJSON(output, executionAuthorizationOutput{Version: "forgepilot.execution-authorization/v2", GoalExecution: execution})
 }
 
 type executionAuthorizationOutput struct {
-	Version       string             `json:"version"`
-	GoalExecution work.GoalExecution `json:"goalExecution"`
+	Version          string                        `json:"version"`
+	GoalExecution    work.GoalExecution            `json:"goalExecution"`
+	RetentionCleanup *app.ExecutionRetentionResult `json:"retentionCleanup,omitempty"`
+	RetentionWarning string                        `json:"retentionWarning,omitempty"`
 }

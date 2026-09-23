@@ -87,7 +87,7 @@ func currentLiveRun(root, goalID string) (Record, error) {
 		if err != nil {
 			return Record{}, fmt.Errorf("read run %s while requesting stop: %w", runID, err)
 		}
-		if record.GoalID != goalID || record.Stop != nil {
+		if record.GoalID != goalID || record.Stop != nil || record.RetentionClosure != nil {
 			continue
 		}
 		if live != nil {

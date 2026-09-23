@@ -23,6 +23,7 @@ type armedSaveFailure struct {
 }
 
 var injectedSaveFailurePointer atomic.Pointer[armedSaveFailure]
+var injectedDirectorySyncFailurePointer atomic.Pointer[armedSaveFailure]
 
 // InjectStateSaveFailure makes the next atomic replacement of root's state.json
 // fail with whatever fail returns, before the rename, and then disarms itself.
@@ -51,6 +52,28 @@ func injectedSaveFailure(destination string) error {
 		return nil
 	}
 	if !injectedSaveFailurePointer.CompareAndSwap(armed, nil) {
+		return nil
+	}
+	return armed.fail()
+}
+
+// InjectRunDirectorySyncFailure fails one Run Record write after its rename but
+// before its parent directory is synced. The new bytes may be readable, yet
+// callers must not treat them as durable until a later explicit sync succeeds.
+// This is test-only and never used by production entry points.
+func InjectRunDirectorySyncFailure(root, runID string, fail func() error) func() {
+	path := filepath.Join(canonicalOrAbsolute(root), stateDirectory, runDirectory, runID, "run.json")
+	armed := &armedSaveFailure{path: path, fail: fail}
+	injectedDirectorySyncFailurePointer.Store(armed)
+	return func() { injectedDirectorySyncFailurePointer.CompareAndSwap(armed, nil) }
+}
+
+func injectedDirectorySyncFailure(destination string) error {
+	armed := injectedDirectorySyncFailurePointer.Load()
+	if armed == nil || armed.path != destination {
+		return nil
+	}
+	if !injectedDirectorySyncFailurePointer.CompareAndSwap(armed, nil) {
 		return nil
 	}
 	return armed.fail()

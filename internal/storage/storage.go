@@ -168,13 +168,19 @@ func writeFileAtomically(directory, destination string, encoded []byte) error {
 	if err := os.Rename(temporaryName, destination); err != nil {
 		return err
 	}
-	if directoryHandle, err := os.Open(directory); err == nil {
-		defer directoryHandle.Close()
-		if err := directoryHandle.Sync(); err != nil {
-			return err
-		}
+	if err := injectedDirectorySyncFailure(destination); err != nil {
+		return err
 	}
-	return nil
+	return syncDirectory(directory)
+}
+
+func syncDirectory(directory string) error {
+	handle, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	return handle.Sync()
 }
 
 func withLock(directory string, operation func() error) error {

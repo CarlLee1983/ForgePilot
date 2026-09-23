@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
 func TestReadRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
@@ -21,6 +23,61 @@ func TestReadRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
 	}
 	if _, err := Read(root); err == nil {
 		t.Fatal("Read accepted trailing JSON")
+	}
+}
+
+func TestReadUpgradesV1SidecarWithoutInventingEngineRevisionIntent(t *testing.T) {
+	root := controlTestRoot(t)
+	path := controlPath(root)
+	contents := []byte(`{"schema_version":1,"revision":0,"waits":[],"external_declarations":[]}`)
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SchemaVersion != SchemaVersion || state.Pause != nil {
+		t.Fatalf("v1 control upgrade = %#v", state)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(contents) {
+		t.Fatal("read rewrote the legacy control sidecar")
+	}
+}
+
+func TestReadRejectsV1SidecarThatClaimsV2EngineRevisionIntent(t *testing.T) {
+	root := controlTestRoot(t)
+	contents := []byte(`{"schema_version":1,"revision":1,"pause":{"goal_id":"g","run_id":"r","reason":"stop","requested_by":"operator","requested_at":"2026-09-23T00:00:00Z","engine_revision":{"authorization_digest":"sha256:authorization","engine_generation":{"source_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","payload_sha256":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},"revision":1},"waits":[],"external_declarations":[]}`)
+	if err := os.WriteFile(controlPath(root), contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(root); err == nil {
+		t.Fatal("v1 control sidecar carrying v2 engine revision intent was accepted")
+	}
+}
+
+func TestEngineRevisionPauseRequiresExactDurableBinding(t *testing.T) {
+	state := NewState()
+	pause := testPause()
+	pause.EngineRevision = &EngineRevisionPause{AuthorizationDigest: "sha256:authorization",
+		EngineGeneration: work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+	if err := state.SetPause(pause); err != nil {
+		t.Fatalf("set engine revision pause: %v", err)
+	}
+	state.Revision = 1
+	if err := state.Validate(); err != nil {
+		t.Fatalf("validate engine revision pause: %v", err)
+	}
+	invalid := *pause.EngineRevision
+	invalid.AuthorizationDigest = ""
+	state.Pause.EngineRevision = &invalid
+	if err := state.Validate(); err == nil {
+		t.Fatal("engine revision pause without authorization digest was accepted")
 	}
 }
 

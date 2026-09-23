@@ -441,6 +441,25 @@ actual probes 由正式啟動管理，未重新確認的 freshness 顯示歷史�
 [accepted ADR-0035](adr/0035-supervised-goal-execution-with-bounded-rollover.md)。
 下文仍描述既有 Runner；不得把新方向當成目前的存活或續跑保證。
 
+FP-58 將這條引擎保留規則具體化為 per-owner retention：current Execution Authorization 與每個仍可
+launch／recover 的 supervised Run 各自以不同、domain-separated opaque marker 持有同一個或不同的
+generation。Authorization／Run record 只保存 immutable tuple 與 owner closure fact，絕不保存 raw
+reference；Bootstrap 只保存 raw reference 的 hash，仍不知道 workspace、Goal 或 run。所有 acquisition
+都在第一次持久化該 owner 的 tuple 前完成；release 只在 owner 已 durable-close、其所有 worker／pending
+cleanup 已確認後嘗試。release 或 post-acquire state write 失敗都寧可留下多餘 marker，絕不推論未保留。
+Authorization 的 superseded 歷史或終態 Goal 是其 durable closure；Run 另存 `retention_closure`，
+須在清理程序 ownership 後寫入，再由 `execution retention reconcile --json` 重讀並釋放各自 marker。
+遷移後 retention 未知的 Goal 只有在 ledger 無 Run 消耗且整個 Run 目錄無紀錄時，才能以明確 v2
+授權修訂取得第一個已知 marker；舊的未知 marker 永不推測或釋放。
+
+Engine revision 是一條獨立的 authorization transaction，不是一般 plan/profile/caps revision 順帶取得
+的新 `current`。它要求持久化 pause（綁定 old authorization／generation）、在 workspace lock 下完成
+所有相關 Run Record 的 fail-closed cleanup audit、candidate Engine Compatibility Check 成功、request／preview
+token 明示並綁定 candidate tuple，才 acquire new authorization marker 並 append 新 authorization。commit 後
+才可 idempotently release old authorization marker；舊 Run owner 不隨 authorization release 而消失，直到其
+個別 durable-close。historical authorization 與 Run Record tuple 均不可改寫。詳見
+[ADR-0039](adr/0039-per-owner-engine-generation-retention.md)。
+
 Runner 由使用者明確啟動，對單一 Goal 循序執行：取得下一個合法動作、必要時開一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續。範圍與驗收見 [specs/runner-mvp/spec.md](specs/runner-mvp/spec.md)。
 
 責任分工是全部：**Runner 負責執行，ForgePilot 負責判定，PraxisBound 負責工程驗證規範。**

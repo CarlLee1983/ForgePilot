@@ -8,9 +8,11 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // WaitKind identifies who or what must provide the missing fact.
 type WaitKind string
@@ -30,8 +32,18 @@ type Pause struct {
 	RequestedAt time.Time `json:"requested_at"`
 	// WaitID binds a needs-human pause to its immutable wait record. A direct
 	// user stop intentionally has no wait ID.
-	WaitID   string `json:"wait_id,omitempty"`
-	Revision uint64 `json:"revision"`
+	WaitID         string               `json:"wait_id,omitempty"`
+	EngineRevision *EngineRevisionPause `json:"engine_revision,omitempty"`
+	Revision       uint64               `json:"revision"`
+}
+
+// EngineRevisionPause binds an engine-revision request to the authorization
+// and generation that were current when execution was stopped. It is intent,
+// not a cleanup certificate: authorization still makes a fresh, fail-closed
+// Run Record audit while holding the workspace lock.
+type EngineRevisionPause struct {
+	AuthorizationDigest string                         `json:"authorization_digest"`
+	EngineGeneration    work.ExecutionEngineGeneration `json:"engine_generation"`
 }
 
 // Wait records a durable human or external fact that must be supplied before a
@@ -74,7 +86,7 @@ type State struct {
 	ExternalDeclarations []ExternalDeclaration `json:"external_declarations"`
 }
 
-// NewState returns the empty v1 control sidecar.
+// NewState returns the empty v2 control sidecar.
 func NewState() State {
 	return State{SchemaVersion: SchemaVersion, Waits: []Wait{}, ExternalDeclarations: []ExternalDeclaration{}}
 }
@@ -87,7 +99,8 @@ func (state *State) SetPause(pause Pause) error {
 	}
 	if state.Pause != nil {
 		if state.Pause.GoalID == pause.GoalID && state.Pause.RunID == pause.RunID && state.Pause.WaitID == pause.WaitID &&
-			state.Pause.Reason == pause.Reason && state.Pause.RequestedBy == pause.RequestedBy && state.Pause.RequestedAt.Equal(pause.RequestedAt) {
+			state.Pause.Reason == pause.Reason && state.Pause.RequestedBy == pause.RequestedBy && state.Pause.RequestedAt.Equal(pause.RequestedAt) &&
+			reflect.DeepEqual(state.Pause.EngineRevision, pause.EngineRevision) {
 			return nil
 		}
 		return fmt.Errorf("execution control is already paused for Goal %q Run %q", state.Pause.GoalID, state.Pause.RunID)
@@ -219,6 +232,14 @@ func validatePause(pause Pause) error {
 	}
 	if pause.Revision == 0 {
 		return errors.New("pause revision must be positive")
+	}
+	if pause.EngineRevision != nil {
+		if err := required("engine revision authorization digest", pause.EngineRevision.AuthorizationDigest); err != nil {
+			return err
+		}
+		if err := work.ValidateExecutionEngineGeneration(pause.EngineRevision.EngineGeneration); err != nil {
+			return fmt.Errorf("engine revision generation: %w", err)
+		}
 	}
 	return nil
 }

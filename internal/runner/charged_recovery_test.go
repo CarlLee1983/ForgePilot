@@ -46,6 +46,8 @@ func TestRunnerBindsManagedGenerationBeforePersistingRunIntent(t *testing.T) {
 	calls := 0
 	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
 	options.GenerationResolver = staticGenerationResolver{resolved: app.ResolvedBootstrapGeneration{Generation: generation, HelperPath: runtimeCommand}, calls: &calls}
+	references := filepath.Join(root, "retention-references")
+	t.Setenv("FORGEPILOT_TEST_RETENTION_REFERENCES", references)
 	const crash = "after-run-intent"
 	options.testCrashAt = func(point string) {
 		if point == crash {
@@ -66,8 +68,8 @@ func TestRunnerBindsManagedGenerationBeforePersistingRunIntent(t *testing.T) {
 	if !panicked {
 		t.Fatal("new Runner did not reach the run-intent crash boundary")
 	}
-	if calls != 1 {
-		t.Fatalf("generation resolver calls = %d; want exactly one before intent", calls)
+	if calls != 2 {
+		t.Fatalf("generation resolver calls = %d; want authorization and Run retention before intent", calls)
 	}
 	after, err := storage.Load(root)
 	if err != nil {
@@ -85,11 +87,75 @@ func TestRunnerBindsManagedGenerationBeforePersistingRunIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.RunPreparationState != RunPreparationPendingCharge || record.ExecutionAuthorizationDigest != bound.Digest {
+	if record.RunPreparationState != RunPreparationPendingCharge || record.ExecutionAuthorizationDigest != bound.Digest ||
+		record.EngineGeneration == nil || *record.EngineGeneration != generation {
 		t.Fatalf("run intent did not use bound authorization: %#v", record)
+	}
+	contents, err := os.ReadFile(references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := strings.Fields(string(contents))
+	if len(refs) != 2 || len(refs[0]) != 64 || len(refs[1]) != 64 || refs[0] == refs[1] {
+		t.Fatalf("authorization and Run retention references = %q", contents)
+	}
+	runRecord, err := os.ReadFile(filepath.Join(root, ".forgepilot", "runs", record.RunID, recordName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(runRecord, []byte(refs[0])) || bytes.Contains(runRecord, []byte(refs[1])) {
+		t.Fatal("Run Record persisted a raw Bootstrap retention reference")
 	}
 	if after.Goals[0].Execution.Ledger.RunsConsumed != 0 || len(after.Goals[0].Execution.Ledger.Reservations) != 0 {
 		t.Fatalf("RUN reservation preceded its durable intent: %#v", after.Goals[0].Execution.Ledger)
+	}
+}
+
+func TestPendingChargedRunWithoutItsEngineGenerationFailsBeforeRecoveryLaunch(t *testing.T) {
+	root, runtimeCommand, sentinel, now, _ := newUnresolvedExecutionRunnerFixture(t)
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := state.Goals[0].Execution.Authorizations[0]
+	generation := work.ExecutionEngineGeneration{SourceCommit: strings.Repeat("a", 40), PayloadSHA256: "sha256:" + strings.Repeat("b", 64)}
+	identity := app.RunnerIdentity{Runtime: authorization.WorkerProfile.Runtime, ExecutablePath: authorization.WorkerProfile.ExecutablePath,
+		Version: "test-codex 1", Sandbox: authorization.WorkerProfile.Sandbox}
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	options.GenerationResolver = staticGenerationResolver{resolved: app.ResolvedBootstrapGeneration{Generation: generation, HelperPath: runtimeCommand}}
+	options.testCrashAt = func(point string) {
+		if point == "after-run-intent" {
+			panic(point)
+		}
+	}
+	func() {
+		defer func() {
+			if recover() != "after-run-intent" {
+				t.Fatal("new Runner did not leave a pending run intent")
+			}
+		}()
+		if _, err := newRunner(options); err != nil {
+			t.Fatalf("new Runner before crash = %v", err)
+		}
+	}()
+	runIDs, err := storage.ListRuns(root)
+	if err != nil || len(runIDs) != 1 {
+		t.Fatalf("run intents = %v, err=%v", runIDs, err)
+	}
+	record, err := LoadRecord(root, runIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.EngineGeneration = nil
+	if err := record.save(root, record.Limits, now); err != nil {
+		t.Fatal(err)
+	}
+	options.testCrashAt = nil
+	if _, err := Start(options); err == nil || !strings.Contains(err.Error(), "incomplete charged Run preparation intent") {
+		t.Fatalf("recovery with missing managed generation = %v; want fail-closed refusal", err)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("worker launched despite missing immutable generation: %v", err)
 	}
 }
 
@@ -220,7 +286,9 @@ func TestChargedStartAndForgedResumeRefuseBeforeLaunchingWorker(t *testing.T) {
 	root, runtimeCommand, sentinel, now, execution := newUnresolvedExecutionRunnerFixture(t)
 	options := Options{Root: root, GoalID: execution.GoalID, RuntimeName: "codex", RuntimeCommand: runtimeCommand, Snapshot: true,
 		Budget: testBudget(), Limits: testLimits(), Now: func() time.Time { return now },
-		GenerationResolver: staticGenerationResolver{}, testExecutionIdentity: &app.RunnerIdentity{Model: "wrong", Effort: "wrong"}}
+		GenerationResolver: staticGenerationResolver{resolved: app.ResolvedBootstrapGeneration{
+			Generation: work.ExecutionEngineGeneration{SourceCommit: strings.Repeat("a", 40), PayloadSHA256: "sha256:" + strings.Repeat("b", 64)},
+			HelperPath: runtimeCommand}}, testExecutionIdentity: &app.RunnerIdentity{Model: "wrong", Effort: "wrong"}}
 	before, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1284,6 +1352,7 @@ func newUnresolvedExecutionRunnerFixture(t *testing.T) (root, runtimeCommand, se
 	runtimeContents := []byte(`#!/bin/sh
 if [ "$1" = "--version" ]; then printf 'test-codex 1\n'; exit 0; fi
 if [ "$1" = "retention-v1" ] && [ "$2" = "acquire" ] && [ "$3" = "--generation" ] && [ "$5" = "--payload-digest" ] && [ "$7" = "--reference" ]; then
+  if [ -n "$FORGEPILOT_TEST_RETENTION_REFERENCES" ]; then printf '%s\n' "$8" >> "$FORGEPILOT_TEST_RETENTION_REFERENCES"; fi
   printf '{"protocol_version":1,"result":"acquired","generation_id":"%s","payload_digest":"%s"}\n' "$4" "$6"
   exit 0
 fi
@@ -1358,6 +1427,8 @@ exit 0
 					Artifacts: work.ExecutionArtifactLimits{MaxHandoffBytes: 64 * 1024, MaxWriteBytes: 1 << 20, MaxRunBytes: 16 << 20, MaxTotalBytes: 128 << 20}},
 				WorkerProfile: work.WorkerProfile{Runtime: "codex", ExecutablePath: runtimeCommand, ExecutableSHA256: runtimeSHA256,
 					Model: "test-model", Effort: "medium", Sandbox: "workspace-write"},
+				EngineGeneration:  &work.ExecutionEngineGeneration{SourceCommit: strings.Repeat("a", 40), PayloadSHA256: "sha256:" + strings.Repeat("b", 64)},
+				RetentionAcquired: true,
 			}},
 			Ledger: work.ExecutionLedger{Revision: 1, AuthorizationRevision: 1, NodeAttempts: []work.ExecutionNodeAttempts{{PlanNodeRef: "node-1"}}},
 		}

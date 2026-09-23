@@ -293,11 +293,21 @@ func upgrade(contents []byte, from int) (work.State, error) {
 			return work.State{}, err
 		}
 	}
-	// v16 → v17 fences the independently versioned execution-control sidecar.
-	// The state has no new control fields: advancing this header is what makes
-	// a v16 binary fail closed rather than ignore a durable pause or wait it
-	// cannot understand. The sidecar itself is strict and remains absent until
-	// the first control operation.
+	if from < 18 {
+		for _, goal := range state.Goals {
+			if goal.Execution == nil {
+				continue
+			}
+			for _, authorization := range goal.Execution.Authorizations {
+				if authorization.RetentionAcquired {
+					return work.State{}, fmt.Errorf("state declares schema version %d but Goal %q already carries generation retention provenance; refusing to migrate over it", from, goal.ID)
+				}
+			}
+		}
+	}
+	// v17 → v18 adds retention acquisition provenance. Historical
+	// authorizations keep the absent/unknown value; migration never infers
+	// ownership from an engine tuple or a Run Record.
 	state.SchemaVersion = work.SchemaVersion
 	return state, nil
 }

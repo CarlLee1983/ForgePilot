@@ -23,7 +23,20 @@ func TestExecutionRevisionAtomicallyAddsWorkAndPreservesAuthorizationHistory(t *
 	if err != nil || len(initial.Diagnostics) != 0 {
 		t.Fatalf("initial plan = %#v, %v", initial, err)
 	}
-	if _, err := AuthorizeExecutionFile(t.Context(), fixture.root, "execution-request.json", initial.ApprovalToken, "operator"); err != nil {
+	seedResolver, _ := pinnedExecutionResolver(t, fixture)
+	if _, err := AuthorizePinnedExecutionFile(t.Context(), fixture.root, "execution-request.json", initial.ApprovalToken, "operator", seedResolver); err != nil {
+		t.Fatal(err)
+	}
+	boundGeneration := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PayloadSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	if err := storage.Update(fixture.root, func(state *work.State) error {
+		profile := state.Goals[0].Execution.Authorizations[0].WorkerProfile
+		_, err := state.BindCurrentExecutionIdentity("goal", work.ResolvedWorkerIdentity{
+			ExecutablePath: profile.ExecutablePath, ExecutableSHA256: profile.ExecutableSHA256,
+			ReportedVersion: "test-codex 1", ObservedAt: time.Now().UTC(),
+		}, boundGeneration)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	const priorRevision = "prior-revision"
@@ -91,6 +104,11 @@ func TestExecutionRevisionAtomicallyAddsWorkAndPreservesAuthorizationHistory(t *
 	}
 	if got.Authorizations[0].Approver != "operator" || got.Authorizations[1].Approver != "revision-operator" {
 		t.Fatalf("authorization approvers = %#v; revision must retain its new self-declared approver", got.Authorizations)
+	}
+	if got.Authorizations[0].WorkerIdentity == nil || got.Authorizations[0].EngineGeneration == nil ||
+		*got.Authorizations[0].EngineGeneration != boundGeneration || got.Authorizations[1].WorkerIdentity != nil ||
+		got.Authorizations[1].EngineGeneration != nil {
+		t.Fatalf("ordinary revision did not preserve old binding and leave the new owner unbound: %#v", got.Authorizations)
 	}
 }
 

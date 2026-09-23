@@ -63,7 +63,7 @@ func TestReexecProcessImagePassesCanonicalImageArgsAndEnvironment(t *testing.T) 
 	}
 }
 
-func TestRequiresRunnerGenerationOnlyForMutatingRunnerCommands(t *testing.T) {
+func TestRequiresRunnerGenerationForPinnedAuthorizationAndRunnerCommands(t *testing.T) {
 	for _, test := range []struct {
 		arguments []string
 		want      bool
@@ -76,6 +76,11 @@ func TestRequiresRunnerGenerationOnlyForMutatingRunnerCommands(t *testing.T) {
 		{[]string{"run", "resume", "run-1"}, true},
 		{[]string{"run", "--goal", "g", "--runtime", "fake", "--snapshot"}, true},
 		{[]string{"execution", "plan", "--request", "request.json", "--json"}, false},
+		{[]string{"execution", "authorize", "--request", "request.json", "--json"}, true},
+		{[]string{"execution", "revise", "plan", "--request", "request.json", "--json"}, false},
+		{[]string{"execution", "revise", "authorize", "--request", "request.json", "--json"}, true},
+		{[]string{"execution", "retention", "reconcile", "--json"}, true},
+		{[]string{"execution", "retention", "unknown"}, false},
 		{[]string{"execution", "resume", "--goal", "g"}, true},
 	} {
 		if got := requiresRunnerGeneration(test.arguments); got != test.want {
