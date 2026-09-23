@@ -29,7 +29,7 @@ func TestASecondRunnerIsRefusedThroughAnAliasToo(t *testing.T) {
 printf 'done\n' > "$workspace/$lower.txt"
 printf '{"outcome":"implementation_finished","summary":"released"}' > "$result"
 `)
-	first := exec.Command(fixture.binary, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	first := exec.Command(fixture.binary, fixture.runtimeArguments([]string{"run", "--goal", "queue", "--runtime", "fake", "--snapshot"})...)
 	first.Dir = fixture.root
 	first.Env = append(os.Environ(), "FORGEPILOT_FAKE_AGENT="+blocking)
 	var firstOutput bytes.Buffer
@@ -48,7 +48,7 @@ printf '{"outcome":"implementation_finished","summary":"released"}' > "$result"
 		t.Fatal(err)
 	}
 	for name, directory := range map[string]string{"same path": fixture.root, "symlinked alias": alias} {
-		command := exec.Command(fixture.binary, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+		command := exec.Command(fixture.binary, fixture.runtimeArguments([]string{"run", "--goal", "queue", "--runtime", "fake", "--snapshot"})...)
 		command.Dir = directory
 		command.Env = append(os.Environ(), "FORGEPILOT_FAKE_AGENT="+blocking)
 		output, err := command.CombinedOutput()
@@ -110,21 +110,19 @@ func TestResumeKeepsBudgetAndDoesNotReimplementVerifiedWork(t *testing.T) {
 	if sessions := fixture.sessions(t); len(sessions) != 1 {
 		t.Fatalf("resume re-implemented already verified work: %v", sessions)
 	}
-
-	// With room to continue, the resume picks up at WI-002 — from ForgePilot's
-	// state, not from anything the run record remembered about progress.
+	fixture.allowAnotherRun(t, "queue")
 	output, code = fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
-	if code != 0 {
-		t.Fatalf("continuation exit = %d\n%s", code, output)
+	if code != 0 || !strings.Contains(output, "GOAL_COMPLETED") {
+		t.Fatalf("fresh run after renewed authorization exited %d\n%s", code, output)
 	}
 	if sessions := fixture.sessions(t); len(sessions) != 2 || sessions[1] != "WI-002" {
-		t.Fatalf("sessions = %v", sessions)
+		t.Fatalf("fresh run re-implemented verified work: %v", sessions)
 	}
 }
 
-// A worker whose identity cannot be confirmed must block recovery rather than
-// be assumed dead: assuming would start a second writer on the same workspace.
-func TestResumeRefusesWhenAWorkerCannotBeConfirmed(t *testing.T) {
+// A charged worker record without its agent Pending ownership is inconsistent.
+// Recovery must refuse it before starting another writer.
+func TestResumeRefusesAChargedWorkerWithoutPendingOwnership(t *testing.T) {
 	fixture := newRunnerFixture(t)
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
@@ -148,10 +146,10 @@ func TestResumeRefusesWhenAWorkerCannotBeConfirmed(t *testing.T) {
 	writeRunRecord(t, fixture.root, runID, record)
 
 	output, code := fixture.runForge(t, agent, "run", "resume", runID)
-	if code != 2 {
+	if code != 1 {
 		t.Fatalf("resume exit = %d\n%s", code, output)
 	}
-	if !strings.Contains(output, "RECOVERY_BLOCKED") {
+	if !strings.Contains(output, "Worker has no matching agent Pending ownership") {
 		t.Fatalf("resume output = %s", output)
 	}
 	if sessions := fixture.sessions(t); len(sessions) != 0 {
@@ -253,7 +251,7 @@ echo "$!" > `+marker+`
 sleep 120
 `)
 
-	command := exec.Command(fixture.binary, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	command := exec.Command(fixture.binary, fixture.runtimeArguments([]string{"run", "--goal", "queue", "--runtime", "fake", "--snapshot"})...)
 	command.Dir = fixture.root
 	command.Env = append(os.Environ(), "FORGEPILOT_FAKE_AGENT="+blocking)
 	var output bytes.Buffer
@@ -384,6 +382,7 @@ func TestAFreshRunRefusesWhileAnEarlierWorkerCannotBeConfirmed(t *testing.T) {
 	if _, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot", "--max-steps", "1"); code != 3 {
 		t.Fatalf("seed run exit = %d", code)
 	}
+	fixture.allowAnotherRun(t, "queue")
 	runID := lastRun(t, fixture.root)
 	record := loadRunRecord(t, fixture.root, runID)
 	// What a SIGKILLed Runner leaves: a worker recorded without the identity that
@@ -453,6 +452,7 @@ printf '{"outcome":"implementation_finished","summary":"all done, verified"}' > 
 // tree.
 func TestResumeRefusesWhileAnotherRunsWorkerCannotBeConfirmed(t *testing.T) {
 	fixture := newRunnerFixture(t, "a.md")
+	fixture.maxRuns = 2
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
 	// A Gate stops both runs with their budgets untouched, so the resume below
@@ -553,7 +553,7 @@ func TestTerminationExitsWithItsOwnCode(t *testing.T) {
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
 	blocking := fixture.fakeAgent(t, "sleep 120\n")
 
-	command := exec.Command(fixture.binary, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
+	command := exec.Command(fixture.binary, fixture.runtimeArguments([]string{"run", "--goal", "queue", "--runtime", "fake", "--snapshot"})...)
 	command.Dir = fixture.root
 	command.Env = append(os.Environ(), "FORGEPILOT_FAKE_AGENT="+blocking)
 	var output bytes.Buffer

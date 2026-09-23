@@ -29,9 +29,10 @@ import (
 // blocking it leaves behind is then asserted through real CLI processes, which
 // is where it has to hold.
 
-func runnerOptions(root, goalID string, output *bytes.Buffer) runner.Options {
+func runnerOptions(fixture runnerFixture, goalID string, output *bytes.Buffer) runner.Options {
 	return runner.Options{
-		Root: root, GoalID: goalID, RuntimeName: "fake", Snapshot: true, Output: output,
+		Root: fixture.root, GoalID: goalID, RuntimeName: "codex", RuntimeCommand: fixture.worker,
+		GenerationResolver: fixture.generationResolver(), Snapshot: true, Output: output,
 		Budget: runner.Budget{MaxSteps: 100, MaxAttemptsPerWork: 3, MaxDuration: 5 * time.Minute,
 			AgentTimeout: 2 * time.Minute, VerifyTimeout: 2 * time.Minute, MaxHandoffBytes: 64 * 1024},
 		Limits: storage.ArtifactLimits{MaxWriteBytes: 1 << 20, MaxRunBytes: 16 << 20, MaxTotalBytes: 128 << 20},
@@ -72,7 +73,7 @@ func TestAnUnconfirmedTidyUpKeepsTheEvidenceAndStopsTheRun(t *testing.T) {
 		return &process.NotSettled{PGID: stillRunning, Reason: "injected: the group could not be confirmed"}
 	})
 	var output bytes.Buffer
-	record, err := runner.Start(runnerOptions(fixture.root, "queue", &output))
+	record, err := runner.Start(runnerOptions(fixture, "queue", &output))
 	restore()
 	if err != nil {
 		t.Fatalf("the run failed operationally: %v\n%s", err, output.String())

@@ -220,7 +220,7 @@ func TestAPendingExecutionWithNoObservedIdentityIsRefused(t *testing.T) {
 // Compatibility. A record written before Pending existed has none, and that is
 // read as "this run recorded nothing beyond its worker" — not as a claim that
 // the workspace is clear. A record that does not parse is not an empty one.
-func TestOlderRunRecordsStillRecoverTheWayTheyDid(t *testing.T) {
+func TestStoredRunRecordsRespectChargedOwnership(t *testing.T) {
 	t.Run("a record without pending still permits the next run", func(t *testing.T) {
 		fixture := newRunnerFixture(t, "a.md")
 		mustRun(t, fixture.binary, fixture.root, "init")
@@ -229,6 +229,7 @@ func TestOlderRunRecordsStillRecoverTheWayTheyDid(t *testing.T) {
 		if _, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot", "--max-steps", "1"); code != 3 {
 			t.Fatal("the seed run did not stop at its one-step budget")
 		}
+		fixture.allowAnotherRun(t, "queue")
 		runID := lastRun(t, fixture.root)
 		record := loadRunRecord(t, fixture.root, runID)
 		delete(record, "pending")
@@ -258,7 +259,7 @@ func TestOlderRunRecordsStillRecoverTheWayTheyDid(t *testing.T) {
 		}
 	})
 
-	t.Run("a legacy worker record still recovers", func(t *testing.T) {
+	t.Run("a charged worker record without pending is rejected", func(t *testing.T) {
 		fixture := newRunnerFixture(t, "a.md")
 		mustRun(t, fixture.binary, fixture.root, "init")
 		fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
@@ -270,8 +271,8 @@ func TestOlderRunRecordsStillRecoverTheWayTheyDid(t *testing.T) {
 		record := loadRunRecord(t, fixture.root, runID)
 		delete(record, "stop")
 		delete(record, "pending")
-		// A worker whose pid is long gone: the pre-Pending recovery path answers
-		// this, and must go on answering it.
+		// Charged runs must have the ledger-backed agent Pending ownership for
+		// any Worker. A worker-only record is inconsistent even if its pid is gone.
 		record["worker"] = map[string]any{
 			"work_item_id": "WI-001", "attempt": 1,
 			"session_dir": filepath.Join(fixture.root, ".forgepilot", "runs", runID, "wi-001-attempt-1"),
@@ -281,11 +282,8 @@ func TestOlderRunRecordsStillRecoverTheWayTheyDid(t *testing.T) {
 		}
 		writeRunRecord(t, fixture.root, runID, record)
 		output, code := fixture.runForge(t, agent, "run", "resume", runID)
-		if code == 2 || strings.Contains(output, "RECOVERY_BLOCKED") {
-			t.Fatalf("a legacy worker record that is plainly gone did not recover: exit = %d\n%s", code, output)
-		}
-		if !strings.Contains(output, "is gone") {
-			t.Fatalf("the legacy recovery path did not report on the worker\n%s", output)
+		if code != 1 || !strings.Contains(output, "Worker has no matching agent Pending ownership") {
+			t.Fatalf("an inconsistent charged record was accepted: exit = %d\n%s", code, output)
 		}
 	})
 }

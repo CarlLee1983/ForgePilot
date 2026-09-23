@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 // about ForgePilot's process, lock and recovery handling, and nothing at all
 // about an unattended run against a real model.
 const SmokeVariable = "FORGEPILOT_CODEX_SMOKE"
+const SmokeModelVariable = "FORGEPILOT_SMOKE_MODEL"
 
 // smokeOptedIn reports whether a value of SmokeVariable opts in to spending
 // model quota. The comparison is exact, and that is the whole contract: "0",
@@ -40,7 +42,25 @@ func TestCodexSmokeDrivesDependentWorkToGoalCompletion(t *testing.T) {
 	if !smokeOptedIn(os.Getenv(SmokeVariable)) {
 		t.Skipf("set %s=1 to drive the real Codex CLI", SmokeVariable)
 	}
+	model := os.Getenv(SmokeModelVariable)
+	if model == "" {
+		t.Fatalf("set %s to the explicit Codex model for this smoke round", SmokeModelVariable)
+	}
+	originalHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture := newRunnerFixture(t, "01-normalize.md", "02-cli.md", "03-errors.md")
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexPath, err = filepath.EvalSymlinks(codexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.worker = fixture.realCodexWorker(t, originalHome, codexPath)
+	fixture.model = model
 	// The evidence export is opened before anything is started and torn down
 	// before the fixture is, so a round that ends badly still leaves its inputs
 	// and results behind. A round costs model quota and cannot be replayed.
@@ -57,7 +77,7 @@ func TestCodexSmokeDrivesDependentWorkToGoalCompletion(t *testing.T) {
 	// The budget is stated in full at the call site rather than left to the
 	// product defaults: this round is a controlled one, and the limits it ran
 	// under are part of what the evidence has to say.
-	arguments := []string{"run", "--goal", "smoke", "--runtime", "codex", "--snapshot",
+	arguments := []string{"run", "--goal", "smoke", "--runtime", "codex", "--runtime-command", fixture.worker, "--snapshot",
 		"--max-steps", "18", "--max-attempts-per-work", "2",
 		"--agent-timeout", "10m", "--max-duration", "45m", "--verify-timeout", "5m"}
 	round.Command = append([]string{"forgepilot"}, arguments...)

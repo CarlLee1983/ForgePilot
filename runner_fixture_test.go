@@ -16,14 +16,21 @@ import (
 // every marker file a session left behind says "done", so a verification result
 // is produced by the repository rather than declared by the test.
 type runnerFixture struct {
-	root    string
-	binary  string
-	control string
+	root          string
+	binary        string
+	control       string
+	worker        string
+	model         string
+	maxRuns       int
+	maxWriteBytes int
+	maxRunBytes   int
+	maxTotalBytes int
 }
 
 func newRunnerFixture(t *testing.T, stories ...string) runnerFixture {
 	t.Helper()
 	root, binary := fixture(t)
+	binary, worker := managedRunnerTestImage(t, binary)
 	if len(stories) == 0 {
 		stories = []string{"a.md", "b.md", "c.md"}
 	}
@@ -41,7 +48,8 @@ func newRunnerFixture(t *testing.T, stories ...string) runnerFixture {
 	write(t, filepath.Join(root, "Makefile"), "verify:\n\t@sh verify.sh\n")
 	write(t, filepath.Join(root, "verify.sh"), canonicalCheck)
 	commitAll(t, root, "seed")
-	return runnerFixture{root: root, binary: binary, control: t.TempDir()}
+	return runnerFixture{root: root, binary: binary, control: t.TempDir(), worker: worker,
+		model: "runner-test-model", maxRuns: 1, maxWriteBytes: 8 << 20, maxRunBytes: 128 << 20, maxTotalBytes: 512 << 20}
 }
 
 func writeReadinessStory(t *testing.T, root, name string, story, acceptance []byte) {
@@ -95,6 +103,8 @@ while [ $# -gt 0 ]; do
     --workspace) workspace="$2"; shift 2;;
     --result) result="$2"; shift 2;;
     --handoff) handoff="$2"; shift 2;;
+	--cd) workspace="$2"; shift 2;;
+	--output-last-message) result="$2"; handoff="$(dirname "$2")/handoff.md"; shift 2;;
     *) shift;;
   esac
 done
@@ -161,7 +171,7 @@ func (fixture runnerFixture) handoff(t *testing.T, itemID string) string {
 // non-zero one: the exit code is what most of these tests are about.
 func (fixture runnerFixture) runForge(t *testing.T, agentPath string, arguments ...string) (string, int) {
 	t.Helper()
-	command := exec.Command(fixture.binary, arguments...)
+	command := exec.Command(fixture.binary, fixture.runtimeArguments(arguments)...)
 	command.Dir = fixture.root
 	command.Env = os.Environ()
 	if agentPath != "" {
@@ -177,6 +187,20 @@ func (fixture runnerFixture) runForge(t *testing.T, agentPath string, arguments 
 		code = exit.ExitCode()
 	}
 	return string(output), code
+}
+
+func (fixture runnerFixture) runtimeArguments(arguments []string) []string {
+	converted := append([]string(nil), arguments...)
+	if len(converted) == 0 || converted[0] != "run" {
+		return converted
+	}
+	for index := 0; index+1 < len(converted); index++ {
+		if converted[index] == "--runtime" && converted[index+1] == "fake" {
+			converted[index+1] = "codex"
+			return append(converted, "--runtime-command", fixture.worker)
+		}
+	}
+	return converted
 }
 
 func asExitError(err error, target **exec.ExitError) bool {
@@ -199,6 +223,7 @@ func (fixture runnerFixture) seedGoal(t *testing.T, goalID string, items ...[]st
 		}
 		mustRun(t, fixture.binary, fixture.root, arguments...)
 	}
+	fixture.authorizeGoal(t, goalID)
 }
 func write(t *testing.T, path, contents string) {
 	t.Helper()

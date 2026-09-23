@@ -101,6 +101,7 @@ func TestRunnerCompletesVerifiedGoalWithoutHumanReview(t *testing.T) {
 	mustRun(t, fixture.binary, fixture.root, "init")
 	mustRun(t, fixture.binary, fixture.root, "goal", "create", "--id", "queue", "--title", "Goal queue", "--review-policy", "goal")
 	mustRun(t, fixture.binary, fixture.root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	fixture.authorizeGoal(t, "queue")
 	agent := fixture.fakeAgent(t, implementsCleanly)
 
 	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")

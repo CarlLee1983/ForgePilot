@@ -170,6 +170,14 @@ go test -count=1 -v -timeout=60m \
 
 退出碼由 `echo $?` 直接取得，沒有經過 `tee`。
 
+上列是當時的執行紀錄。現在重跑請使用目前的測試名稱，並明確指定要授權的模型；單獨設定模型不會啟動 smoke：
+
+```
+FORGEPILOT_CODEX_SMOKE=1 FORGEPILOT_SMOKE_MODEL="gpt-5.6-sol" \
+go test -count=1 -v -timeout=60m \
+  -run '^TestCodexSmokeDrivesDependentWorkToGoalCompletion$' .
+```
+
 | | |
 | --- | --- |
 | Run ID | `run-20260915t034856-f0e621` |

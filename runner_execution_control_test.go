@@ -73,7 +73,7 @@ exit ` + exitCode + `
 // startRun launches the CLI without waiting for it, so the test can signal it.
 func (fixture runnerFixture) startRun(t *testing.T, agentPath string, arguments ...string) (*exec.Cmd, *bytes.Buffer) {
 	t.Helper()
-	command := exec.Command(fixture.binary, arguments...)
+	command := exec.Command(fixture.binary, fixture.runtimeArguments(arguments)...)
 	command.Dir = fixture.root
 	command.Env = append(os.Environ(), "FORGEPILOT_FAKE_AGENT="+agentPath)
 	output := new(bytes.Buffer)

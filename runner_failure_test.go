@@ -199,11 +199,10 @@ fi`)
 	}
 }
 
-// A run record from before human-wait accounting has no trustworthy way to
-// distinguish an old question from a technical attempt. Resume must therefore
-// charge every persisted attempt conservatively, while preserving the original
-// deadline and step budget instead of treating the old shape as a new run.
-func TestLegacyRunRecordResumesWithAllOldAttemptsChargedAsTechnical(t *testing.T) {
+// A charged run has durable needs_human receipts. Removing its human-wait
+// totals must fail closed instead of treating the charged record as legacy.
+// Legacy attempt accounting is covered by internal/runner/budget_test.go.
+func TestChargedRunRejectsMissingHumanWaitTotals(t *testing.T) {
 	fixture := newRunnerFixture(t, "a.md")
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
@@ -228,8 +227,8 @@ fi`)
 		"--by", fixtureIdentity)
 
 	output, code = fixture.runForge(t, agent, "run", "resume", runID)
-	if code != 3 || !strings.Contains(output, "MAX_ATTEMPTS") {
-		t.Fatalf("legacy resume exit = %d, want MAX_ATTEMPTS\n%s", code, output)
+	if code != 1 || !strings.Contains(output, "inconsistent needs_human attempt totals") {
+		t.Fatalf("charged resume exit = %d, want inconsistent receipt refusal\n%s", code, output)
 	}
 	if sessions := fixture.sessions(t); len(sessions) != 1 {
 		t.Fatalf("legacy resume launched another session: %v", sessions)

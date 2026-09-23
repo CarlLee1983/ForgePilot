@@ -583,7 +583,7 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 | Gate／Goal 狀態改變：不啟動被禁止的新工作，不自動解除 | `TestAnOpenGateStopsTheRunWithoutBeingResolved`、`TestABlockedGoalStopsTheRun`、`TestNeedsHumanStopsAndRecordsAGate`、`TestNeedsHumanWithoutOptionsStopsWithoutFabricatingAGate` |
 | Gate resolve 後的新 session 與 transitive downstream 都收到 durable decision；合法 human wait 不耗盡 technical attempt budget | `TestResolvedGateDecisionFlowsIntoResumeAndDownstreamHandoffs` |
 | 第二個 Runner／symlink 路徑：拒絕重疊 writer，且 `status` 仍可回答 | `TestASecondRunnerIsRefusedThroughAnAliasToo` |
-| Crash window、signal、timeout 有明確恢復結果；不確定時拒絕續跑 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestResumeRefusesWhenAWorkerCannotBeConfirmed`、`TestRunnerReclaimsAnAbandonedVerificationRun`、`internal/agent` 的 `TestTimeoutStopsTheWholeProcessGroup`、`TestInspectDistinguishesGoneFromOursFromUnrelated` |
+| Crash window、signal、timeout 有明確恢復結果；不確定時拒絕續跑 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestResumeRefusesAChargedWorkerWithoutPendingOwnership`、`TestRunnerReclaimsAnAbandonedVerificationRun`、`internal/agent` 的 `TestTimeoutStopsTheWholeProcessGroup`、`TestInspectDistinguishesGoneFromOursFromUnrelated` |
 | Evidence 保存後崩潰：依最新 domain state 恢復，不重複實作 | `TestResumeKeepsBudgetAndDoesNotReimplementVerifiedWork` |
 | Goal completion 已提交但清除最後 facts-read pending 的 run-record save 失敗：resume 以 aggregate evidence 證明後修復終止紀錄，且不先碰 readiness／runtime | `TestResumeRepairsCompletionAfterFinalPendingClearSaveFails` |
 | Resume：新 session，預算與 deadline 不重置 | `TestResumeContinuesAfterTheBlockerIsCleared`、`TestResumeKeepsBudgetAndDoesNotReimplementVerifiedWork` |
@@ -607,7 +607,7 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 | session 正常結束也終止整個 process group，不留下背景子孫程序 | `internal/agent` 的 `TestACleanExitStillStopsTheWholeProcessGroup` |
 | 引用失敗 log 的節錄會說自己被截斷，且不從半行開始 | `internal/runner` 的 `TestTailSaysWhenItCut`、`TestTailQuotesAShortLogWhole` |
 | SIGINT 與 SIGTERM 分別以 130／143 退出，`run status` 也據實回報 | `TestSignalStopsTheWorkerAndLeavesAResumableRun`、`TestTerminationExitsWithItsOwnCode` |
-| 真實 Codex smoke | `TestCodexSmokeDrivesDependentWorkToGoalCompletion` 驗證 Runner 自動完成 Goal；Codex smoke 仍 opt-in（`FORGEPILOT_CODEX_SMOKE=1`），預設 CI 不跑；舊 artifacts 的 `AWAITING_GOAL_REVIEW` 保留為歷史紀錄。 |
+| 真實 Codex smoke | `TestCodexSmokeDrivesDependentWorkToGoalCompletion` 驗證 Runner 自動完成 Goal；Codex smoke 仍 opt-in（`FORGEPILOT_CODEX_SMOKE=1`），執行時另需明確指定 `FORGEPILOT_SMOKE_MODEL`；預設 CI 不跑；舊 artifacts 的 `AWAITING_GOAL_REVIEW` 保留為歷史紀錄。 |
 | 真實 Codex smoke 的啟用條件只接受完全等於 `1`，且判斷在任何副作用之前 | `TestSmokeOptInAcceptsOnlyTheExactValueOne` 逐值陳述契約（未設定、空字串、`0`、`false`、`FALSE`、`off`、`no`、`true`、`yes`、`2`、`" 1 "`、`"1\n"` 一律視為未啟用，只有 `1` 啟用）；`TestRealCodexSmokeConsultsTheOptInBeforeAnySideEffect` 以 PATH 上的 Codex spy 隔離真實 CLI，跑編譯後的測試 binary 確認五個未啟用環境下目標測試回報 SKIP、Codex 未被呼叫、證據匯出未寫入，並以第六個反向對照案例（`1`）確認 opt-in 真的會啟動那一輪並觸及 runtime——見 [ticket 12](specs/runner-mvp/issues/12-smoke-opt-in-closure.md)。修正後的入口尚未在真實模型下重跑。 |
 | 結構化結果的 schema 符合 strict structured output（每個物件的 `required` 涵蓋全部 `properties`） | `internal/agent` 的 `TestResultSchemaSatisfiesStrictStructuredOutput`、`TestDecodeResultAcceptsTheNullsTheSchemaRequires` |
 | 正式 verification 執行中收到 SIGINT：停止程序群組、退出碼 130、留下 INTERRUPTED 而非 FAIL，且不留下無人結案的 VERIFYING | `TestSignalDuringVerificationStopsTheCheckAndItsProcessGroup` |
@@ -643,7 +643,7 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 | `resume` 清除 `stop` 但不清除 `pending` | `TestResumeClearsTheStopButNotThePendingCleanup` |
 | 沒有觀察到 identity 的 pending execution 一律 fail closed | `TestAPendingExecutionWithNoObservedIdentityIsRefused` |
 | 群組確認消失後恢復解除，且 `pending` 在同一次確認中清除 | `TestRecoveryResumesOnceTheGroupIsConfirmedGone` |
-| 舊的正常紀錄、舊 worker 紀錄仍可恢復；毀損紀錄仍阻擋 | `TestOlderRunRecordsStillRecoverTheWayTheyDid`（三個 subtest） |
+| 缺少可省略的 `pending` 不阻擋下一輪；毀損紀錄或缺少對應 `pending` 的 charged worker 仍阻擋 | `TestStoredRunRecordsRespectChargedOwnership`（三個 subtest） |
 
 #### 08 — 恢復判準只有一份、清理不被吞掉、停止原因不被改名
 
@@ -652,9 +652,9 @@ SIGINT／SIGTERM 停止目前的 worker 程序群組**與正在執行的 canonic
 
 | 行為 | 驗收測試 |
 |---|---|
-| leader 已退出但同 PGID 子程序仍活著、紀錄只有 `worker` 沒有 `pending`：resume、同 Goal 新 run、同 workspace 另一個 Goal 三者皆阻擋 | `TestAWorkerWhoseGroupOutlivedItBlocksEveryWayBackIntoTheWorkspace` |
-| 被阻擋的嘗試不消耗 steps／attempts、不改寫 deadline，`worker` 保留；群組確認消失後同一次啟動即解除 | 同上 |
-| PID 被重用時阻擋，且不對該程序群組送出 signal | `TestRecoveryNeitherSignalsNorTrustsAReusedPid` |
+| charged run 的紀錄只有 `worker` 沒有對應 `pending`：resume、同 Goal 新 run、同 workspace 另一個 Goal 三者皆阻擋 | `TestAWorkerWithoutChargedPendingBlocksEveryWayBackIntoTheWorkspace` |
+| 被阻擋的嘗試不消耗 steps／attempts、不改寫 deadline，`worker` 保留；群組消失也不會掩蓋缺少的 ownership receipt | 同上 |
+| 不一致的 charged worker 不對其他程序群組送出 signal；PID 身分判定在 agent 邊界測試 | `TestInconsistentChargedWorkerDoesNotSignalAnUnrelatedProcess`、`internal/agent` 的 `TestInspectDistinguishesGoneFromOursFromUnrelated` |
 | 歷史 `RECOVERY_BLOCKED` 的 `stop` 不再讓已可確認的 workspace 繼續被拒 | `TestAnOldRecoveryBlockedStopDoesNotBlockASettledWorkspace` |
 | `RemoveWorktree` 不以 `os.RemoveAll` 遮蔽 `ErrNotSettled`，也不追加遞迴刪除 | `internal/repository` 的 `TestRemoveWorktreeAddsNoRecursiveDeleteToAnUnconfirmedGroup` |
 | Git 已完成刪除才回報未確認時仍不回報成功 | `internal/repository` 的 `TestARemovalThatSucceededStillReportsItsUnconfirmedGroup` |

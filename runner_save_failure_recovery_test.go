@@ -115,7 +115,7 @@ func TestRunnerPreservesPendingWhenStateSaveFails(t *testing.T) {
 	observe := failFactsRefreshThenStateSave(t, fixture.root, marker, stillRunning)
 
 	var output bytes.Buffer
-	record, err := runner.Start(runnerOptions(fixture.root, "queue", &output))
+	record, err := runner.Start(runnerOptions(fixture, "queue", &output))
 	refreshHits, saveHits := observe()
 	if err != nil {
 		t.Fatalf("the run failed operationally: %v\n%s", err, output.String())
@@ -412,7 +412,7 @@ func TestRunnerRecoveryDoesNotClaimFinalReviewAfterAgentFailure(t *testing.T) {
 	observe := failFactsRefreshThenStateSave(t, fixture.root, marker, stillRunning)
 
 	var output bytes.Buffer
-	record, err := runner.Start(runnerOptions(fixture.root, "queue", &output))
+	record, err := runner.Start(runnerOptions(fixture, "queue", &output))
 	refreshHits, saveHits := observe()
 	if err != nil {
 		t.Fatalf("the run failed operationally: %v\n%s", err, output.String())

@@ -9,13 +9,9 @@ import (
 	"time"
 )
 
-// Worker and Pending answer the same question — may a new writer start on this
-// workspace — and they used to answer it differently. Pending refused a leader
-// that had exited leaving its group populated; Worker read the same fact as
-// "the worker is gone" and cleared the entry. A record with a Worker and no
-// Pending is not a legacy shape either: the agent launch path saves the worker
-// identity first and only writes a Pending once a cleanup has failed, so a
-// crash in between leaves exactly this.
+// Charged runs bind agent Worker ownership to a ledger-backed Pending entry.
+// A record with a Worker but no Pending is inconsistent and must fail closed
+// before recovery inspects or signals its process group.
 // See docs/adr/0020-worker-ownership-is-fail-closed.md.
 
 // orphanedLeader starts a process group whose leader exits immediately while a
@@ -53,9 +49,8 @@ func orphanedLeader(t *testing.T) (int, int) {
 	return pgid, pgid
 }
 
-// leaveWorkerOnly seeds a finished run and rewrites its record as one that
-// crashed between saving the worker identity and recording any pending
-// execution. Nothing about it mentions a pending cleanup: that is the point.
+// leaveWorkerOnly deliberately removes the Pending ownership required by a
+// charged run. The process group is real, so refusal must leave it untouched.
 func leaveWorkerOnly(t *testing.T, fixture runnerFixture, agent string, pid, pgid int) string {
 	t.Helper()
 	if _, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot", "--max-steps", "1"); code != 3 {
@@ -84,10 +79,9 @@ func leaveWorkerOnly(t *testing.T, fixture runnerFixture, agent string, pid, pgi
 	return runID
 }
 
-// A worker whose leader has exited but whose process group still has members
-// must block every door back into the workspace, exactly as a pending cleanup
-// does. Before this it blocked none of them.
-func TestAWorkerWhoseGroupOutlivedItBlocksEveryWayBackIntoTheWorkspace(t *testing.T) {
+// A worker-only charged record must block every door back into the workspace,
+// even if the process group leader exited and its child remains alive.
+func TestAWorkerWithoutChargedPendingBlocksEveryWayBackIntoTheWorkspace(t *testing.T) {
 	fixture := newRunnerFixture(t, "a.md", "b.md")
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
@@ -108,8 +102,12 @@ func TestAWorkerWhoseGroupOutlivedItBlocksEveryWayBackIntoTheWorkspace(t *testin
 		{name: "another goal in the same workspace", arguments: []string{"run", "--goal", "second", "--runtime", "fake", "--snapshot"}},
 	} {
 		output, code := fixture.runForge(t, agent, attempt.arguments...)
-		if code != 2 || !strings.Contains(output, "RECOVERY_BLOCKED") {
-			t.Fatalf("%s: exit = %d, want 2 with RECOVERY_BLOCKED\n%s", attempt.name, code, output)
+		if attempt.name == "resume the same run" {
+			if code != 1 || !strings.Contains(output, "Worker has no matching agent Pending ownership") {
+				t.Fatalf("%s: exit = %d, want charged ownership refusal\n%s", attempt.name, code, output)
+			}
+		} else if code != 2 || !strings.Contains(output, "RECOVERY_BLOCKED") {
+			t.Fatalf("%s: exit = %d, want recovery blocked\n%s", attempt.name, code, output)
 		}
 		if sessions := fixture.sessions(t); len(sessions) != sessionsBefore {
 			t.Fatalf("%s started a session behind a blocked recovery: %v", attempt.name, sessions)
@@ -132,23 +130,21 @@ func TestAWorkerWhoseGroupOutlivedItBlocksEveryWayBackIntoTheWorkspace(t *testin
 		t.Fatal("the worker entry was cleared without the group being confirmed gone")
 	}
 
-	// Once the group really is gone the block lifts, in the same invocation that
-	// establishes it rather than on a second attempt by hand.
+	// Ending the group does not repair a missing charged ownership receipt.
 	stopGroup(t, pgid)
 	output, code := fixture.runForge(t, agent, "run", "resume", runID)
-	if strings.Contains(output, "RECOVERY_BLOCKED") {
-		t.Fatalf("a confirmed-empty group still blocked recovery: exit = %d\n%s", code, output)
+	if code != 1 || !strings.Contains(output, "Worker has no matching agent Pending ownership") {
+		t.Fatalf("the invalid charged record was accepted after group exit: %d\n%s", code, output)
 	}
 	cleared := loadRunRecord(t, fixture.root, runID)
-	if cleared["worker"] != nil {
-		t.Fatalf("a confirmed worker was not cleared: %v", cleared["worker"])
+	if cleared["worker"] == nil {
+		t.Fatal("the inconsistent worker record was silently cleared")
 	}
 }
 
-// A pid that has been reused belongs to somebody else. Recovery may neither
-// signal it nor read its liveness as its own worker still running, so the only
-// safe answer is to refuse while leaving the process untouched.
-func TestRecoveryNeitherSignalsNorTrustsAReusedPid(t *testing.T) {
+// Even an unrelated live process must not be signalled while charged ownership
+// is inconsistent. PID identity handling itself is covered in internal/agent.
+func TestInconsistentChargedWorkerDoesNotSignalAnUnrelatedProcess(t *testing.T) {
 	fixture := newRunnerFixture(t, "a.md")
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"})
@@ -165,8 +161,8 @@ func TestRecoveryNeitherSignalsNorTrustsAReusedPid(t *testing.T) {
 	writeRunRecord(t, fixture.root, runID, record)
 
 	output, code := fixture.runForge(t, agent, "run", "resume", runID)
-	if code != 2 || !strings.Contains(output, "RECOVERY_BLOCKED") {
-		t.Fatalf("a reused pid did not block recovery: exit = %d\n%s", code, output)
+	if code != 1 || !strings.Contains(output, "Worker has no matching agent Pending ownership") {
+		t.Fatalf("an inconsistent charged worker was accepted: exit = %d\n%s", code, output)
 	}
 	if syscall.Kill(-pgid, 0) != nil {
 		t.Fatal("recovery signalled a process group whose ownership it could not confirm")

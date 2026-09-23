@@ -141,6 +141,9 @@ func TestRealCodexSmokeConsultsTheOptInBeforeAnySideEffect(t *testing.T) {
 			if testCase.set {
 				environment = append(environment, SmokeVariable+"="+testCase.optIn)
 			}
+			if testCase.wantInvoked {
+				environment = append(environment, SmokeModelVariable+"=spy-model")
+			}
 			switch testCase.artifact {
 			case "absolute":
 				environment = append(environment, SmokeArtifactVariable+"="+evidence)
@@ -202,6 +205,13 @@ func TestRealCodexSmokeConsultsTheOptInBeforeAnySideEffect(t *testing.T) {
 				}
 				if !strings.Contains(string(spy), "codex") {
 					t.Fatalf("the spy log does not record a Codex invocation: %q", spy)
+				}
+				home, err := os.UserHomeDir()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(spy), "HOME="+home+" ") {
+					t.Fatalf("the smoke worker did not restore the caller's HOME: %q", spy)
 				}
 				if code == 0 {
 					t.Fatalf("the round reported success against a Codex spy that refuses to run:\n%s", output)
@@ -327,6 +337,7 @@ func requireShadowedCodex(t *testing.T, environment []string, spyDirectory strin
 func inheritedEnvironment() []string {
 	stripped := map[string]bool{
 		SmokeVariable:         true,
+		SmokeModelVariable:    true,
 		SmokeArtifactVariable: true,
 		smokeSpyLogVariable:   true,
 		"PATH":                true,
@@ -366,7 +377,7 @@ func writeCodexSpy(t *testing.T) string {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "codex")
 	write(t, path, `#!/bin/sh
-printf 'codex %s\n' "$*" >> "$`+smokeSpyLogVariable+`"
+printf 'codex HOME=%s %s\n' "$HOME" "$*" >> "$`+smokeSpyLogVariable+`"
 echo "the Codex spy refuses to run: this test must never reach a model" >&2
 exit 91
 `)

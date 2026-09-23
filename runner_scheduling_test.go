@@ -98,6 +98,7 @@ func TestRunnerRecoversWithheldReadinessThroughReconcile(t *testing.T) {
 		t.Fatalf("WI-002 = %s; persisted readiness corrected itself", status)
 	}
 
+	fixture.allowAnotherRun(t, "queue")
 	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
 	if code != 0 {
 		t.Fatalf("exit = %d\n%s", code, output)
@@ -232,14 +233,15 @@ printf '{"outcome":"implementation_finished","summary":"claimed to finish"}' > "
 // is deleted to make room.
 func TestExceedingTheArtifactBudgetStopsSafely(t *testing.T) {
 	fixture := newRunnerFixture(t)
+	fixture.maxWriteBytes = 2048
+	fixture.maxRunBytes = 85000
 	mustRun(t, fixture.binary, fixture.root, "init")
 	fixture.seedGoal(t, "queue", []string{"specs/stories/a.md"}, []string{"specs/stories/b.md", "WI-001"})
 	agent := fixture.fakeAgent(t, implementsCleanly)
 
 	// Leave room for one profiled session and its Evidence, but not the next
 	// session reservation; the assertion is about preserving existing artifacts.
-	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot",
-		"--max-agent-output-bytes", "2048", "--max-run-bytes", "82000")
+	output, code := fixture.runForge(t, agent, "run", "--goal", "queue", "--runtime", "fake", "--snapshot")
 	if code != 3 {
 		t.Fatalf("exit = %d\n%s", code, output)
 	}
@@ -257,7 +259,7 @@ func TestExceedingTheArtifactBudgetStopsSafely(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(state.Evidence) == 0 {
-		t.Fatal("the capacity stop discarded evidence")
+		t.Fatalf("the capacity stop discarded evidence:\n%s", output)
 	}
 	if runs, listErr := storage.ListRuns(fixture.root); listErr != nil || len(runs) != 1 {
 		t.Fatalf("runs after a capacity stop = %v, %v", runs, listErr)

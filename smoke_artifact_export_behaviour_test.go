@@ -315,7 +315,7 @@ func TestTheRecordedSandboxIsTheOneTheAdapterAsks(t *testing.T) {
 	// Any resolvable executable will do: Plan's argument list does not depend on
 	// which CLI it found, only on the adapter's own choices.
 	plan, err := (agent.Codex{Command: "git"}).Plan(agent.Request{
-		Workspace: t.TempDir(), ArtifactDir: t.TempDir(),
+		Workspace: t.TempDir(), ArtifactDir: t.TempDir(), Model: "test-model", Effort: "medium",
 	})
 	if err != nil {
 		t.Fatal(err)
