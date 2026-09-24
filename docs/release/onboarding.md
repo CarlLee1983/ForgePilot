@@ -1,11 +1,48 @@
 # ForgePilot source-built onboarding procedure
 
-> **Current procedure:** this document describes the current coupled
-> source-built walkthrough. ADR-0033 defines a Bootstrap that will install a
-> same-version CLI and Codex skill before Repository Onboarding. Its repository
-> script currently contains only incomplete `status` and `retention-v1`
-> development paths; it is not a supported installer. See the
-> [implementation status](bootstrap.md) and do not use it to install ForgePilot.
+## Managed Repository Onboarding
+
+When invoked from the Bootstrap-installed Codex skill, first validate and pin
+the physical generation using the skill's `generation-v1 current` instructions.
+Read this procedure from that generation, and use only its returned absolute
+CLI path. A failed or changing generation check stops this invocation. The
+Bootstrap install approval applies only to user-home distribution state and
+does not approve target-repository writes.
+
+Require an explicit absolute target repository and a COMMIT or SNAPSHOT
+Candidate choice. Inspect the target Git repository, existing `.forgepilot/`
+state, and Candidate before proposing changes. For COMMIT, show its full SHA,
+require it to match target `HEAD`, and inspect that commit's `Makefile`. For
+SNAPSHOT, ensure `make verify` is present in the content to be verified; an
+ignored, untracked Makefile does not count, while a nonignored untracked one
+is included in the snapshot. Stop if the Candidate cannot be determined. Do
+not infer the target from the current directory.
+
+Use a valid existing PraxisBound Story when present. Otherwise draft
+`specs/stories/<story-id>/story.md` and `acceptance.md`, show them for human
+review, and obtain approval before writing the drafts or adding Work Items.
+Keep Story writes inside the approved target. Refuse symlinked Story ancestors
+or leaves, partial Story pairs, and existing nonregular leaves; do not follow
+or overwrite them. Inspect the exact draft destination again after approval.
+Reuse existing ForgePilot state; do not rerun `init` or overwrite Goals or Work
+Items. Present the exact target paths and planned `forgepilot init`,
+`forgepilot goal create`, `forgepilot work add`, and `forgepilot status`
+commands, omitting inapplicable commands.
+Wait for a distinct **Repository Onboarding Approval** before any target
+write, including Story drafts. Recheck the target and Candidate after approval;
+changed inputs require a new review. Use the pinned generation CLI path for
+every ForgePilot command. Do not commit, migrate state, approve a review,
+resolve a Gate, or publish on the developer's behalf. If Story or implementation
+is uncommitted, later verification uses
+`forgepilot verify <work-id> --snapshot`; do not create a WIP commit solely for
+verification.
+
+## Zero-install source-built walkthrough
+
+The short prompt and optional Claude adapter use the following coupled
+source-built walkthrough. It obtains a separate source-install approval before
+the Repository Onboarding Approval. The managed skill above skips that source
+phase because Bootstrap already installed its generation.
 
 Formal onboarding builds ForgePilot from a developer-supplied, full 40-character
 commit SHA. It is not a prebuilt-binary, signing, or platform-trust promise.

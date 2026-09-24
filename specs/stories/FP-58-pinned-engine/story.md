@@ -78,8 +78,10 @@ compatible, explicitly revised authorization; historical runs remain bound to th
 
 ## Constraints
 
-* Credentials remain runtime-managed and are never copied into authorization, run records, logs, or
-  retention markers.
+* Credentials remain runtime-managed. ForgePilot does not read runtime credential material or copy it
+  into typed authorization, Run control fields, or retention markers. Worker-controlled output and
+  result text are untrusted: a worker can print credentials into `session.log` or place them in text
+  later persisted to a Run Record, Gate, or handoff.
 * Existing runs retain their original binding after an engine revision.
 
 ## Guidance

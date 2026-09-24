@@ -2,15 +2,17 @@
 set -eu
 umask 077
 export LC_ALL=C
+ACTION_MODE=render
 
 fail() { printf 'forgepilot-bootstrap: %s\n' "$*" >&2; exit 1; }
 
 usage() {
 	cat <<'EOF'
 Usage:
-  forgepilot-bootstrap plan [--upgrade | --uninstall --commit SHA | --prune] [source options]
-  forgepilot-bootstrap install [source options] --approve PLAN_ID
-  forgepilot-bootstrap upgrade --source PATH --commit SHA --approve PLAN_ID
+  forgepilot-bootstrap plan --agent codex --source PATH --commit SHA [--upgrade]
+  forgepilot-bootstrap install --agent codex --source PATH --commit SHA [--upgrade] --approve PLAN_ID
+  forgepilot-bootstrap plan --uninstall --commit SHA
+  forgepilot-bootstrap plan --prune
   forgepilot-bootstrap status
   forgepilot-bootstrap generation-v1 current
   forgepilot-bootstrap uninstall --commit SHA --approve PLAN_ID
@@ -76,6 +78,16 @@ private_file() {
 
 sha256_stdin() {
 	/usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
+
+# Git inspection and checkout never inherit caller routing, helpers, or hooks.
+bootstrap_git() {
+	/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin LC_ALL=C \
+		GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+		GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false \
+		/usr/bin/git -c credential.helper= -c core.hooksPath=/dev/null \
+		-c protocol.allow=never -c protocol.file.allow=always \
+		-c submodule.recurse=false -c init.templateDir=/dev/null "$@"
 }
 
 # setup_paths permits quote and backslash in HOME, so printf interpolation is
@@ -196,24 +208,30 @@ setup_paths() {
 }
 
 setup_temp() {
-	TEMP_DIR=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/forgepilot-bootstrap.XXXXXX") || fail 'cannot create private temporary directory'
+	# Plan scratch must stay outside the caller's HOME even if TMPDIR points there.
+	temp_home=$(CDPATH='' cd -P -- "$HOME" && pwd) || fail 'HOME directory is unavailable'
+	temp_parent=$(CDPATH='' cd -P -- /tmp && pwd) || fail 'private temporary parent is unavailable'
+	case "$temp_parent/" in "$temp_home/"*) fail 'HOME overlaps the Bootstrap temporary parent' ;; esac
+	TEMP_DIR=$(/usr/bin/mktemp -d "/tmp/forgepilot-bootstrap.XXXXXX") || fail 'cannot create private temporary directory'
 	/bin/chmod 700 "$TEMP_DIR" || fail 'cannot secure temporary directory'
 }
 
 cleanup() {
 	if [ -n "${PENDING_MARKER:-}" ] && [ -e "$PENDING_MARKER" ]; then /bin/rm -f "$PENDING_MARKER"; fi
+	if [ -n "${PENDING_TRANSACTION:-}" ] && [ -e "$PENDING_TRANSACTION" ]; then /bin/rm -f "$PENDING_TRANSACTION"; fi
+	if [ -n "${PENDING_MANIFEST:-}" ] && [ -e "$PENDING_MANIFEST" ]; then /bin/rm -f "$PENDING_MANIFEST"; fi
+	if [ "${INSTALL_OWNS_STAGE:-0}" -eq 1 ] && [ -n "${INSTALL_STAGE:-}" ] && [ -d "$INSTALL_STAGE" ] && [ "${INSTALL_TRANSACTION_ACTIVE:-0}" -eq 0 ]; then
+		stage_identity=$(/usr/bin/stat -f '%d:%i' "$INSTALL_STAGE" 2>/dev/null || :)
+		if [ "$stage_identity" = "${INSTALL_STAGE_IDENTITY:-}" ]; then /bin/rm -rf "$INSTALL_STAGE"; fi
+	fi
 	if [ -n "${TEMP_DIR:-}" ] && [ -d "$TEMP_DIR" ]; then /bin/rm -rf "$TEMP_DIR"; fi
 }
 
 generation_manifest() {
-	current_path_commit=$CURRENT_COMMIT
-	previous_path_commit=$PREVIOUS_COMMIT
-	manifest_expected=$TEMP_DIR/manifest.expected
+	manifest_tuples=$TEMP_DIR/manifest-tuples
+	: >"$manifest_tuples"
 	versions_list=$TEMP_DIR/versions-list
-	printf '{"schema_version":1,"generations":{' >"$manifest_expected"
 	/usr/bin/find -s "$VERSIONS" -mindepth 1 -maxdepth 1 -print >"$versions_list" || fail 'cannot enumerate managed generations'
-	first_generation=1
-	GENERATION_COUNT=0
 	while IFS= read -r generation_path; do
 		[ -d "$generation_path" ] && [ ! -L "$generation_path" ] || fail 'versions contains an unexpected entry'
 		generation_id=${generation_path##*/}
@@ -221,16 +239,33 @@ generation_manifest() {
 		safe_dir "$generation_path"
 		generation_digest=$(payload_digest "$generation_path") || fail 'cannot verify a managed generation'
 		if [ "$generation_id" = "$CURRENT_COMMIT" ]; then CURRENT_DIGEST=$generation_digest; fi
-		if [ "$first_generation" -eq 1 ]; then first_generation=0; else printf ',' >>"$manifest_expected"; fi
-		printf '"%s":{"payload_digest":"%s","path":"versions/%s"}' \
-			"$generation_id" "$generation_digest" "$generation_id" >>"$manifest_expected"
-		GENERATION_COUNT=$((GENERATION_COUNT + 1))
+		printf '%s\t%s\n' "$generation_id" "$generation_digest" >>"$manifest_tuples"
 	done <"$versions_list"
-	[ "$first_generation" -eq 0 ] || fail 'no managed generation is installed'
-	printf '},"current":"%s","previous":' "$current_path_commit" >>"$manifest_expected"
-	if [ -n "$previous_path_commit" ]; then printf '"%s"' "$previous_path_commit" >>"$manifest_expected"; else printf 'null' >>"$manifest_expected"; fi
-	printf '}\n' >>"$manifest_expected"
+	manifest_expected=$TEMP_DIR/manifest.expected
+	write_manifest_from_tuples "$manifest_tuples" "$manifest_expected"
 	/usr/bin/cmp -s "$manifest_expected" "$MANIFEST" || fail 'managed manifest does not match the verified generation layout'
+}
+
+write_manifest_from_tuples() {
+	tuple_source=$1
+	manifest_target=$2
+	tuple_sorted=$TEMP_DIR/manifest-sorted
+	LC_ALL=C /usr/bin/sort -t "$(printf '\t')" -k 1,1 "$tuple_source" >"$tuple_sorted" || fail 'cannot sort generation identities'
+	printf '{"schema_version":1,"generations":{' >"$manifest_target"
+	first_generation=1
+	GENERATION_COUNT=0
+	TAB=$(printf '\t')
+	while IFS="$TAB" read -r generation_id generation_digest; do
+		valid_sha "$generation_id" && valid_digest "$generation_digest" || fail 'invalid generation tuple in manifest inventory'
+		if [ "$first_generation" -eq 1 ]; then first_generation=0; else printf ',' >>"$manifest_target"; fi
+		printf '"%s":{"payload_digest":"%s","path":"versions/%s"}' \
+			"$generation_id" "$generation_digest" "$generation_id" >>"$manifest_target"
+		GENERATION_COUNT=$((GENERATION_COUNT + 1))
+	done <"$tuple_sorted"
+	[ "$first_generation" -eq 0 ] || fail 'no managed generation is installed'
+	printf '},"current":"%s","previous":' "$CURRENT_COMMIT" >>"$manifest_target"
+	if [ -n "$PREVIOUS_COMMIT" ]; then printf '"%s"' "$PREVIOUS_COMMIT" >>"$manifest_target"; else printf 'null' >>"$manifest_target"; fi
+	printf '}\n' >>"$manifest_target"
 }
 
 status() {
@@ -323,6 +358,20 @@ validate_retention_store() {
 }
 
 validate_layout() {
+	validate_layout_paths
+	[ ! -e "$ROOT/transaction.json" ] && [ ! -L "$ROOT/transaction.json" ] || fail 'a Bootstrap transaction requires recovery'
+	[ ! -e "$ROOT/removal" ] && [ ! -L "$ROOT/removal" ] || fail 'unrecorded removal staging requires inspection'
+	/usr/bin/find -s "$ROOT" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/layout-root-entries" || fail 'cannot inspect managed root inventory'
+	while IFS= read -r layout_root_entry; do
+		case "${layout_root_entry##*/}" in lock|manifest.json|versions|retention|current|previous) ;;
+			*) fail 'managed root contains an unrecorded path' ;;
+		esac
+	done <"$TEMP_DIR/layout-root-entries"
+	generation_manifest
+	validate_retention_store
+}
+
+validate_layout_paths() {
 	safe_dir "$HOME"
 	safe_dir "$HOME/.local"
 	safe_dir "$HOME/.local/share"
@@ -333,7 +382,6 @@ validate_layout() {
 	private_dir "$VERSIONS"
 	private_dir "$ROOT/retention"
 	private_dir "$RETENTION_DIR"
-	[ ! -e "$ROOT/transaction.json" ] && [ ! -L "$ROOT/transaction.json" ] || fail 'a Bootstrap transaction requires recovery'
 	private_file "$LOCK"
 	private_file "$MANIFEST"
 	pointer_commit "$ROOT/current"
@@ -350,8 +398,6 @@ validate_layout() {
 	stable_link "$HOME/.local/bin/forgepilot" "$ROOT/current/bin/forgepilot"
 	stable_link "$HOME/.local/bin/forgepilot-bootstrap" "$ROOT/current/libexec/forgepilot-bootstrap"
 	stable_link "$HOME/.agents/skills/forgepilot-onboarding" "$ROOT/current/skills/codex/forgepilot-onboarding"
-	generation_manifest
-	validate_retention_store
 }
 
 append_path_fact() {
@@ -403,6 +449,7 @@ write_layout_facts() {
 		append_path_fact "$fact_file" "$managed_path"
 	done <"$retention_list"
 	printf '%s\0absent\0' "$ROOT/transaction.json" >>"$fact_file"
+	printf '%s\0absent\0' "$ROOT/removal" >>"$fact_file"
 }
 
 collect_prune_candidates() {
@@ -431,6 +478,14 @@ collect_prune_candidates() {
 	done <"$versions_list"
 }
 
+select_removal_candidates() {
+	[ "$REMOVAL_OPERATION" = uninstall ] || return 0
+	selected=$TEMP_DIR/uninstall-candidate
+	/usr/bin/awk -F '\t' -v target="$REMOVAL_COMMIT" '$1 == target { print }' "$1" >"$selected" || fail 'cannot select uninstall generation'
+	[ "$(/usr/bin/wc -l <"$selected" | /usr/bin/tr -d ' ')" = 1 ] || fail 'uninstall target is current, previous, retained, or not installed'
+	/bin/cat "$selected" >"$1" || fail 'cannot record uninstall candidate'
+}
+
 append_plan_action() {
 	action_file=$1
 	human_actions_file=$2
@@ -441,6 +496,10 @@ append_plan_action() {
 	human_action=$7
 	shift 7
 	argument_count=$#
+	if [ "${ACTION_MODE:-render}" != render ]; then
+		expect_plan_action "$phase" "$action_id" "$working_directory" "$effect" "$@"
+		return 0
+	fi
 	{
 		printf '%s\0' "$phase" "$action_id" "$working_directory" "$effect" "$argument_count"
 		for action_argument in "$@"; do printf '%s\0' "$action_argument"; done
@@ -448,29 +507,119 @@ append_plan_action() {
 	printf '%s\n' "$human_action" >>"$human_actions_file"
 }
 
+# Convert NUL fields to one octal-escaped field per line. The shell never
+# treats plan bytes as shell syntax, and embedded newlines remain data.
+prepare_action_fields() {
+	action_stream=$1
+	ACTION_FIELDS=$TEMP_DIR/action-fields
+	/usr/bin/od -An -v -tx1 "$action_stream" >"$TEMP_DIR/action-hex" || fail 'cannot read Bootstrap action stream'
+	/usr/bin/awk '
+		{ for (i = 1; i <= NF; i++) {
+			byte = $i
+			if (byte == "00") { print encoded; encoded = ""; last = byte; fields++; continue }
+			hi = index("0123456789abcdef", substr(byte, 1, 1)) - 1
+			lo = index("0123456789abcdef", substr(byte, 2, 1)) - 1
+			if (length(byte) != 2 || hi < 0 || lo < 0) exit 1
+			encoded = encoded sprintf("\\%03o", hi * 16 + lo)
+			last = byte
+		} }
+		END { if (last != "00" || fields == 0) exit 1 }
+	' "$TEMP_DIR/action-hex" >"$ACTION_FIELDS" || fail 'Bootstrap action stream is truncated or malformed'
+}
+
+read_action_field() {
+	IFS= read -r action_encoded <&3 || return 1
+	ACTION_FIELD=$(printf '%bX' "$action_encoded") || fail 'cannot decode Bootstrap action field'
+	ACTION_FIELD=${ACTION_FIELD%X}
+}
+
+open_action_stream() {
+	prepare_action_fields "$1"
+	exec 3<"$ACTION_FIELDS"
+	read_action_field || fail 'Bootstrap action stream has no version'
+	[ "$ACTION_FIELD" = forgepilot-bootstrap-plan-v1 ] || fail 'unknown Bootstrap action protocol version'
+	ACTION_SEEN_IDS=$TEMP_DIR/action-seen-ids
+	: >"$ACTION_SEEN_IDS"
+}
+
+expect_plan_action() {
+	expected_phase=$1
+	expected_id=$2
+	expected_directory=$3
+	expected_effect=$4
+	shift 4
+	read_action_field || fail 'Bootstrap action record is truncated'
+	[ "$ACTION_FIELD" = "$expected_phase" ] || fail 'Bootstrap action phase or order changed'
+	parsed_action_phase=$ACTION_FIELD
+	read_action_field || fail 'Bootstrap action record is truncated'
+	[ "$ACTION_FIELD" = "$expected_id" ] || fail 'Bootstrap action ID or order changed'
+	parsed_action_id=$ACTION_FIELD
+	read_action_field || fail 'Bootstrap action record is truncated'
+	[ "$ACTION_FIELD" = "$expected_directory" ] || fail 'Bootstrap action working directory changed'
+	read_action_field || fail 'Bootstrap action record is truncated'
+	[ "$ACTION_FIELD" = "$expected_effect" ] || fail 'Bootstrap action command changed'
+	parsed_action_effect=$ACTION_FIELD
+	read_action_field || fail 'Bootstrap action record is truncated'
+	[ "$ACTION_FIELD" = "$#" ] || fail 'Bootstrap action argument count changed'
+	case "$expected_id" in ''|*[!a-z0-9-]*) fail 'Bootstrap action ID is malformed' ;; esac
+	if /usr/bin/grep -F -x -e "$expected_id" "$ACTION_SEEN_IDS" >/dev/null; then fail 'Bootstrap action ID is duplicated'; fi
+	printf '%s\n' "$expected_id" >>"$ACTION_SEEN_IDS"
+	expected_argument_count=$#
+	for expected_argument in "$@"; do
+		read_action_field || fail 'Bootstrap action argv is truncated'
+		[ "$ACTION_FIELD" = "$expected_argument" ] || fail 'Bootstrap action argv changed'
+		set -- "$@" "$ACTION_FIELD"
+	done
+	shift "$expected_argument_count"
+	if [ "${ACTION_MODE:-render}" = execute ]; then
+		case "${ACTION_DOMAIN:-removal}" in
+			removal) ( execute_removal_action "$parsed_action_phase" "$parsed_action_id" "$parsed_action_effect" "$@" ) || fail "Bootstrap action $parsed_action_id failed" ;;
+			install) execute_install_action "$parsed_action_phase" "$parsed_action_id" "$parsed_action_effect" "$@" || fail "Bootstrap action $parsed_action_id failed" ;;
+			*) fail 'Bootstrap action domain is unknown' ;;
+		esac
+	fi
+}
+
+finish_action_stream() {
+	if read_action_field; then fail 'Bootstrap action stream has an unexpected record'; fi
+	exec 3<&-
+}
+
 build_prune_actions() {
 	PLAN_ACTIONS=$TEMP_DIR/prune-actions
 	PLAN_HUMAN_ACTIONS=$TEMP_DIR/prune-human-actions
 	printf '%s\0' forgepilot-bootstrap-plan-v1 >"$PLAN_ACTIONS"
 	: >"$PLAN_HUMAN_ACTIONS"
+	emit_prune_actions
+}
+
+emit_prune_actions() {
 	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" inspect validate-managed-layout "$ROOT" read-managed-state 'validate managed layout'
 	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" lock acquire-bootstrap-lock "$ROOT" exclusive-bootstrap-lock 'acquire Bootstrap exclusive lock' "$LOCK"
 	if [ -s "$PRUNE_CANDIDATES" ]; then
 		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate compare-prune-facts "$ROOT" compare-prune-state 'revalidate prune facts' "$PRUNE_FACTS_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
-		set -- prune "$MANIFEST" "$PRUNE_MANIFEST_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
+		set -- "$REMOVAL_OPERATION" "$MANIFEST" "$PRUNE_MANIFEST_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
 		while IFS="$TAB" read -r generation_id candidate_digest; do
 			[ -n "$generation_id" ] || continue
-			set -- "$@" "$generation_id" "$candidate_digest"
+			candidate_identity=$(/usr/bin/stat -f '%d,%i' "$VERSIONS/$generation_id") || fail 'cannot bind approved removal candidate identity'
+			set -- "$@" "$generation_id" "$candidate_digest" "$candidate_identity"
 		done <"$PRUNE_CANDIDATES"
 		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" transaction record-removal-transaction "$ROOT" atomic-removal-transaction 'record removal transaction for exact manifest entries' "$@"
 		while IFS="$TAB" read -r generation_id candidate_digest; do
 			[ -n "$generation_id" ] || continue
-			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate "revalidate-generation-$generation_id" "$ROOT" verify-removable-generation "revalidate generation $generation_id" "$generation_id" "$candidate_digest" "$RETENTION_DIGEST" "$CURRENT_COMMIT" "${PREVIOUS_COMMIT:-none}"
-			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" remove "remove-generation-$generation_id" "$ROOT" remove-generation "remove versions/$generation_id (payload $candidate_digest)" "versions/$generation_id" "$candidate_digest"
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate "revalidate-stage-$generation_id" "$ROOT" verify-removable-generation "revalidate generation $generation_id before staging" "$generation_id" "$candidate_digest" "$RETENTION_DIGEST" "$CURRENT_COMMIT" "${PREVIOUS_COMMIT:-none}"
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" stage "stage-generation-$generation_id" "$ROOT" stage-generation "stage versions/$generation_id (payload $candidate_digest)" "versions/$generation_id" "$candidate_digest"
 		done <"$PRUNE_CANDIDATES"
 		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate revalidate-prune-manifest "$ROOT" verify-prune-manifest 'revalidate manifest before publication' "$PRUNE_MANIFEST_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
 		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-manifest "$ROOT" atomic-manifest-replacement 'publish updated manifest' "$MANIFEST" "$PRUNE_CANDIDATES_DIGEST"
-		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate revalidate-prune-transaction "$ROOT" verify-removal-transaction 'revalidate prune transaction before finalizing' prune "$PRUNE_CANDIDATES_DIGEST"
+		while IFS="$TAB" read -r generation_id candidate_digest; do
+			[ -n "$generation_id" ] || continue
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate "revalidate-remove-$generation_id" "$ROOT" verify-staged-generation "revalidate staged generation $generation_id before deletion" "$generation_id" "$candidate_digest" "$RETENTION_DIGEST" "$CURRENT_COMMIT" "${PREVIOUS_COMMIT:-none}"
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" remove "remove-generation-$generation_id" "$ROOT" remove-generation "remove versions/$generation_id (payload $candidate_digest)" "versions/$generation_id" "$candidate_digest"
+		done <"$PRUNE_CANDIDATES"
+		transaction_label='revalidate prune transaction before finalizing'
+		if [ "$REMOVAL_OPERATION" = uninstall ]; then transaction_label='revalidate uninstall transaction before finalizing'; fi
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate revalidate-prune-transaction "$ROOT" verify-removal-transaction "$transaction_label" "$REMOVAL_OPERATION" "$PRUNE_CANDIDATES_DIGEST"
 		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" finalize remove-transaction "$ROOT" remove-transaction 'remove prune transaction' "$ROOT/transaction.json"
 	else
 		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate compare-prune-facts "$ROOT" compare-prune-state 'revalidate prune facts' "$PRUNE_FACTS_DIGEST" "$PRUNE_CANDIDATES_DIGEST"
@@ -483,10 +632,12 @@ build_prune_plan() {
 	validate_layout
 	write_layout_facts "$TEMP_DIR/prune-facts.before"
 	collect_prune_candidates "$TEMP_DIR/prune-candidates.before"
+	select_removal_candidates "$TEMP_DIR/prune-candidates.before"
 	PRUNE_CANDIDATES=$TEMP_DIR/prune-candidates.after
 	validate_layout
 	write_layout_facts "$TEMP_DIR/prune-facts.after"
 	collect_prune_candidates "$PRUNE_CANDIDATES"
+	select_removal_candidates "$PRUNE_CANDIDATES"
 	/usr/bin/cmp -s "$TEMP_DIR/prune-facts.before" "$TEMP_DIR/prune-facts.after" || fail 'managed state changed during prune planning'
 	/usr/bin/cmp -s "$TEMP_DIR/prune-candidates.before" "$PRUNE_CANDIDATES" || fail 'retention changed during prune planning'
 	PRUNE_FACTS_DIGEST=$(sha256_stdin <"$TEMP_DIR/prune-facts.after") || fail 'cannot identify inspected prune facts'
@@ -495,22 +646,446 @@ build_prune_plan() {
 	build_prune_actions
 	plan_material=$TEMP_DIR/prune-plan-material
 	{
-		printf '%s\0' forgepilot-bootstrap-plan-id-v1 prune
+		printf '%s\0' forgepilot-bootstrap-plan-id-v1 "$REMOVAL_OPERATION" "${REMOVAL_COMMIT:-none}"
 		/bin/cat "$TEMP_DIR/prune-facts.after" "$PLAN_ACTIONS"
 	} >"$plan_material"
 	plan_digest=$(sha256_stdin <"$plan_material") || fail 'cannot identify prune plan'
 	PLAN_ID=sha256:$plan_digest
 }
 
-plan_prune() {
+read_removal_transaction() {
+	transaction_path=$ROOT/transaction.json
+	private_file "$transaction_path"
+	transaction_line=$(/bin/cat "$transaction_path") || fail 'cannot read removal transaction'
+	TXN_OPERATION=$(printf '%s\n' "$transaction_line" | /usr/bin/sed -n 's/.*"operation":"\([^"]*\)".*/\1/p')
+	TXN_CURRENT=$(printf '%s\n' "$transaction_line" | /usr/bin/sed -n 's/.*"current":"\([^"]*\)".*/\1/p')
+	TXN_PREVIOUS=$(printf '%s\n' "$transaction_line" | /usr/bin/sed -n 's/.*"previous":"\([^"]*\)".*/\1/p')
+	TXN_MANIFEST=$(printf '%s\n' "$transaction_line" | /usr/bin/sed -n 's/.*"manifest_sha256":"\([^"]*\)".*/\1/p')
+	TXN_RETENTION=$(printf '%s\n' "$transaction_line" | /usr/bin/sed -n 's/.*"retention_sha256":"\([^"]*\)".*/\1/p')
+	TXN_RETENTION_COUNT=$(printf '%s\n' "$transaction_line" | /usr/bin/sed -n 's/.*"retention_count":\([0-9]*\).*/\1/p')
+	TXN_CANDIDATES=$(printf '%s\n' "$transaction_line" | /usr/bin/sed -n 's/.*"candidates":"\([^"]*\)"}.*/\1/p')
+	case "$TXN_OPERATION" in prune|uninstall) ;; *) fail 'removal transaction has an unknown operation' ;; esac
+	valid_sha "$TXN_CURRENT" || fail 'removal transaction has an invalid current generation'
+	[ "$TXN_PREVIOUS" = none ] || valid_sha "$TXN_PREVIOUS" || fail 'removal transaction has an invalid previous generation'
+	for transaction_digest in "$TXN_MANIFEST" "$TXN_RETENTION"; do
+		case "$transaction_digest" in *[!0123456789abcdef]*) fail 'removal transaction has an invalid digest' ;; esac
+		[ "${#transaction_digest}" -eq 64 ] || fail 'removal transaction has an invalid digest'
+	done
+	case "$TXN_RETENTION_COUNT" in ''|*[!0-9]*) fail 'removal transaction has an invalid retention count' ;; esac
+	[ -n "$TXN_CANDIDATES" ] || fail 'removal transaction has no candidates'
+	transaction_expected=$(printf '{"schema_version":1,"operation":"%s","current":"%s","previous":"%s","manifest_sha256":"%s","retention_sha256":"%s","retention_count":%s,"candidates":"%s"}' \
+		"$TXN_OPERATION" "$TXN_CURRENT" "$TXN_PREVIOUS" "$TXN_MANIFEST" "$TXN_RETENTION" "$TXN_RETENTION_COUNT" "$TXN_CANDIDATES")
+	[ "$transaction_line" = "$transaction_expected" ] || fail 'removal transaction is malformed'
+	TXN_ENTRIES=$TEMP_DIR/transaction-entries
+	printf '%s\n' "$TXN_CANDIDATES" | /usr/bin/tr ';' '\n' >"$TEMP_DIR/transaction-candidate-lines"
+	: >"$TXN_ENTRIES"
+	canonical_candidates=''
+	while IFS=, read -r entry_id entry_digest entry_device entry_inode entry_extra; do
+		[ -z "$entry_extra" ] && valid_sha "$entry_id" || fail 'removal transaction has an invalid candidate'
+		valid_digest "sha256:$entry_digest" || fail 'removal transaction has an invalid candidate digest'
+		case "$entry_device:$entry_inode" in *[!0-9:]*) fail 'removal transaction has an invalid path identity' ;; esac
+		[ -n "$entry_device" ] && [ -n "$entry_inode" ] || fail 'removal transaction has an incomplete path identity'
+		candidate_record=$entry_id,$entry_digest,$entry_device,$entry_inode
+		if [ -n "$canonical_candidates" ]; then canonical_candidates=$canonical_candidates\;$candidate_record; else canonical_candidates=$candidate_record; fi
+		printf '%s\tsha256:%s\t%s\t%s\n' "$entry_id" "$entry_digest" "$entry_device" "$entry_inode" >>"$TXN_ENTRIES"
+	done <"$TEMP_DIR/transaction-candidate-lines"
+	[ -s "$TXN_ENTRIES" ] || fail 'removal transaction has no valid candidates'
+	[ "$canonical_candidates" = "$TXN_CANDIDATES" ] || fail 'removal transaction candidate list is ambiguous'
+	/usr/bin/cut -f 1 "$TXN_ENTRIES" >"$TEMP_DIR/transaction-ids"
+	LC_ALL=C /usr/bin/sort -u "$TEMP_DIR/transaction-ids" >"$TEMP_DIR/transaction-sorted-ids" || fail 'cannot validate removal candidate order'
+	/usr/bin/cmp -s "$TEMP_DIR/transaction-ids" "$TEMP_DIR/transaction-sorted-ids" || fail 'removal transaction candidates are not ordered and unique'
+}
+
+write_removal_transaction() {
+	[ "$#" -ge 7 ] || fail 'removal action has no candidate argv'
+	[ "$1" = "$REMOVAL_OPERATION" ] && [ "$2" = "$MANIFEST" ] &&
+		[ "$3" = "$PRUNE_MANIFEST_DIGEST" ] && [ "$4" = "$PRUNE_CANDIDATES_DIGEST" ] || fail 'removal transaction argv changed'
+	shift 4
+	action_candidates=$TEMP_DIR/action-transaction-candidates
+	: >"$action_candidates"
+	transaction_values=''
+	while [ "$#" -gt 0 ]; do
+		[ "$#" -ge 3 ] || fail 'removal action has a truncated candidate tuple'
+		candidate_id=$1
+		candidate_digest=$2
+		approved_identity=$3
+		shift 3
+		valid_sha "$candidate_id" && valid_digest "$candidate_digest" || fail 'removal action has an invalid candidate tuple'
+		approved_device=${approved_identity%,*}
+		approved_inode=${approved_identity#*,}
+		[ "$approved_device" != "$approved_identity" ] && [ -n "$approved_device" ] && [ -n "$approved_inode" ] || fail 'removal action has an incomplete path identity'
+		case "$approved_device:$approved_inode" in *[!0-9:]*) fail 'removal action has an invalid path identity' ;; esac
+		printf '%s\t%s\n' "$candidate_id" "$candidate_digest" >>"$action_candidates"
+		path_identity=$(/usr/bin/stat -f '%d,%i' "$VERSIONS/$candidate_id") || fail 'cannot bind removal path identity'
+		[ "$path_identity" = "$approved_identity" ] || fail 'removal candidate path identity changed after approval'
+		candidate_value=$candidate_id,${candidate_digest#sha256:},$approved_identity
+		if [ -n "$transaction_values" ]; then transaction_values=$transaction_values\;$candidate_value; else transaction_values=$candidate_value; fi
+	done
+	/usr/bin/cmp -s "$action_candidates" "$PRUNE_CANDIDATES" || fail 'removal candidate argv differs from the approved ordered set'
+	[ -n "$transaction_values" ] || fail 'cannot record an empty removal transaction'
+	PENDING_TRANSACTION=$(/usr/bin/mktemp "$ROOT/.transaction.XXXXXX") || fail 'cannot stage removal transaction'
+	printf '{"schema_version":1,"operation":"%s","current":"%s","previous":"%s","manifest_sha256":"%s","retention_sha256":"%s","retention_count":%s,"candidates":"%s"}\n' \
+		"$REMOVAL_OPERATION" "$CURRENT_COMMIT" "${PREVIOUS_COMMIT:-none}" "$PRUNE_MANIFEST_DIGEST" "$RETENTION_DIGEST" "$RETENTION_COUNT" "$transaction_values" >"$PENDING_TRANSACTION"
+	/bin/chmod 600 "$PENDING_TRANSACTION" || fail 'cannot secure removal transaction'
+	verify_lock_path
+	[ ! -e "$ROOT/transaction.json" ] && [ ! -L "$ROOT/transaction.json" ] || fail 'a removal transaction already exists'
+	/bin/mv "$PENDING_TRANSACTION" "$ROOT/transaction.json" || fail 'cannot publish removal transaction'
+	PENDING_TRANSACTION=''
+}
+
+verify_removal_state() {
+	read_removal_transaction
+	[ "$TXN_OPERATION" = "$REMOVAL_OPERATION" ] || fail 'only the recorded removal operation may recover the transaction'
+	if [ "$TXN_OPERATION" = uninstall ]; then
+		[ "$(/usr/bin/wc -l <"$TXN_ENTRIES" | /usr/bin/tr -d ' ')" = 1 ] || fail 'uninstall transaction has multiple candidates'
+		[ "$(/usr/bin/cut -f 1 "$TXN_ENTRIES")" = "$REMOVAL_COMMIT" ] || fail 'uninstall recovery names another generation'
+	fi
+	validate_layout_paths
+	/usr/bin/find -s "$ROOT" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/removal-root-entries" || fail 'cannot inspect removal root inventory'
+	while IFS= read -r removal_root_entry; do
+		case "${removal_root_entry##*/}" in lock|transaction.json|versions|retention|manifest.json|current|previous|removal|.manifest.new) ;;
+			*) fail 'removal root contains an unrecorded path' ;;
+		esac
+	done <"$TEMP_DIR/removal-root-entries"
+	[ "$CURRENT_COMMIT" = "$TXN_CURRENT" ] && [ "${PREVIOUS_COMMIT:-none}" = "$TXN_PREVIOUS" ] || fail 'protected generation changed during removal'
+	validate_retention_store
+	[ "$RETENTION_DIGEST" = "$TXN_RETENTION" ] && [ "$RETENTION_COUNT" = "$TXN_RETENTION_COUNT" ] || fail 'retention changed during removal'
+	if [ -e "$ROOT/removal" ] || [ -L "$ROOT/removal" ]; then private_dir "$ROOT/removal"; fi
+	present_tuples=$TEMP_DIR/removal-present-tuples
+	original_tuples=$TEMP_DIR/removal-original-tuples
+	: >"$present_tuples"
+	/usr/bin/find -s "$VERSIONS" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/removal-version-list" || fail 'cannot inspect remaining generations'
+	while IFS= read -r remaining_path; do
+		remaining_id=${remaining_path##*/}
+		valid_sha "$remaining_id" || fail 'removal found an unknown version path'
+		remaining_digest=$(payload_digest "$remaining_path") || fail 'remaining generation changed during removal'
+		printf '%s\t%s\n' "$remaining_id" "$remaining_digest" >>"$present_tuples"
+	done <"$TEMP_DIR/removal-version-list"
+	/bin/cat "$present_tuples" >"$original_tuples"
+	TAB=$(printf '\t')
+	all_moved=1
+	while IFS="$TAB" read -r candidate_id candidate_digest candidate_device candidate_inode; do
+		version_path=$VERSIONS/$candidate_id
+		removal_path=$ROOT/removal/$candidate_id
+		[ "$candidate_id" != "$TXN_CURRENT" ] && [ "$candidate_id" != "$TXN_PREVIOUS" ] || fail 'removal transaction names a protected generation'
+		if [ -e "$version_path" ] || [ -L "$version_path" ]; then
+			[ ! -e "$removal_path" ] && [ ! -L "$removal_path" ] || fail 'removal candidate exists in two places'
+			candidate_location=version
+			all_moved=0
+		elif [ -e "$removal_path" ] || [ -L "$removal_path" ]; then
+			candidate_location=removal
+		else
+			candidate_location=absent
+		fi
+		if [ "$candidate_location" != absent ]; then
+			candidate_path=$version_path
+			if [ "$candidate_location" = removal ]; then candidate_path=$removal_path; fi
+			[ -d "$candidate_path" ] && [ ! -L "$candidate_path" ] || fail 'removal candidate path is unsafe'
+			safe_dir "$candidate_path"
+			observed_identity=$(/usr/bin/stat -f '%d:%i' "$candidate_path") || fail 'cannot inspect removal candidate identity'
+			[ "$observed_identity" = "$candidate_device:$candidate_inode" ] || fail 'removal candidate path was substituted'
+		fi
+		if [ "$candidate_location" != version ]; then printf '%s\t%s\n' "$candidate_id" "$candidate_digest" >>"$original_tuples"; fi
+		if [ "$candidate_location" = version ]; then
+			/usr/bin/grep -F -x "$(printf '%s\t%s' "$candidate_id" "$candidate_digest")" "$present_tuples" >/dev/null || fail 'removal candidate payload changed'
+		fi
+	done <"$TXN_ENTRIES"
+	original_manifest=$TEMP_DIR/removal-original-manifest
+	final_manifest=$TEMP_DIR/removal-final-manifest
+	write_manifest_from_tuples "$original_tuples" "$original_manifest"
+	[ "$(sha256_stdin <"$original_manifest")" = "$TXN_MANIFEST" ] || fail 'recorded removal manifest changed'
+	write_manifest_from_tuples "$present_tuples" "$final_manifest"
+	if /usr/bin/cmp -s "$MANIFEST" "$original_manifest"; then
+		REMOVAL_PHASE=original
+	elif [ "$all_moved" -eq 1 ] && /usr/bin/cmp -s "$MANIFEST" "$final_manifest"; then
+		REMOVAL_PHASE=final
+	else
+		fail 'removal manifest is neither recorded original nor completed state'
+	fi
+	if [ -e "$ROOT/.manifest.new" ] || [ -L "$ROOT/.manifest.new" ]; then
+		[ "$REMOVAL_PHASE" = original ] || fail 'removal manifest staging remains after publication'
+		private_file "$ROOT/.manifest.new"
+		if [ -s "$ROOT/.manifest.new" ]; then
+			/usr/bin/cmp -s "$ROOT/.manifest.new" "$final_manifest" || fail 'staged removal manifest changed'
+		fi
+	fi
+	while IFS="$TAB" read -r candidate_id candidate_digest candidate_device candidate_inode; do
+		if [ -d "$ROOT/removal/$candidate_id" ]; then
+			[ "$(payload_digest "$ROOT/removal/$candidate_id")" = "$candidate_digest" ] || fail 'staged removal payload changed before deletion'
+		fi
+		if [ "$REMOVAL_PHASE" = original ] && [ ! -e "$VERSIONS/$candidate_id" ] && [ ! -e "$ROOT/removal/$candidate_id" ]; then
+			fail 'removal candidate vanished before manifest publication'
+		fi
+	done <"$TXN_ENTRIES"
+	: >"$TEMP_DIR/removal-trash-list"
+	if [ -d "$ROOT/removal" ]; then
+		/usr/bin/find -s "$ROOT/removal" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/removal-trash-list" || fail 'cannot inspect removal staging'
+		while IFS= read -r staged_path; do
+			staged_id=${staged_path##*/}
+			/usr/bin/cut -f 1 "$TXN_ENTRIES" | /usr/bin/grep -F -x "$staged_id" >/dev/null || fail 'removal staging contains an unrecorded path'
+		done <"$TEMP_DIR/removal-trash-list"
+	fi
+}
+
+write_recovery_facts() {
+	recovery_facts=$1
+	: >"$recovery_facts"
+	printf '%s\0' "$TXN_OPERATION" "$TXN_CURRENT" "$TXN_PREVIOUS" "$REMOVAL_PHASE" "$RETENTION_DIGEST" "$RETENTION_COUNT" >>"$recovery_facts"
+	for recovery_path in "$HOME" "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" \
+		"$HOME/.agents" "$HOME/.agents/skills" "$ROOT" "$VERSIONS" "$ROOT/retention" "$RETENTION_DIR" \
+		"$LOCK" "$MANIFEST" "$ROOT/current" "$HOME/.local/bin/forgepilot" \
+		"$HOME/.local/bin/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding" \
+		"$ROOT/transaction.json"; do
+		append_path_fact "$recovery_facts" "$recovery_path"
+	done
+	if [ -L "$ROOT/previous" ]; then append_path_fact "$recovery_facts" "$ROOT/previous"; else printf '%s\0absent\0' "$ROOT/previous" >>"$recovery_facts"; fi
+	if [ -d "$ROOT/removal" ]; then append_path_fact "$recovery_facts" "$ROOT/removal"; else printf '%s\0absent\0' "$ROOT/removal" >>"$recovery_facts"; fi
+	append_optional_path_fact "$recovery_facts" "$ROOT/.manifest.new"
+	if [ -f "$ROOT/.manifest.new" ] && [ ! -L "$ROOT/.manifest.new" ]; then
+		staged_manifest_hash=$(sha256_stdin <"$ROOT/.manifest.new") || fail 'cannot bind staged removal manifest bytes'
+		printf '%s\0' "$staged_manifest_hash" >>"$recovery_facts"
+	fi
+	/bin/cat "$TEMP_DIR/removal-root-entries" >>"$recovery_facts" || fail 'cannot bind removal root inventory'
+	for recovery_list in "$TEMP_DIR/removal-version-list" "$TEMP_DIR/removal-trash-list" "$TEMP_DIR/retention-list"; do
+		[ -f "$recovery_list" ] || continue
+		while IFS= read -r recovery_path; do append_path_fact "$recovery_facts" "$recovery_path"; done <"$recovery_list"
+	done
+	/bin/cat "$present_tuples" "$TXN_ENTRIES" >>"$recovery_facts" || fail 'cannot bind removal recovery inventory'
+}
+
+build_removal_recovery_plan() {
+	verify_removal_state
+	write_recovery_facts "$TEMP_DIR/recovery-facts.before"
+	verify_removal_state
+	write_recovery_facts "$TEMP_DIR/recovery-facts.after"
+	/usr/bin/cmp -s "$TEMP_DIR/recovery-facts.before" "$TEMP_DIR/recovery-facts.after" || fail 'removal recovery facts changed during planning'
+	PLAN_ACTIONS=$TEMP_DIR/recovery-actions
+	PLAN_HUMAN_ACTIONS=$TEMP_DIR/recovery-human-actions
+	printf '%s\0' forgepilot-bootstrap-plan-v1 >"$PLAN_ACTIONS"
+	: >"$PLAN_HUMAN_ACTIONS"
+	REMOVAL_ACTION_PHASE=$REMOVAL_PHASE
+	REMOVAL_ACTION_ENTRIES=$TEMP_DIR/recovery-action-entries
+	/bin/cat "$TXN_ENTRIES" >"$REMOVAL_ACTION_ENTRIES" || fail 'cannot preserve recorded recovery candidates'
+	emit_removal_recovery_actions
+	plan_material=$TEMP_DIR/recovery-plan-material
+	{
+		printf '%s\0' forgepilot-bootstrap-plan-id-v1 recovery "$REMOVAL_OPERATION" "${REMOVAL_COMMIT:-none}"
+		/bin/cat "$ROOT/transaction.json" "$TEMP_DIR/recovery-facts.after" "$PLAN_ACTIONS"
+	} >"$plan_material"
+	PLAN_ID=sha256:$(sha256_stdin <"$plan_material") || fail 'cannot identify removal recovery plan'
+}
+
+emit_removal_recovery_actions() {
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" inspect validate-removal-transaction "$ROOT" read-managed-state 'validate recorded removal transaction'
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" lock acquire-bootstrap-lock "$ROOT" exclusive-bootstrap-lock 'acquire Bootstrap exclusive lock' "$LOCK"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate compare-removal-recovery "$ROOT" compare-removal-state 'revalidate exact recorded removal state' "$TXN_OPERATION" "$TXN_MANIFEST" "$TXN_RETENTION"
+	TAB=$(printf '\t')
+	if [ "$REMOVAL_ACTION_PHASE" = original ]; then
+		while IFS="$TAB" read -r candidate_id candidate_digest candidate_device candidate_inode; do
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate "revalidate-recovery-stage-$candidate_id" "$ROOT" verify-removable-generation "revalidate recorded generation $candidate_id before staging" "$candidate_id" "$candidate_digest"
+			append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" stage "recover-stage-$candidate_id" "$ROOT" stage-generation "stage recorded versions/$candidate_id" "versions/$candidate_id" "$candidate_digest"
+		done <"$REMOVAL_ACTION_ENTRIES"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate revalidate-removal-manifest "$ROOT" verify-prune-manifest 'revalidate recorded manifest before publication' "$TXN_MANIFEST"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-removal-manifest "$ROOT" atomic-manifest-replacement 'publish recorded removal manifest' "$MANIFEST"
+	fi
+	while IFS="$TAB" read -r candidate_id candidate_digest candidate_device candidate_inode; do
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate "revalidate-recovery-remove-$candidate_id" "$ROOT" verify-staged-generation "revalidate recorded generation $candidate_id before deletion" "$candidate_id" "$candidate_digest"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" remove "recover-remove-$candidate_id" "$ROOT" finish-recorded-removal "finish recorded removal of versions/$candidate_id" "versions/$candidate_id" "$candidate_digest"
+	done <"$REMOVAL_ACTION_ENTRIES"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" finalize remove-transaction "$ROOT" remove-transaction 'remove completed transaction' "$ROOT/transaction.json"
+}
+
+stage_removal_candidate() {
+	execution_candidate_id=$1
+	verify_removal_state
+	[ "$REMOVAL_PHASE" = original ] || fail 'removal manifest was published before staging completed'
+	if [ ! -e "$ROOT/removal" ] && [ ! -L "$ROOT/removal" ]; then
+		/bin/mkdir -m 700 "$ROOT/removal" || fail 'cannot create removal staging directory'
+	fi
+	private_dir "$ROOT/removal"
+	if [ -d "$VERSIONS/$execution_candidate_id" ]; then
+		[ ! -e "$ROOT/removal/$execution_candidate_id" ] && [ ! -L "$ROOT/removal/$execution_candidate_id" ] || fail 'removal staging path is occupied'
+		verify_lock_path
+		/bin/mv "$VERSIONS/$execution_candidate_id" "$ROOT/removal/$execution_candidate_id" || fail 'cannot stage exact removal candidate'
+	fi
+}
+
+recheck_prune_facts() {
+	validate_layout
+	write_layout_facts "$TEMP_DIR/action-prune-facts"
+	[ "$(sha256_stdin <"$TEMP_DIR/action-prune-facts")" = "$PRUNE_FACTS_DIGEST" ] || fail 'approved prune facts changed before execution'
+	collect_prune_candidates "$TEMP_DIR/action-prune-candidates"
+	select_removal_candidates "$TEMP_DIR/action-prune-candidates"
+	[ "$(sha256_stdin <"$TEMP_DIR/action-prune-candidates")" = "$PRUNE_CANDIDATES_DIGEST" ] || fail 'approved prune candidates changed before execution'
+	[ "$(sha256_stdin <"$MANIFEST")" = "$PRUNE_MANIFEST_DIGEST" ] || fail 'approved removal manifest changed before execution'
+}
+
+execute_removal_action() {
+	actual_phase=$1
+	actual_id=$2
+	actual_effect=$3
+	shift 3
+	case "$actual_phase:$actual_effect" in
+		inspect:read-managed-state)
+			if [ "$actual_id" = validate-managed-layout ]; then validate_layout; else verify_removal_state; fi ;;
+		inspect:no-op) : ;;
+		lock:exclusive-bootstrap-lock) verify_lock_path ;;
+		revalidate:compare-prune-state) recheck_prune_facts ;;
+		revalidate:compare-removal-state) verify_removal_state ;;
+		revalidate:verify-removable-generation)
+			verify_removal_state
+			[ "$REMOVAL_PHASE" = original ] || fail 'removal candidate can no longer be staged' ;;
+		revalidate:verify-staged-generation)
+			verify_removal_state
+			[ "$REMOVAL_PHASE" = final ] || fail 'removal candidate cannot be deleted before manifest publication' ;;
+		revalidate:verify-prune-manifest)
+			verify_removal_state
+			[ "$REMOVAL_PHASE" = original ] || fail 'removal manifest changed before publication' ;;
+		revalidate:verify-removal-transaction)
+			verify_removal_state
+			[ "$REMOVAL_PHASE" = final ] || fail 'removal transaction is not final' ;;
+		transaction:atomic-removal-transaction) write_removal_transaction "$@" ;;
+		stage:stage-generation)
+			case "$1" in versions/*) action_candidate_id=${1#versions/} ;; *) fail 'removal action escapes versions' ;; esac
+			valid_sha "$action_candidate_id" && valid_digest "$2" || fail 'removal staging action has an invalid generation tuple'
+			stage_removal_candidate "$action_candidate_id" ;;
+		publish:atomic-manifest-replacement) publish_removal_manifest "$@" ;;
+		remove:remove-generation|remove:finish-recorded-removal)
+			case "$1" in versions/*) action_candidate_id=${1#versions/} ;; *) fail 'removal action escapes versions' ;; esac
+			valid_sha "$action_candidate_id" && valid_digest "$2" || fail 'removal deletion action has an invalid generation tuple'
+			delete_removal_candidate "$action_candidate_id" ;;
+		finalize:remove-transaction) finalize_removal_transaction "$@" ;;
+		*) fail 'Bootstrap action command is not allowed for removal' ;;
+	esac
+}
+
+publish_removal_manifest() {
+	[ "$#" -ge 1 ] && [ "$1" = "$MANIFEST" ] || fail 'removal manifest action path changed'
+	manifest_action_path=$1
+	if [ "$#" -eq 2 ]; then [ "$2" = "$PRUNE_CANDIDATES_DIGEST" ] || fail 'removal manifest action candidate digest changed'; fi
+	verify_removal_state
+	[ "$REMOVAL_PHASE" = original ] || fail 'removal phase changed before manifest publication'
+	TAB=$(printf '\t')
+	while IFS="$TAB" read -r candidate_id candidate_digest candidate_device candidate_inode; do
+		[ -d "$ROOT/removal/$candidate_id" ] || fail 'a recorded removal candidate was not staged before manifest publication'
+	done <"$TXN_ENTRIES"
+	if [ -e "$ROOT/.manifest.new" ] || [ -L "$ROOT/.manifest.new" ]; then
+		private_file "$ROOT/.manifest.new"
+		/bin/rm "$ROOT/.manifest.new" || fail 'cannot clear recorded removal manifest staging'
+	fi
+	[ ! -e "$ROOT/.manifest.new" ] && [ ! -L "$ROOT/.manifest.new" ] || fail 'removal manifest staging path is occupied'
+	( set -C; : >"$ROOT/.manifest.new" ) || fail 'cannot stage removal manifest'
+	PENDING_MANIFEST=$ROOT/.manifest.new
+	/bin/cat "$final_manifest" >"$PENDING_MANIFEST" || fail 'cannot write removal manifest'
+	/bin/chmod 600 "$PENDING_MANIFEST" || fail 'cannot secure removal manifest'
+	verify_lock_path
+	/bin/mv "$PENDING_MANIFEST" "$manifest_action_path" || fail 'cannot publish removal manifest'
+	PENDING_MANIFEST=''
+}
+
+delete_removal_candidate() {
+	execution_candidate_id=$1
+	verify_removal_state
+	[ "$REMOVAL_PHASE" = final ] || fail 'removal manifest was not published'
+	if [ -d "$ROOT/removal/$execution_candidate_id" ]; then
+		verify_lock_path
+		/bin/rm -rf "$ROOT/removal/$execution_candidate_id" || fail 'cannot finish recorded generation deletion'
+	fi
+}
+
+finalize_removal_transaction() {
+	[ "$#" -eq 1 ] && [ "$1" = "$ROOT/transaction.json" ] || fail 'removal finalization action path changed'
+	transaction_action_path=$1
+	if [ -d "$ROOT/removal" ]; then /bin/rmdir "$ROOT/removal" || fail 'removal staging contains an unexpected path'; fi
+	verify_removal_state
+	verify_lock_path
+	/bin/rm -f "$transaction_action_path" || fail 'cannot finalize removal transaction'
+	validate_layout
+}
+
+run_locked_removal_actions() {
+	for ACTION_MODE in validate execute; do
+		open_action_stream "$PLAN_ACTIONS"
+		if [ "$ACTION_REMOVAL_RECOVERY" -eq 1 ]; then
+			emit_removal_recovery_actions
+		else
+			emit_prune_actions
+		fi
+		finish_action_stream
+	done
+	ACTION_MODE=render
+}
+
+run_removal() {
+	REMOVAL_OPERATION=$1
+	REMOVAL_COMMIT=$2
+	approved_id=$3
+	setup_paths
+	private_file "$LOCK"
+	LOCK_IDENTITY=$(/usr/bin/stat -f '%i:%v' "$LOCK" 2>/dev/null) || fail 'cannot inspect managed Bootstrap lock'
+	(
+		fd_identity=$(/usr/bin/stat -L -f '%i:%v' /dev/fd/9 2>/dev/null) || fail 'cannot inspect opened Bootstrap lock'
+		[ "$fd_identity" = "$LOCK_IDENTITY" ] || fail 'Bootstrap lock changed while it was opened'
+		/usr/bin/lockf -s -t 30 9 || fail 'removal could not obtain the Bootstrap lock'
+		verify_lock_path
+		setup_temp
+		trap cleanup EXIT HUP INT TERM
+		if [ -e "$ROOT/transaction.json" ] || [ -L "$ROOT/transaction.json" ]; then
+			ACTION_REMOVAL_RECOVERY=1
+			build_removal_recovery_plan
+		else
+			ACTION_REMOVAL_RECOVERY=0
+			build_prune_plan
+		fi
+		[ "$PLAN_ID" = "$approved_id" ] || fail 'Bootstrap approval is stale or does not match the locked removal plan'
+		run_locked_removal_actions
+		if [ "$ACTION_REMOVAL_RECOVERY" -eq 0 ] && [ ! -s "$PRUNE_CANDIDATES" ]; then
+			printf '%s: no removable generations\n' "$REMOVAL_OPERATION"
+		else
+			printf '%s: approved removal complete\n' "$REMOVAL_OPERATION"
+		fi
+	) 9<"$LOCK" || fail 'removal could not use the existing Bootstrap lock marker'
+}
+
+removal_command() {
+	operation=$1
+	shift
+	commit=''
+	approval=''
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--commit)
+				[ "$#" -ge 2 ] && [ -z "$commit" ] || fail 'removal accepts one --commit'
+				commit=$2
+				valid_sha "$commit" || fail 'removal --commit requires a lowercase full SHA'
+				shift 2 ;;
+			--approve)
+				[ "$#" -ge 2 ] && [ -z "$approval" ] || fail 'removal accepts one --approve'
+				approval=$2
+				case "$approval" in sha256:*) valid_digest "$approval" || fail 'removal approval is malformed' ;; *) fail 'removal approval is malformed' ;; esac
+				shift 2 ;;
+			*) fail 'removal argument is not supported' ;;
+		esac
+	done
+	[ -n "$approval" ] || fail 'removal requires --approve'
+	if [ "$operation" = uninstall ]; then [ -n "$commit" ] || fail 'uninstall requires --commit'; else [ -z "$commit" ] || fail 'prune does not accept --commit'; fi
+	run_removal "$operation" "$commit" "$approval"
+}
+
+plan_removal() {
 	setup_paths
 	setup_temp
 	trap cleanup EXIT HUP INT TERM
-	build_prune_plan
+	if [ -e "$ROOT/transaction.json" ] || [ -L "$ROOT/transaction.json" ]; then
+		build_removal_recovery_plan
+	else
+		build_prune_plan
+	fi
 	case "$PLAN_FORMAT" in
 		human)
 			printf 'Plan ID: %s\n' "$PLAN_ID"
-			printf 'Operation: prune\n'
+			printf 'Operation: %s\n' "$REMOVAL_OPERATION"
+			if [ -e "$ROOT/transaction.json" ]; then printf 'Recovery: recorded removal transaction\n'; fi
 			printf 'Current generation: %s\n' "$CURRENT_COMMIT"
 			if [ -n "$PREVIOUS_COMMIT" ]; then
 				printf 'Previous generation: %s\n' "$PREVIOUS_COMMIT"
@@ -530,8 +1105,1022 @@ plan_prune() {
 	esac
 }
 
+append_optional_path_fact() {
+	if [ -e "$2" ] || [ -L "$2" ]; then
+		append_path_fact "$1" "$2"
+	else
+		printf '%s\0absent\0' "$2" >>"$1"
+	fi
+}
+
+install_source_check() {
+	[ "$(/usr/bin/uname -s)" = Darwin ] && [ "$(/usr/bin/uname -m)" = arm64 ] || fail 'source installation requires Darwin arm64'
+	case "$INSTALL_SOURCE" in /*) ;; *) fail 'install --source must be an absolute local checkout' ;; esac
+	case "$INSTALL_SOURCE/" in */../*|*/./*|*//*) fail 'install --source has an unsafe path component' ;; esac
+	[ -d "$INSTALL_SOURCE" ] && [ ! -L "$INSTALL_SOURCE" ] || fail 'install --source is not a local directory'
+	safe_dir "$INSTALL_SOURCE"
+	INSTALL_CANONICAL_SOURCE=$(CDPATH='' cd -P -- "$INSTALL_SOURCE" && pwd) || fail 'cannot resolve source checkout'
+	INSTALL_GIT_DIR=$(bootstrap_git -C "$INSTALL_SOURCE" rev-parse --absolute-git-dir 2>/dev/null) || fail 'source is not a Git checkout'
+	INSTALL_GIT_ROOT=$(bootstrap_git -C "$INSTALL_SOURCE" rev-parse --show-toplevel 2>/dev/null) || fail 'cannot inspect source root'
+	INSTALL_GIT_ROOT=$(CDPATH='' cd -P -- "$INSTALL_GIT_ROOT" && pwd) || fail 'cannot resolve source root'
+	[ "$INSTALL_GIT_ROOT" = "$INSTALL_CANONICAL_SOURCE" ] || fail 'source must name the Git checkout root'
+	INSTALL_RESOLVED_COMMIT=$(bootstrap_git -C "$INSTALL_SOURCE" rev-parse --verify "$INSTALL_COMMIT^{commit}" 2>/dev/null) || fail 'source commit is unavailable'
+	[ "$INSTALL_RESOLVED_COMMIT" = "$INSTALL_COMMIT" ] || fail 'source identity must be an exact commit, not a tag'
+	INSTALL_TREE=$(bootstrap_git -C "$INSTALL_SOURCE" rev-parse --verify "$INSTALL_COMMIT^{tree}" 2>/dev/null) || fail 'cannot inspect source tree'
+	for source_leaf in go.mod Makefile cmd/forgepilot/main.go scripts/forgepilot-bootstrap skills/codex/forgepilot-onboarding/SKILL.md docs/release/onboarding.md; do
+		source_entry=$(bootstrap_git -C "$INSTALL_SOURCE" ls-tree "$INSTALL_COMMIT" -- "$source_leaf") || fail 'cannot inspect source payload'
+		case "$source_entry" in '100644 blob '*|'100755 blob '*) ;; *) fail 'source commit has a missing or unsafe required file' ;; esac
+	done
+	if bootstrap_git -C "$INSTALL_SOURCE" ls-tree -r --name-only "$INSTALL_COMMIT" | /usr/bin/awk '$0 == ".gitattributes" || $0 ~ /\/.gitattributes$/ { found=1 } END { exit !found }'; then
+		fail 'source attributes require review before checkout'
+	fi
+	if bootstrap_git -C "$INSTALL_SOURCE" ls-tree -r "$INSTALL_COMMIT" | /usr/bin/awk '$1 == "160000" { found=1 } END { exit !found }'; then
+		fail 'source submodules are not supported by Bootstrap'
+	fi
+	INSTALL_REQUIRED_GO=$(bootstrap_git -C "$INSTALL_SOURCE" show "$INSTALL_COMMIT:go.mod" | /usr/bin/awk '$1 == "go" { count++; value=$2 } END { if (count == 1) print value }') || fail 'cannot inspect committed Go directive'
+	case "$INSTALL_REQUIRED_GO" in [0-9]*.[0-9]*.[0-9]*) ;; *) fail 'source has an unsupported Go directive' ;; esac
+	[ -n "$INSTALL_REQUIRED_GO" ] || fail 'source Go directive is missing'
+	[ -x /usr/bin/make ] || fail 'an installed make is required'
+	INSTALL_GO=$(/usr/bin/which go 2>/dev/null) || fail 'an installed Go toolchain is required'
+	case "$INSTALL_GO" in /*) ;; *) fail 'Go toolchain path is not absolute' ;; esac
+	install_go_hops=0
+	while :; do
+		INSTALL_GO=$(CDPATH='' cd -P -- "${INSTALL_GO%/*}" && pwd)/${INSTALL_GO##*/} || fail 'cannot resolve Go toolchain directory'
+		[ -L "$INSTALL_GO" ] || break
+		install_go_hops=$((install_go_hops + 1))
+		[ "$install_go_hops" -le 16 ] || fail 'Go toolchain symlink chain is unsafe'
+		install_go_link=$(/usr/bin/readlink "$INSTALL_GO") || fail 'cannot inspect Go toolchain link'
+		case "$install_go_link" in /*) INSTALL_GO=$install_go_link ;; *) INSTALL_GO=${INSTALL_GO%/*}/$install_go_link ;; esac
+	done
+	[ -f "$INSTALL_GO" ] && [ -x "$INSTALL_GO" ] || fail 'Go toolchain path is unsafe'
+	case "$INSTALL_GO" in "$INSTALL_CANONICAL_SOURCE"/*) fail 'Go toolchain cannot come from the approved source checkout' ;; esac
+	INSTALL_GO_HASH=$(sha256_stdin <"$INSTALL_GO") || fail 'cannot bind installed Go toolchain bytes'
+	INSTALL_GO_VERSION=unverified
+	bootstrap_git -C "$INSTALL_SOURCE" show "$INSTALL_COMMIT:Makefile" | /usr/bin/awk '/^verify[ \t]*:/ { found=1 } END { exit !found }' || fail 'source Makefile lacks make verify'
+}
+
+check_installed_go() {
+	[ "$(sha256_stdin <"$INSTALL_GO")" = "$INSTALL_GO_HASH" ] || fail 'approved Go toolchain bytes changed'
+	INSTALL_GO_VERSION=$(/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin GOTOOLCHAIN=local "$INSTALL_GO" version 2>/dev/null | /usr/bin/awk '$1 == "go" { sub(/^go/, "", $3); print $3 }') || fail 'cannot inspect installed Go toolchain'
+	[ "$(sha256_stdin <"$INSTALL_GO")" = "$INSTALL_GO_HASH" ] || fail 'approved Go toolchain changed during version inspection'
+	/usr/bin/awk -v have="$INSTALL_GO_VERSION" -v need="$INSTALL_REQUIRED_GO" 'BEGIN {
+		if (have !~ /^[0-9]+\.[0-9]+(\.[0-9]+)?$/ || need !~ /^[0-9]+\.[0-9]+(\.[0-9]+)?$/) exit 1
+		split(have,h,"."); split(need,n,"."); for (i=1;i<=3;i++) { if (h[i]+0 > n[i]+0) exit 0; if (h[i]+0 < n[i]+0) exit 1 }
+	}' || fail 'installed Go toolchain is older than the committed go directive'
+	INSTALL_GOROOT=$(/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin GOTOOLCHAIN=local "$INSTALL_GO" env GOROOT 2>/dev/null) || fail 'cannot inspect approved Go root'
+	case "$INSTALL_GOROOT" in /*) ;; *) fail 'approved Go root is not absolute' ;; esac
+	[ -d "$INSTALL_GOROOT" ] || fail 'approved Go root is unavailable'
+	[ "$(sha256_stdin <"$INSTALL_GO")" = "$INSTALL_GO_HASH" ] || fail 'approved Go toolchain changed during root inspection'
+}
+
+install_layout_check() {
+	safe_dir "$HOME"
+	if [ -e "$ROOT" ] || [ -L "$ROOT" ]; then
+		if [ "$INSTALL_OPERATION" = install ] && install_scaffold_valid; then
+			INSTALL_LAYOUT=scaffold
+			CURRENT_COMMIT=none
+			PREVIOUS_COMMIT=''
+		else
+			validate_layout
+			if [ "$INSTALL_OPERATION" = upgrade ]; then
+				[ "$CURRENT_COMMIT" != "$INSTALL_COMMIT" ] || fail 'upgrade requires a different source commit'
+				INSTALL_LAYOUT=upgrade
+			else
+				[ "$CURRENT_COMMIT" = "$INSTALL_COMMIT" ] || fail 'a different current commit requires explicit --upgrade'
+				INSTALL_LAYOUT=idempotent
+			fi
+		fi
+	else
+		[ "$INSTALL_OPERATION" = install ] || fail 'upgrade requires an existing idle installation'
+		INSTALL_LAYOUT=initial
+		for initial_parent in "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.agents" "$HOME/.agents/skills"; do
+			if [ -e "$initial_parent" ] || [ -L "$initial_parent" ]; then safe_dir "$initial_parent"; fi
+		done
+		for initial_entry in "$HOME/.local/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding"; do
+			[ ! -e "$initial_entry" ] && [ ! -L "$initial_entry" ] || fail 'an external Bootstrap entrypoint already exists'
+		done
+		CURRENT_COMMIT=none
+		PREVIOUS_COMMIT=''
+	fi
+}
+
+install_scaffold_valid() {
+	[ -d "$ROOT" ] && [ ! -L "$ROOT" ] || return 1
+	private_dir "$ROOT"
+	[ -f "$LOCK" ] && [ ! -L "$LOCK" ] || return 1
+	private_file "$LOCK"
+	[ "$(/usr/bin/stat -f '%z' "$LOCK")" = 0 ] || return 1
+	/usr/bin/find -s "$ROOT" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/install-scaffold-entries" || return 1
+	[ "$(/bin/cat "$TEMP_DIR/install-scaffold-entries")" = "$LOCK" ] || return 1
+	for scaffold_parent in "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.agents" "$HOME/.agents/skills"; do
+		if [ -e "$scaffold_parent" ] || [ -L "$scaffold_parent" ]; then safe_dir "$scaffold_parent"; fi
+	done
+	for scaffold_entry in "$HOME/.local/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding"; do
+		[ ! -e "$scaffold_entry" ] && [ ! -L "$scaffold_entry" ] || return 1
+	done
+}
+
+append_install_path_fact() {
+	if [ "${INSTALL_NORMALIZE_CREATED:-0}" -eq 1 ] && /usr/bin/grep -F -x -- "$2" "$INSTALL_CREATED" >/dev/null; then
+		if [ "$2" = "$LOCK" ]; then private_file "$2"; else safe_dir "$2"; fi
+		printf '%s\0absent\0' "$2" >>"$1"
+	else
+		append_optional_path_fact "$1" "$2"
+	fi
+}
+
+write_install_facts() {
+	install_fact_file=$1
+	: >"$install_fact_file"
+	printf '%s\0' "$INSTALL_OPERATION" "$INSTALL_LAYOUT" "$INSTALL_SOURCE" "$INSTALL_CANONICAL_SOURCE" "$INSTALL_COMMIT" "$INSTALL_TREE" "$INSTALL_GO" "$INSTALL_GO_HASH" "$INSTALL_REQUIRED_GO" >>"$install_fact_file"
+	append_path_fact "$install_fact_file" "$INSTALL_SOURCE"
+	append_path_fact "$install_fact_file" "$INSTALL_GIT_DIR"
+	append_path_fact "$install_fact_file" "$INSTALL_GO"
+	if [ "$INSTALL_LAYOUT" = initial ]; then
+		for install_fact_path in "$HOME" "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.agents" "$HOME/.agents/skills" "$ROOT" "$VERSIONS" "$ROOT/retention" "$RETENTION_DIR" "$LOCK" "$MANIFEST" "$ROOT/current" "$ROOT/previous" "$ROOT/transaction.json" "$ROOT/removal" "$HOME/.local/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding"; do
+			append_install_path_fact "$install_fact_file" "$install_fact_path"
+		done
+	else
+		write_layout_facts "$TEMP_DIR/install-layout-facts"
+		/bin/cat "$TEMP_DIR/install-layout-facts" >>"$install_fact_file"
+	fi
+}
+
+build_install_actions() {
+	PLAN_ACTIONS=$TEMP_DIR/install-actions
+	PLAN_HUMAN_ACTIONS=$TEMP_DIR/install-human-actions
+	printf '%s\0' forgepilot-bootstrap-plan-v1 >"$PLAN_ACTIONS"
+	: >"$PLAN_HUMAN_ACTIONS"
+	emit_install_actions
+}
+
+emit_install_actions() {
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" inspect inspect-source "$INSTALL_SOURCE" read-exact-source 'inspect exact local source and installed Go bytes' "$INSTALL_COMMIT" "$INSTALL_TREE" "$INSTALL_GO_HASH"
+	if [ "$INSTALL_LAYOUT" != idempotent ]; then
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" verify check-go-compatibility "$INSTALL_GO" run-approved-toolchain-version 'check the approved Go version against committed go.mod' "$INSTALL_REQUIRED_GO" "$INSTALL_GO_HASH"
+	fi
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" lock acquire-bootstrap-lock "$ROOT" exclusive-bootstrap-lock 'acquire Bootstrap exclusive lock' "$LOCK"
+	if [ "$INSTALL_LAYOUT" = idempotent ]; then
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" inspect exact-generation-installed "$ROOT" no-op 'verified generation is already current' "$INSTALL_COMMIT"
+		return
+	fi
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" stage detached-exact-checkout "$ROOT" checkout-exact-source 'stage a detached checkout of the exact commit' "$INSTALL_SOURCE" "$INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" verify build-cli "$ROOT" user-owned-gobin-build 'build the staged CLI with the installed Go toolchain' "$INSTALL_GO" "$INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" verify source-make-verify "$ROOT" run-source-make-verify 'run the approved source make verify' "$INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" verify payload "$ROOT" verify-generation-payload 'verify CLI, helper, skill, procedure, and payload digest' "$INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" transaction record-install "$ROOT" atomic-install-transaction 'record the exact installation transaction' "$INSTALL_OPERATION" "$INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-generation "$ROOT" atomic-generation-publication 'publish the verified immutable generation' "$INSTALL_COMMIT"
+	if [ "$INSTALL_LAYOUT" = initial ]; then
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-stable-links "$ROOT" publish-generation-links 'publish the three stable entrypoints through current' "$HOME/.local/bin/forgepilot" "$ROOT/current/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" "$ROOT/current/libexec/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding" "$ROOT/current/skills/codex/forgepilot-onboarding"
+	fi
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish switch-current "$ROOT" atomic-current-switch 'atomically select the new current generation' "$INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-manifest "$ROOT" atomic-manifest-replacement 'publish the completed generation manifest' "$MANIFEST"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" finalize remove-transaction "$ROOT" remove-transaction 'remove the completed installation transaction' "$ROOT/transaction.json"
+}
+
+build_install_plan() {
+	install_source_check
+	install_layout_check
+	write_install_facts "$TEMP_DIR/install-facts.before"
+	install_source_check
+	install_layout_check
+	write_install_facts "$TEMP_DIR/install-facts.after"
+	/usr/bin/cmp -s "$TEMP_DIR/install-facts.before" "$TEMP_DIR/install-facts.after" || fail 'source or managed layout changed during installation planning'
+	install_plan_id_from_facts "$TEMP_DIR/install-facts.after"
+}
+
+install_plan_id_from_facts() {
+	install_id_facts=$1
+	build_install_actions
+	{
+		printf '%s\0' forgepilot-bootstrap-plan-id-v1 "$INSTALL_OPERATION" "$INSTALL_SOURCE" "$INSTALL_COMMIT"
+		/bin/cat "$install_id_facts" "$PLAN_ACTIONS"
+	} >"$TEMP_DIR/install-plan-material"
+	PLAN_ID=sha256:$(sha256_stdin <"$TEMP_DIR/install-plan-material") || fail 'cannot identify installation plan'
+}
+
+plan_install() {
+	setup_paths
+	setup_temp
+	trap cleanup EXIT HUP INT TERM
+	if [ -e "$ROOT/transaction.json" ] || [ -L "$ROOT/transaction.json" ]; then
+		build_install_recovery_plan
+		install_recovery=1
+	else
+		build_install_plan
+		install_recovery=0
+	fi
+	case "$PLAN_FORMAT" in
+		human)
+			printf 'Plan ID: %s\nOperation: %s\nSource: %s\nCommit: %s\n' "$PLAN_ID" "$INSTALL_OPERATION" "$INSTALL_SOURCE" "$INSTALL_COMMIT"
+			printf 'Current generation: %s\n' "$CURRENT_COMMIT"
+			if [ "$install_recovery" -eq 1 ]; then printf 'Recovery: recorded installation transaction\n'; fi
+			while IFS= read -r install_human_action; do printf 'Action: %s\n' "$install_human_action"; done <"$PLAN_HUMAN_ACTIONS"
+			;;
+		actions)
+			/bin/cat "$PLAN_ACTIONS"
+			printf '%s\0' metadata approval-plan-id "$ROOT" bootstrap-approval-id 1 "$PLAN_ID"
+			;;
+	esac
+}
+
+create_install_scaffold() {
+	INSTALL_CREATED=$TEMP_DIR/install-created
+	: >"$INSTALL_CREATED"
+	for install_parent in "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.agents" "$HOME/.agents/skills" "$ROOT"; do
+		if [ -e "$install_parent" ] || [ -L "$install_parent" ]; then
+			safe_dir "$install_parent"
+		else
+			/bin/mkdir -m 700 "$install_parent" || fail 'cannot create an exclusive initial Bootstrap parent'
+			printf '%s\n' "$install_parent" >>"$INSTALL_CREATED"
+		fi
+	done
+	[ ! -e "$LOCK" ] && [ ! -L "$LOCK" ] || fail 'initial Bootstrap lock marker already exists'
+	( set -C; : >"$LOCK" ) || fail 'cannot create the exclusive initial Bootstrap lock marker'
+	/bin/chmod 600 "$LOCK" || fail 'cannot secure initial Bootstrap lock marker'
+	printf '%s\n' "$LOCK" >>"$INSTALL_CREATED"
+}
+
+run_install_locked() {
+	verify_lock_path
+	if [ -e "$ROOT/transaction.json" ] || [ -L "$ROOT/transaction.json" ]; then
+		build_install_recovery_plan
+		[ "$PLAN_ID" = "$INSTALL_APPROVAL" ] || fail 'Bootstrap approval is stale or does not match the locked recovery plan'
+		ACTION_INSTALL_RECOVERY=1
+		run_locked_install_actions
+		return 0
+	fi
+	if [ "${INSTALL_CREATED_INITIAL:-0}" -eq 1 ]; then
+		install_scaffold_valid || fail 'initial Bootstrap scaffold changed before locking'
+		install_source_check
+		INSTALL_LAYOUT=initial
+		CURRENT_COMMIT=none
+		PREVIOUS_COMMIT=''
+		INSTALL_NORMALIZE_CREATED=1
+		write_install_facts "$TEMP_DIR/install-facts.locked"
+		/usr/bin/cmp -s "$TEMP_DIR/install-facts.after" "$TEMP_DIR/install-facts.locked" || fail 'approved initial source or layout changed before locking'
+		INSTALL_NORMALIZE_CREATED=0
+		install_plan_id_from_facts "$TEMP_DIR/install-facts.locked"
+	else
+		build_install_plan
+	fi
+	[ "$PLAN_ID" = "$INSTALL_APPROVAL" ] || fail 'Bootstrap approval is stale or does not match the locked installation plan'
+	ACTION_INSTALL_RECOVERY=0
+	run_locked_install_actions
+}
+
+validate_install_plan_actions() {
+	ACTION_DOMAIN=install
+	ACTION_MODE=validate
+	open_action_stream "$PLAN_ACTIONS"
+	if [ "$ACTION_INSTALL_RECOVERY" -eq 1 ]; then emit_install_recovery_actions; else emit_install_actions; fi
+	finish_action_stream
+	ACTION_MODE=render
+	ACTION_DOMAIN=removal
+}
+
+run_install() {
+	setup_paths
+	setup_temp
+	trap cleanup EXIT HUP INT TERM
+	if [ -e "$ROOT/transaction.json" ] || [ -L "$ROOT/transaction.json" ]; then
+		ACTION_INSTALL_RECOVERY=1
+		build_install_recovery_plan
+	else
+		ACTION_INSTALL_RECOVERY=0
+		build_install_plan
+	fi
+	[ "$PLAN_ID" = "$INSTALL_APPROVAL" ] || fail 'Bootstrap approval is stale before installation lock acquisition'
+	validate_install_plan_actions
+	if [ "${INSTALL_LAYOUT:-}" = initial ] || [ "${INSTALL_LAYOUT:-}" = upgrade ] || [ "${INSTALL_LAYOUT:-}" = scaffold ]; then
+		check_installed_go
+	fi
+	INSTALL_CREATED_INITIAL=0
+	if [ "${INSTALL_LAYOUT:-}" = initial ]; then
+		create_install_scaffold
+		INSTALL_CREATED_INITIAL=1
+	fi
+	private_file "$LOCK"
+	LOCK_IDENTITY=$(/usr/bin/stat -f '%i:%v' "$LOCK" 2>/dev/null) || fail 'cannot inspect Bootstrap lock marker'
+	(
+		fd_identity=$(/usr/bin/stat -L -f '%i:%v' /dev/fd/9 2>/dev/null) || fail 'cannot inspect opened Bootstrap lock'
+		[ "$fd_identity" = "$LOCK_IDENTITY" ] || fail 'Bootstrap lock changed while it was opened'
+		/usr/bin/lockf -s -t 30 9 || fail 'installation could not obtain the Bootstrap lock'
+		trap cleanup EXIT HUP INT TERM
+		run_install_locked
+	) 9<"$LOCK" || fail 'installation could not use the existing Bootstrap lock marker'
+}
+
+install_command() {
+	INSTALL_OPERATION=install
+	INSTALL_SOURCE=''
+	INSTALL_COMMIT=''
+	install_agent=''
+	INSTALL_APPROVAL=''
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--upgrade)
+				[ "$INSTALL_OPERATION" = install ] || fail 'install accepts one --upgrade'
+				INSTALL_OPERATION=upgrade
+				shift ;;
+			--agent)
+				[ "$#" -ge 2 ] && [ -z "$install_agent" ] || fail 'install accepts one --agent'
+				install_agent=$2
+				shift 2 ;;
+			--source)
+				[ "$#" -ge 2 ] && [ -z "$INSTALL_SOURCE" ] || fail 'install accepts one --source'
+				INSTALL_SOURCE=$2
+				shift 2 ;;
+			--commit)
+				[ "$#" -ge 2 ] && [ -z "$INSTALL_COMMIT" ] || fail 'install accepts one --commit'
+				INSTALL_COMMIT=$2
+				valid_sha "$INSTALL_COMMIT" || fail 'install --commit requires a lowercase full SHA'
+				shift 2 ;;
+			--approve)
+				[ "$#" -ge 2 ] && [ -z "$INSTALL_APPROVAL" ] || fail 'install accepts one --approve'
+				INSTALL_APPROVAL=$2
+				valid_digest "$INSTALL_APPROVAL" || fail 'install approval is malformed'
+				shift 2 ;;
+			*) fail 'install argument is not supported' ;;
+		esac
+	done
+	[ "$install_agent" = codex ] && [ -n "$INSTALL_SOURCE" ] && [ -n "$INSTALL_COMMIT" ] && [ -n "$INSTALL_APPROVAL" ] || fail 'install requires --agent codex, --source, --commit, and --approve'
+	run_install
+}
+
+prepare_install_stage() {
+	stage_install_checkout
+	build_install_cli
+	verify_install_source
+	stage_install_payload
+}
+
+stage_install_checkout() {
+	INSTALL_STAGE=$(/usr/bin/mktemp -d "$HOME/.local/share/.forgepilot-stage.XXXXXX") || fail 'cannot create private source staging'
+	INSTALL_OWNS_STAGE=1
+	/bin/chmod 700 "$INSTALL_STAGE" || fail 'cannot secure source staging'
+	INSTALL_STAGE_IDENTITY=$(/usr/bin/stat -f '%d:%i' "$INSTALL_STAGE") || fail 'cannot bind source staging identity'
+	[ "${INSTALL_STAGE_IDENTITY%%:*}" = "$(/usr/bin/stat -f '%d' "$ROOT")" ] || fail 'source staging and managed root are on different filesystems'
+	bootstrap_git clone --no-checkout --no-local -- "$INSTALL_SOURCE" "$INSTALL_STAGE/source" >/dev/null 2>&1 || fail 'cannot clone the approved local source'
+	bootstrap_git -C "$INSTALL_STAGE/source" checkout --detach "$INSTALL_COMMIT" >/dev/null 2>&1 || fail 'cannot check out the approved exact commit'
+	[ "$(bootstrap_git -C "$INSTALL_STAGE/source" rev-parse HEAD)" = "$INSTALL_COMMIT" ] || fail 'staged checkout has the wrong commit'
+	[ "$(bootstrap_git -C "$INSTALL_STAGE/source" rev-parse HEAD^{tree})" = "$INSTALL_TREE" ] || fail 'staged checkout has the wrong source tree'
+	/bin/mkdir -m 700 "$INSTALL_STAGE/bin" "$INSTALL_STAGE/payload" "$INSTALL_STAGE/toolchain" || fail 'cannot prepare private build directories'
+	[ "$(sha256_stdin <"$INSTALL_GO")" = "$INSTALL_GO_HASH" ] || fail 'approved Go toolchain changed before build staging'
+	/bin/cp "$INSTALL_GO" "$INSTALL_STAGE/toolchain/go" || fail 'cannot stage approved Go executable'
+	/bin/chmod 700 "$INSTALL_STAGE/toolchain/go" || fail 'cannot secure staged Go executable'
+	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/go")" = "$INSTALL_GO_HASH" ] || fail 'staged Go executable differs from approved bytes'
+}
+
+build_install_cli() {
+	install_build_path=$INSTALL_STAGE/toolchain:/usr/bin:/bin
+	(
+		cd "$INSTALL_STAGE/source" || exit 1
+		/usr/bin/env -i HOME="$HOME" PATH="$install_build_path" LC_ALL=C \
+			GOROOT="$INSTALL_GOROOT" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOBIN="$INSTALL_STAGE/bin" \
+			"$INSTALL_STAGE/toolchain/go" install -trimpath -buildvcs=false ./cmd/forgepilot
+	) || fail 'approved source CLI build failed'
+	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/go")" = "$INSTALL_GO_HASH" ] || fail 'staged Go executable changed during build'
+}
+
+verify_install_source() {
+	install_build_path=$INSTALL_STAGE/toolchain:/usr/bin:/bin
+	(
+		cd "$INSTALL_STAGE/source" || exit 1
+		/usr/bin/env -i HOME="$HOME" PATH="$install_build_path" LC_ALL=C \
+			GOROOT="$INSTALL_GOROOT" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off /usr/bin/make verify
+	) || fail 'approved source make verify failed'
+	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/go")" = "$INSTALL_GO_HASH" ] || fail 'staged Go executable changed during verification'
+}
+
+stage_install_payload() {
+	for install_exact_leaf in go.mod Makefile scripts/forgepilot-bootstrap skills/codex/forgepilot-onboarding/SKILL.md docs/release/onboarding.md; do
+		[ -f "$INSTALL_STAGE/source/$install_exact_leaf" ] && [ ! -L "$INSTALL_STAGE/source/$install_exact_leaf" ] || fail 'approved source payload changed during verification'
+		install_committed_hash=$(bootstrap_git -C "$INSTALL_STAGE/source" show "$INSTALL_COMMIT:$install_exact_leaf" | sha256_stdin) || fail 'cannot recheck committed payload bytes'
+		install_staged_hash=$(sha256_stdin <"$INSTALL_STAGE/source/$install_exact_leaf") || fail 'cannot hash staged payload bytes'
+		[ "$install_committed_hash" = "$install_staged_hash" ] || fail 'approved source payload changed during verification'
+	done
+	/bin/mkdir -m 700 "$INSTALL_STAGE/committed" || fail 'cannot prepare exact skill comparison'
+	bootstrap_git -C "$INSTALL_STAGE/source" archive --format=tar -o "$INSTALL_STAGE/committed-skill.tar" "$INSTALL_COMMIT" skills/codex/forgepilot-onboarding || fail 'cannot archive committed skill tree'
+	/usr/bin/tar -xf "$INSTALL_STAGE/committed-skill.tar" -C "$INSTALL_STAGE/committed" || fail 'cannot inspect committed skill tree'
+	/usr/bin/diff -qr "$INSTALL_STAGE/committed/skills/codex/forgepilot-onboarding" "$INSTALL_STAGE/source/skills/codex/forgepilot-onboarding" >/dev/null || fail 'approved skill tree changed during verification'
+	"$INSTALL_STAGE/bin/forgepilot" --help >/dev/null || fail 'staged CLI startup failed'
+	"$INSTALL_STAGE/source/scripts/forgepilot-bootstrap" --help >/dev/null || fail 'staged helper startup failed'
+	/bin/mkdir -p "$INSTALL_STAGE/payload/bin" "$INSTALL_STAGE/payload/libexec" \
+		"$INSTALL_STAGE/payload/skills/codex" "$INSTALL_STAGE/payload/docs/release" || fail 'cannot stage generation payload'
+	/bin/cp "$INSTALL_STAGE/bin/forgepilot" "$INSTALL_STAGE/payload/bin/forgepilot" || fail 'cannot stage built CLI'
+	/bin/cp "$INSTALL_STAGE/source/scripts/forgepilot-bootstrap" "$INSTALL_STAGE/payload/libexec/forgepilot-bootstrap" || fail 'cannot stage matching helper'
+	/bin/cp -pR "$INSTALL_STAGE/source/skills/codex/forgepilot-onboarding" "$INSTALL_STAGE/payload/skills/codex/forgepilot-onboarding" || fail 'cannot stage matching Codex skill'
+	/bin/cp "$INSTALL_STAGE/source/docs/release/onboarding.md" "$INSTALL_STAGE/payload/docs/release/onboarding.md" || fail 'cannot stage matching onboarding procedure'
+	/bin/chmod 700 "$INSTALL_STAGE/payload/bin/forgepilot" "$INSTALL_STAGE/payload/libexec/forgepilot-bootstrap" || fail 'cannot secure staged commands'
+	INSTALL_NEW_DIGEST=$(payload_digest "$INSTALL_STAGE/payload") || fail 'cannot verify staged generation payload'
+}
+
+write_install_transaction() {
+	INSTALL_OLD_CURRENT=${CURRENT_COMMIT:-none}
+	INSTALL_OLD_PREVIOUS=${PREVIOUS_COMMIT:-none}
+	INSTALL_OLD_MANIFEST=none
+	if [ -f "$MANIFEST" ]; then INSTALL_OLD_MANIFEST=$(sha256_stdin <"$MANIFEST") || fail 'cannot bind prior manifest'; fi
+	INSTALL_RETENTION_COUNT=0
+	INSTALL_RETENTION_DIGEST=$(printf '' | sha256_stdin) || fail 'cannot bind empty retention state'
+	if [ -d "$RETENTION_DIR" ]; then
+		validate_retention_store
+		INSTALL_RETENTION_COUNT=$RETENTION_COUNT
+		INSTALL_RETENTION_DIGEST=$RETENTION_DIGEST
+	fi
+	INSTALL_SOURCE_HASH=$(printf '%s' "$INSTALL_SOURCE" | sha256_stdin) || fail 'cannot bind approved source path'
+	INSTALL_STAGE_NAME=${INSTALL_STAGE##*/}
+	INSTALL_TXN_PHASE=prepared
+	INSTALL_TRANSACTION_ACTIVE=1
+	write_install_transaction_phase
+}
+
+write_install_transaction_phase() {
+	install_pending_transaction=$ROOT/.transaction.new
+	[ ! -e "$install_pending_transaction" ] && [ ! -L "$install_pending_transaction" ] || fail 'installation transaction staging path is occupied'
+	( set -C; printf '{"schema_version":1,"operation":"%s","phase":"%s","source_sha256":"%s","source_commit":"%s","source_tree":"%s","payload_digest":"%s","old_current":"%s","old_previous":"%s","old_manifest_sha256":"%s","retention_sha256":"%s","retention_count":%s,"stage":"%s","stage_identity":"%s"}\n' \
+		"$INSTALL_OPERATION" "$INSTALL_TXN_PHASE" "$INSTALL_SOURCE_HASH" "$INSTALL_COMMIT" "$INSTALL_TREE" "$INSTALL_NEW_DIGEST" "$INSTALL_OLD_CURRENT" "$INSTALL_OLD_PREVIOUS" "$INSTALL_OLD_MANIFEST" "$INSTALL_RETENTION_DIGEST" "$INSTALL_RETENTION_COUNT" "$INSTALL_STAGE_NAME" "$INSTALL_STAGE_IDENTITY" >"$install_pending_transaction" ) || fail 'cannot write installation transaction'
+	PENDING_TRANSACTION=$install_pending_transaction
+	/bin/chmod 600 "$PENDING_TRANSACTION" || fail 'cannot secure installation transaction'
+	verify_lock_path
+	/bin/mv "$PENDING_TRANSACTION" "$ROOT/transaction.json" || fail 'cannot publish installation transaction'
+	PENDING_TRANSACTION=''
+}
+
+read_install_transaction() {
+	private_file "$ROOT/transaction.json"
+	install_transaction_line=$(/bin/cat "$ROOT/transaction.json") || fail 'cannot read installation transaction'
+	TXN_INSTALL_OPERATION=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"operation":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_PHASE=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"phase":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_SOURCE=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"source_sha256":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_COMMIT=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"source_commit":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_TREE=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"source_tree":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_DIGEST=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"payload_digest":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_OLD_CURRENT=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"old_current":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_OLD_PREVIOUS=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"old_previous":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_OLD_MANIFEST=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"old_manifest_sha256":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_RETENTION=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"retention_sha256":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_RETENTION_COUNT=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"retention_count":\([0-9]*\).*/\1/p')
+	TXN_INSTALL_STAGE=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"stage":"\([^"]*\)".*/\1/p')
+	TXN_INSTALL_STAGE_IDENTITY=$(printf '%s\n' "$install_transaction_line" | /usr/bin/sed -n 's/.*"stage_identity":"\([^"]*\)"}.*/\1/p')
+	case "$TXN_INSTALL_OPERATION" in install|upgrade) ;; *) fail 'transaction is not an installation operation' ;; esac
+	case "$TXN_INSTALL_PHASE" in prepared|switching) ;; *) fail 'installation transaction has an unknown phase' ;; esac
+	valid_sha "$TXN_INSTALL_COMMIT" && valid_sha "$TXN_INSTALL_TREE" && valid_digest "$TXN_INSTALL_DIGEST" || fail 'installation transaction has an invalid generation tuple'
+	for install_transaction_hash in "$TXN_INSTALL_SOURCE" "$TXN_INSTALL_RETENTION"; do
+		case "$install_transaction_hash" in *[!0123456789abcdef]*) fail 'installation transaction has an invalid hash' ;; esac
+		[ "${#install_transaction_hash}" -eq 64 ] || fail 'installation transaction has an invalid hash'
+	done
+	for install_old_id in "$TXN_INSTALL_OLD_CURRENT" "$TXN_INSTALL_OLD_PREVIOUS"; do
+		[ "$install_old_id" = none ] || valid_sha "$install_old_id" || fail 'installation transaction has an invalid old generation'
+	done
+	if [ "$TXN_INSTALL_OLD_MANIFEST" != none ]; then
+		case "$TXN_INSTALL_OLD_MANIFEST" in *[!0123456789abcdef]*) fail 'installation transaction has an invalid old manifest hash' ;; esac
+		[ "${#TXN_INSTALL_OLD_MANIFEST}" -eq 64 ] || fail 'installation transaction has an invalid old manifest hash'
+	fi
+	case "$TXN_INSTALL_RETENTION_COUNT" in ''|*[!0-9]*) fail 'installation transaction has an invalid retention count' ;; esac
+	printf '%s\n' "$TXN_INSTALL_STAGE" | /usr/bin/awk '/^\.forgepilot-stage\.[A-Za-z0-9]{6}$/ { found=1 } END { exit !found }' || fail 'installation transaction has an invalid stage path'
+	case "$TXN_INSTALL_STAGE_IDENTITY" in *[!0-9:]*) fail 'installation transaction has an invalid stage identity' ;; esac
+	case "$TXN_INSTALL_STAGE_IDENTITY" in *:*) [ -n "${TXN_INSTALL_STAGE_IDENTITY%:*}" ] && [ -n "${TXN_INSTALL_STAGE_IDENTITY#*:}" ] || fail 'installation transaction has an incomplete stage identity' ;; *) fail 'installation transaction has an invalid stage identity' ;; esac
+	if [ "$TXN_INSTALL_OPERATION" = install ]; then
+		[ "$TXN_INSTALL_OLD_CURRENT" = none ] && [ "$TXN_INSTALL_OLD_PREVIOUS" = none ] && [ "$TXN_INSTALL_OLD_MANIFEST" = none ] || fail 'initial installation transaction has old state'
+	else
+		[ "$TXN_INSTALL_OLD_CURRENT" != none ] && [ "$TXN_INSTALL_OLD_MANIFEST" != none ] && [ "$TXN_INSTALL_OLD_CURRENT" != "$TXN_INSTALL_COMMIT" ] || fail 'upgrade transaction has invalid old state'
+	fi
+	install_transaction_expected=$(printf '{"schema_version":1,"operation":"%s","phase":"%s","source_sha256":"%s","source_commit":"%s","source_tree":"%s","payload_digest":"%s","old_current":"%s","old_previous":"%s","old_manifest_sha256":"%s","retention_sha256":"%s","retention_count":%s,"stage":"%s","stage_identity":"%s"}' \
+		"$TXN_INSTALL_OPERATION" "$TXN_INSTALL_PHASE" "$TXN_INSTALL_SOURCE" "$TXN_INSTALL_COMMIT" "$TXN_INSTALL_TREE" "$TXN_INSTALL_DIGEST" "$TXN_INSTALL_OLD_CURRENT" "$TXN_INSTALL_OLD_PREVIOUS" "$TXN_INSTALL_OLD_MANIFEST" "$TXN_INSTALL_RETENTION" "$TXN_INSTALL_RETENTION_COUNT" "$TXN_INSTALL_STAGE" "$TXN_INSTALL_STAGE_IDENTITY")
+	[ "$install_transaction_line" = "$install_transaction_expected" ] || fail 'installation transaction is malformed'
+}
+
+verify_install_transaction_state() {
+	read_install_transaction
+	[ "$TXN_INSTALL_OPERATION" = "$INSTALL_OPERATION" ] && [ "$TXN_INSTALL_COMMIT" = "$INSTALL_COMMIT" ] || fail 'only the matching installation operation may recover the transaction'
+	[ "$(printf '%s' "$INSTALL_SOURCE" | sha256_stdin)" = "$TXN_INSTALL_SOURCE" ] || fail 'installation recovery source input changed'
+	private_dir "$ROOT"
+	private_file "$LOCK"
+	for install_parent in "$HOME" "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.agents" "$HOME/.agents/skills"; do safe_dir "$install_parent"; done
+	[ ! -e "$ROOT/removal" ] && [ ! -L "$ROOT/removal" ] || fail 'installation recovery found removal staging'
+	INSTALL_STAGE=$HOME/.local/share/$TXN_INSTALL_STAGE
+	INSTALL_STAGE_IDENTITY=$TXN_INSTALL_STAGE_IDENTITY
+	if [ -e "$INSTALL_STAGE" ] || [ -L "$INSTALL_STAGE" ]; then
+		private_dir "$INSTALL_STAGE"
+		[ "$(/usr/bin/stat -f '%d:%i' "$INSTALL_STAGE")" = "$TXN_INSTALL_STAGE_IDENTITY" ] || fail 'installation stage path was substituted'
+	fi
+	INSTALL_NEW_PUBLISHED=0
+	INSTALL_NEW_TRUST=absent
+	if [ -e "$VERSIONS" ] || [ -L "$VERSIONS" ]; then private_dir "$VERSIONS"; fi
+	if [ -e "$VERSIONS/$TXN_INSTALL_COMMIT" ] || [ -L "$VERSIONS/$TXN_INSTALL_COMMIT" ]; then
+		INSTALL_NEW_PUBLISHED=1
+		INSTALL_NEW_TRUST=untrusted
+		if [ -d "$VERSIONS/$TXN_INSTALL_COMMIT" ] && [ ! -L "$VERSIONS/$TXN_INSTALL_COMMIT" ]; then
+			if install_checked_digest=$(payload_digest "$VERSIONS/$TXN_INSTALL_COMMIT" 2>/dev/null); then
+				[ "$install_checked_digest" != "$TXN_INSTALL_DIGEST" ] || INSTALL_NEW_TRUST=verified
+			fi
+		fi
+	else
+		if [ -e "$INSTALL_STAGE/payload" ] || [ -L "$INSTALL_STAGE/payload" ]; then
+			INSTALL_NEW_TRUST=untrusted
+			if [ -d "$INSTALL_STAGE/payload" ] && [ ! -L "$INSTALL_STAGE/payload" ]; then
+				if install_checked_digest=$(payload_digest "$INSTALL_STAGE/payload" 2>/dev/null); then
+					[ "$install_checked_digest" != "$TXN_INSTALL_DIGEST" ] || INSTALL_NEW_TRUST=verified
+				fi
+			fi
+		fi
+	fi
+	[ ! -e "$INSTALL_STAGE/payload" ] && [ ! -L "$INSTALL_STAGE/payload" ] || [ "$INSTALL_NEW_PUBLISHED" -eq 0 ] || fail 'generation exists in both stage and versions'
+	INSTALL_OLD_TUPLES=$TEMP_DIR/install-old-tuples
+	INSTALL_FINAL_TUPLES=$TEMP_DIR/install-final-tuples
+	: >"$INSTALL_OLD_TUPLES"
+	: >"$INSTALL_FINAL_TUPLES"
+	if [ -d "$VERSIONS" ]; then
+		/usr/bin/find -s "$VERSIONS" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/install-recovery-versions" || fail 'cannot inventory installation generations'
+		while IFS= read -r install_version_path; do
+			install_version_id=${install_version_path##*/}
+			valid_sha "$install_version_id" || fail 'installation found an unknown version path'
+			if [ "$install_version_id" = "$TXN_INSTALL_COMMIT" ]; then
+				install_version_digest=$TXN_INSTALL_DIGEST
+			else
+				install_version_digest=$(payload_digest "$install_version_path") || fail 'installation found a changed generation'
+			fi
+			printf '%s\t%s\n' "$install_version_id" "$install_version_digest" >>"$INSTALL_FINAL_TUPLES"
+			if [ "$install_version_id" != "$TXN_INSTALL_COMMIT" ]; then printf '%s\t%s\n' "$install_version_id" "$install_version_digest" >>"$INSTALL_OLD_TUPLES"; fi
+		done <"$TEMP_DIR/install-recovery-versions"
+	fi
+	if [ "$INSTALL_NEW_PUBLISHED" -eq 0 ]; then
+		printf '%s\t%s\n' "$TXN_INSTALL_COMMIT" "$TXN_INSTALL_DIGEST" >>"$INSTALL_FINAL_TUPLES"
+	fi
+	if [ "$TXN_INSTALL_OPERATION" = upgrade ]; then
+		CURRENT_COMMIT=$TXN_INSTALL_OLD_CURRENT
+		PREVIOUS_COMMIT=''
+		if [ "$TXN_INSTALL_OLD_PREVIOUS" != none ]; then PREVIOUS_COMMIT=$TXN_INSTALL_OLD_PREVIOUS; fi
+		write_manifest_from_tuples "$INSTALL_OLD_TUPLES" "$TEMP_DIR/install-old-manifest"
+		[ "$(sha256_stdin <"$TEMP_DIR/install-old-manifest")" = "$TXN_INSTALL_OLD_MANIFEST" ] || fail 'recorded old generation manifest changed'
+	fi
+	CURRENT_COMMIT=$TXN_INSTALL_COMMIT
+	PREVIOUS_COMMIT=''
+	if [ "$TXN_INSTALL_OLD_CURRENT" != none ]; then PREVIOUS_COMMIT=$TXN_INSTALL_OLD_CURRENT; fi
+	write_manifest_from_tuples "$INSTALL_FINAL_TUPLES" "$TEMP_DIR/install-final-manifest"
+	if [ -e "$MANIFEST" ] || [ -L "$MANIFEST" ]; then
+		private_file "$MANIFEST"
+		if [ "$TXN_INSTALL_OPERATION" = upgrade ] && /usr/bin/cmp -s "$MANIFEST" "$TEMP_DIR/install-old-manifest"; then
+			INSTALL_MANIFEST_PHASE=old
+		elif /usr/bin/cmp -s "$MANIFEST" "$TEMP_DIR/install-final-manifest"; then
+			INSTALL_MANIFEST_PHASE=final
+		else
+			fail 'installation manifest is neither recorded old nor final state'
+		fi
+	else
+		[ "$TXN_INSTALL_OPERATION" = install ] || fail 'upgrade manifest disappeared during recovery'
+		INSTALL_MANIFEST_PHASE=absent
+	fi
+	if [ -d "$RETENTION_DIR" ]; then
+		private_dir "$ROOT/retention"
+		private_dir "$RETENTION_DIR"
+		validate_retention_store
+		[ "$RETENTION_DIGEST" = "$TXN_INSTALL_RETENTION" ] && [ "$RETENTION_COUNT" = "$TXN_INSTALL_RETENTION_COUNT" ] || fail 'retention changed during installation'
+	else
+		[ "$TXN_INSTALL_OPERATION" = install ] && [ "$TXN_INSTALL_RETENTION_COUNT" = 0 ] || fail 'installation retention store is missing'
+	fi
+	if [ -e "$ROOT/current" ] || [ -L "$ROOT/current" ]; then
+		pointer_commit "$ROOT/current"
+		case "$pointer_id" in "$TXN_INSTALL_COMMIT"|"$TXN_INSTALL_OLD_CURRENT") ;; *) fail 'current pointer escaped recorded installation identities' ;; esac
+		INSTALL_CURRENT=$pointer_id
+	else
+		[ "$TXN_INSTALL_OPERATION" = install ] || fail 'upgrade current pointer disappeared'
+		INSTALL_CURRENT=none
+	fi
+	if [ -e "$ROOT/previous" ] || [ -L "$ROOT/previous" ]; then
+		pointer_commit "$ROOT/previous"
+		case "$pointer_id" in "$TXN_INSTALL_OLD_CURRENT"|"$TXN_INSTALL_OLD_PREVIOUS") ;; *) fail 'previous pointer escaped recorded installation identities' ;; esac
+		INSTALL_PREVIOUS=$pointer_id
+	else
+		INSTALL_PREVIOUS=none
+	fi
+	if [ "$INSTALL_MANIFEST_PHASE" = final ]; then
+		if [ "$INSTALL_NEW_TRUST" = verified ]; then
+			[ "$INSTALL_CURRENT" = "$TXN_INSTALL_COMMIT" ] && [ "$INSTALL_PREVIOUS" = "$TXN_INSTALL_OLD_CURRENT" ] || fail 'final manifest has incomplete generation pointers'
+		fi
+	fi
+	if [ "$TXN_INSTALL_PHASE" = prepared ] && [ "$INSTALL_CURRENT" = "$TXN_INSTALL_COMMIT" ]; then fail 'prepared transaction cannot have switched current'; fi
+	INSTALL_LINK_COUNT=0
+	for install_external in "$HOME/.local/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding"; do
+		case "$install_external" in
+			*/bin/forgepilot) install_external_target=$ROOT/current/bin/forgepilot ;;
+			*/bin/forgepilot-bootstrap) install_external_target=$ROOT/current/libexec/forgepilot-bootstrap ;;
+			*) install_external_target=$ROOT/current/skills/codex/forgepilot-onboarding ;;
+		esac
+		if [ -e "$install_external" ] || [ -L "$install_external" ]; then
+			stable_link "$install_external" "$install_external_target"
+			INSTALL_LINK_COUNT=$((INSTALL_LINK_COUNT + 1))
+		else
+			[ "$TXN_INSTALL_OPERATION" = install ] || fail 'upgrade lost a stable entrypoint'
+		fi
+	done
+	INSTALL_RECOVERY_REPAIR=0
+	if [ "$TXN_INSTALL_OPERATION" = install ] && [ "$INSTALL_NEW_TRUST" != verified ] && [ "$INSTALL_NEW_PUBLISHED" -eq 0 ] && [ "$INSTALL_CURRENT" = none ] && [ "$INSTALL_LINK_COUNT" -eq 0 ]; then
+		INSTALL_RECOVERY_REPAIR=1
+	fi
+	for install_temp_pointer in current previous; do
+		install_temp_path=$ROOT/.$install_temp_pointer.new
+		if [ -e "$install_temp_path" ] || [ -L "$install_temp_path" ]; then
+			pointer_commit "$install_temp_path"
+			if [ "$install_temp_pointer" = current ]; then
+				case "$pointer_id" in "$TXN_INSTALL_COMMIT"|"$TXN_INSTALL_OLD_CURRENT") ;; *) fail 'staged current pointer changed' ;; esac
+			else
+				case "$pointer_id" in "$TXN_INSTALL_OLD_CURRENT"|"$TXN_INSTALL_OLD_PREVIOUS") ;; *) fail 'staged previous pointer changed' ;; esac
+			fi
+		fi
+	done
+	for install_temp_file in "$ROOT/.transaction.new" "$ROOT/.manifest.new"; do
+		if [ -e "$install_temp_file" ] || [ -L "$install_temp_file" ]; then private_file "$install_temp_file"; fi
+	done
+	/usr/bin/find -s "$ROOT" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/install-root-entries" || fail 'cannot inspect installation root inventory'
+	while IFS= read -r install_root_entry; do
+		case "${install_root_entry##*/}" in lock|transaction.json|versions|retention|manifest.json|current|previous|.current.new|.previous.new|.transaction.new|.manifest.new) ;;
+			*) fail 'installation root contains an unrecorded path' ;;
+		esac
+	done <"$TEMP_DIR/install-root-entries"
+}
+
+write_install_recovery_facts() {
+	install_recovery_facts=$1
+	: >"$install_recovery_facts"
+	printf '%s\0' "$TXN_INSTALL_OPERATION" "$TXN_INSTALL_PHASE" "$INSTALL_NEW_PUBLISHED" "$INSTALL_NEW_TRUST" "$INSTALL_RECOVERY_REPAIR" "$INSTALL_MANIFEST_PHASE" "$INSTALL_CURRENT" "$INSTALL_PREVIOUS" >>"$install_recovery_facts"
+	if [ "$INSTALL_RECOVERY_REPAIR" -eq 1 ]; then
+		printf '%s\0' "$INSTALL_CANONICAL_SOURCE" "$INSTALL_TREE" "$INSTALL_GO" "$INSTALL_GO_HASH" "$INSTALL_REQUIRED_GO" >>"$install_recovery_facts"
+		append_path_fact "$install_recovery_facts" "$INSTALL_SOURCE"
+		append_path_fact "$install_recovery_facts" "$INSTALL_GIT_DIR"
+		append_path_fact "$install_recovery_facts" "$INSTALL_GO"
+	fi
+	for install_recovery_path in "$HOME" "$HOME/.local" "$HOME/.local/share" "$HOME/.local/bin" "$HOME/.agents" "$HOME/.agents/skills" "$ROOT" "$LOCK" "$ROOT/transaction.json" "$ROOT/.transaction.new" "$VERSIONS" "$ROOT/retention" "$RETENTION_DIR" "$MANIFEST" "$ROOT/.manifest.new" "$ROOT/current" "$ROOT/.current.new" "$ROOT/previous" "$ROOT/.previous.new" "$HOME/.local/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding" "$INSTALL_STAGE" "$INSTALL_STAGE/payload"; do
+		append_optional_path_fact "$install_recovery_facts" "$install_recovery_path"
+		if [ -f "$install_recovery_path" ] && [ ! -L "$install_recovery_path" ]; then
+			printf '%s\0%s\0' "$install_recovery_path" "$(sha256_stdin <"$install_recovery_path")" >>"$install_recovery_facts"
+		fi
+	done
+	for install_recovery_list in "$TEMP_DIR/install-root-entries" "$TEMP_DIR/install-recovery-versions" "$TEMP_DIR/retention-list"; do
+		[ -f "$install_recovery_list" ] || continue
+		while IFS= read -r install_recovery_path; do append_path_fact "$install_recovery_facts" "$install_recovery_path"; done <"$install_recovery_list"
+	done
+	if [ -f "$INSTALL_FINAL_TUPLES" ]; then /bin/cat "$INSTALL_FINAL_TUPLES" >>"$install_recovery_facts"; fi
+}
+
+build_install_recovery_plan() {
+	verify_install_transaction_state
+	if [ "$INSTALL_RECOVERY_REPAIR" -eq 1 ]; then
+		install_source_check
+		[ "$INSTALL_TREE" = "$TXN_INSTALL_TREE" ] || fail 'repair source tree differs from recorded transaction'
+	fi
+	write_install_recovery_facts "$TEMP_DIR/install-recovery-facts.before"
+	verify_install_transaction_state
+	if [ "$INSTALL_RECOVERY_REPAIR" -eq 1 ]; then
+		install_source_check
+		[ "$INSTALL_TREE" = "$TXN_INSTALL_TREE" ] || fail 'repair source tree differs from recorded transaction'
+	fi
+	write_install_recovery_facts "$TEMP_DIR/install-recovery-facts.after"
+	/usr/bin/cmp -s "$TEMP_DIR/install-recovery-facts.before" "$TEMP_DIR/install-recovery-facts.after" || fail 'installation recovery state changed during planning'
+	PLAN_ACTIONS=$TEMP_DIR/install-recovery-actions
+	PLAN_HUMAN_ACTIONS=$TEMP_DIR/install-recovery-human-actions
+	printf '%s\0' forgepilot-bootstrap-plan-v1 >"$PLAN_ACTIONS"
+	: >"$PLAN_HUMAN_ACTIONS"
+	emit_install_recovery_actions
+	{
+		printf '%s\0' forgepilot-bootstrap-plan-id-v1 recovery "$INSTALL_OPERATION" "$INSTALL_SOURCE" "$INSTALL_COMMIT"
+		/bin/cat "$ROOT/transaction.json" "$TEMP_DIR/install-recovery-facts.after" "$PLAN_ACTIONS"
+	} >"$TEMP_DIR/install-recovery-plan-material"
+	PLAN_ID=sha256:$(sha256_stdin <"$TEMP_DIR/install-recovery-plan-material") || fail 'cannot identify installation recovery plan'
+}
+
+emit_install_recovery_actions() {
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" inspect inspect-install-transaction "$ROOT" read-recorded-state 'inspect exact recorded installation transaction' "$TXN_INSTALL_OPERATION" "$TXN_INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" lock acquire-bootstrap-lock "$ROOT" exclusive-bootstrap-lock 'acquire Bootstrap exclusive lock' "$LOCK"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" revalidate compare-install-recovery "$ROOT" compare-recorded-state 'revalidate recorded paths and payload' "$TXN_INSTALL_DIGEST"
+	if [ "$INSTALL_NEW_TRUST" = verified ]; then
+		emit_install_recovery_publication
+	elif [ "$INSTALL_RECOVERY_REPAIR" -eq 1 ]; then
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" verify check-go-compatibility "$INSTALL_GO" run-approved-toolchain-version 'check the approved Go version against committed go.mod' "$INSTALL_REQUIRED_GO" "$INSTALL_GO_HASH"
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" stage repair-exact-payload "$ROOT" rebuild-recorded-tuple 'rebuild exact source and require recorded payload digest' "$TXN_INSTALL_COMMIT" "$TXN_INSTALL_DIGEST"
+		emit_install_recovery_publication
+	elif [ "$INSTALL_OPERATION" = install ]; then
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" contain exact-install-links "$ROOT" retain-install-transaction 'remove only matching initial entrypoints and retain transaction' "$TXN_INSTALL_COMMIT"
+	else
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" restore recorded-old-pointers "$ROOT" restore-old-selection 'restore recorded old generation selection' "$TXN_INSTALL_OLD_CURRENT"
+	fi
+}
+
+emit_install_recovery_publication() {
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-generation "$ROOT" atomic-generation-publication 'publish the recorded generation' "$TXN_INSTALL_COMMIT"
+	if [ "$INSTALL_OPERATION" = install ]; then
+		append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-stable-links "$ROOT" publish-generation-links 'publish the three recorded entrypoints' "$HOME/.local/bin/forgepilot" "$ROOT/current/bin/forgepilot" "$HOME/.local/bin/forgepilot-bootstrap" "$ROOT/current/libexec/forgepilot-bootstrap" "$HOME/.agents/skills/forgepilot-onboarding" "$ROOT/current/skills/codex/forgepilot-onboarding"
+	fi
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish switch-current "$ROOT" atomic-current-switch 'finish the recorded current selection' "$TXN_INSTALL_COMMIT"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" publish publish-manifest "$ROOT" atomic-manifest-replacement 'publish the recorded generation manifest' "$MANIFEST"
+	append_plan_action "$PLAN_ACTIONS" "$PLAN_HUMAN_ACTIONS" finalize remove-transaction "$ROOT" remove-transaction 'remove completed installation transaction' "$ROOT/transaction.json"
+}
+
+record_install_action() {
+	verify_lock_path
+	if [ "$INSTALL_LAYOUT" = initial ] || [ "$INSTALL_LAYOUT" = scaffold ]; then
+		install_scaffold_valid || fail 'initial scaffold changed during source verification'
+	else
+		validate_layout
+	fi
+	[ ! -e "$VERSIONS/$INSTALL_COMMIT" ] && [ ! -L "$VERSIONS/$INSTALL_COMMIT" ] || fail 'the source commit already has an installed generation'
+	write_install_transaction
+}
+
+execute_install_action() {
+	install_action_phase=$1
+	install_action_id=$2
+	install_action_effect=$3
+	shift 3
+	case "$install_action_phase:$install_action_id:$install_action_effect" in
+		inspect:inspect-source:read-exact-source) [ "$#" -eq 3 ] && [ "$1" = "$INSTALL_COMMIT" ] && [ "$2" = "$INSTALL_TREE" ] && [ "$3" = "$INSTALL_GO_HASH" ] || fail 'source inspection action changed'; install_source_check ;;
+		inspect:inspect-install-transaction:read-recorded-state) [ "$#" -eq 2 ] && [ "$1" = "$TXN_INSTALL_OPERATION" ] && [ "$2" = "$TXN_INSTALL_COMMIT" ] || fail 'recorded inspection action changed'; verify_install_transaction_state ;;
+		inspect:exact-generation-installed:no-op) [ "$#" -eq 1 ] && [ "$1" = "$INSTALL_COMMIT" ] || fail 'idempotent action changed'; validate_layout; printf 'install: exact generation already current\n' ;;
+		verify:check-go-compatibility:run-approved-toolchain-version) [ "$#" -eq 2 ] && [ "$1" = "$INSTALL_REQUIRED_GO" ] && [ "$2" = "$INSTALL_GO_HASH" ] || fail 'approved toolchain action changed'; check_installed_go ;;
+		lock:acquire-bootstrap-lock:exclusive-bootstrap-lock) [ "$#" -eq 1 ] && [ "$1" = "$LOCK" ] || fail 'install lock action changed'; verify_lock_path ;;
+		revalidate:compare-install-recovery:compare-recorded-state) [ "$#" -eq 1 ] && [ "$1" = "$TXN_INSTALL_DIGEST" ] || fail 'recovery state action changed'; verify_install_transaction_state ;;
+		stage:detached-exact-checkout:checkout-exact-source) [ "$#" -eq 2 ] && [ "$1" = "$INSTALL_SOURCE" ] && [ "$2" = "$INSTALL_COMMIT" ] || fail 'checkout action changed'; stage_install_checkout ;;
+		verify:build-cli:user-owned-gobin-build) [ "$#" -eq 2 ] && [ "$1" = "$INSTALL_GO" ] && [ "$2" = "$INSTALL_COMMIT" ] || fail 'CLI build action changed'; build_install_cli ;;
+		verify:source-make-verify:run-source-make-verify) [ "$#" -eq 1 ] && [ "$1" = "$INSTALL_COMMIT" ] || fail 'source verification action changed'; verify_install_source ;;
+		verify:payload:verify-generation-payload) [ "$#" -eq 1 ] && [ "$1" = "$INSTALL_COMMIT" ] || fail 'payload action changed'; stage_install_payload ;;
+		transaction:record-install:atomic-install-transaction) [ "$#" -eq 2 ] && [ "$1" = "$INSTALL_OPERATION" ] && [ "$2" = "$INSTALL_COMMIT" ] || fail 'installation transaction action changed'; record_install_action ;;
+		stage:repair-exact-payload:rebuild-recorded-tuple) [ "$#" -eq 2 ] && [ "$1" = "$TXN_INSTALL_COMMIT" ] && [ "$2" = "$TXN_INSTALL_DIGEST" ] || fail 'recorded repair action changed'; prepare_initial_repair ;;
+		publish:publish-generation:atomic-generation-publication) [ "$#" -eq 1 ] && [ "$1" = "$INSTALL_COMMIT" ] || fail 'generation publication action changed'; publish_install_generation ;;
+		publish:publish-stable-links:publish-generation-links)
+			[ "$#" -eq 6 ] && [ "$1" = "$HOME/.local/bin/forgepilot" ] && [ "$2" = "$ROOT/current/bin/forgepilot" ] && [ "$3" = "$HOME/.local/bin/forgepilot-bootstrap" ] && [ "$4" = "$ROOT/current/libexec/forgepilot-bootstrap" ] && [ "$5" = "$HOME/.agents/skills/forgepilot-onboarding" ] && [ "$6" = "$ROOT/current/skills/codex/forgepilot-onboarding" ] || fail 'stable link action changed'
+			publish_install_links "$@" ;;
+		publish:switch-current:atomic-current-switch) [ "$#" -eq 1 ] && [ "$1" = "$INSTALL_COMMIT" ] || fail 'current switch action changed'; switch_install_current ;;
+		publish:publish-manifest:atomic-manifest-replacement) [ "$#" -eq 1 ] && [ "$1" = "$MANIFEST" ] || fail 'manifest publication action changed'; publish_install_final_manifest ;;
+		finalize:remove-transaction:remove-transaction) [ "$#" -eq 1 ] && [ "$1" = "$ROOT/transaction.json" ] || fail 'transaction finalization action changed'; finalize_install_transaction ;;
+		contain:exact-install-links:retain-install-transaction) [ "$#" -eq 1 ] && [ "$1" = "$TXN_INSTALL_COMMIT" ] || fail 'containment action changed'; contain_initial_install ;;
+		restore:recorded-old-pointers:restore-old-selection) [ "$#" -eq 1 ] && [ "$1" = "$TXN_INSTALL_OLD_CURRENT" ] || fail 'restoration action changed'; restore_upgrade_selection ;;
+		*) fail 'Bootstrap action command is not allowed for installation' ;;
+	esac
+}
+
+run_locked_install_actions() {
+	ACTION_DOMAIN=install
+	for ACTION_MODE in validate execute; do
+		open_action_stream "$PLAN_ACTIONS"
+		if [ "$ACTION_INSTALL_RECOVERY" -eq 1 ]; then emit_install_recovery_actions; else emit_install_actions; fi
+		finish_action_stream
+	done
+	ACTION_MODE=render
+	ACTION_DOMAIN=removal
+}
+
+publish_install_manifest() {
+	INSTALL_TUPLES=$TEMP_DIR/install-manifest-tuples
+	: >"$INSTALL_TUPLES"
+	/usr/bin/find -s "$VERSIONS" -mindepth 1 -maxdepth 1 -print >"$TEMP_DIR/install-version-list" || fail 'cannot inventory published generations'
+	while IFS= read -r install_generation_path; do
+		install_generation_id=${install_generation_path##*/}
+		valid_sha "$install_generation_id" || fail 'published generation has an invalid identity'
+		install_generation_digest=$(payload_digest "$install_generation_path") || fail 'published generation payload changed'
+		printf '%s\t%s\n' "$install_generation_id" "$install_generation_digest" >>"$INSTALL_TUPLES"
+	done <"$TEMP_DIR/install-version-list"
+	install_pending_manifest=$ROOT/.manifest.new
+	[ ! -e "$install_pending_manifest" ] && [ ! -L "$install_pending_manifest" ] || fail 'generation manifest staging path is occupied'
+	( set -C; : >"$install_pending_manifest" ) || fail 'cannot stage generation manifest'
+	PENDING_MANIFEST=$install_pending_manifest
+	write_manifest_from_tuples "$INSTALL_TUPLES" "$PENDING_MANIFEST"
+	/bin/chmod 600 "$PENDING_MANIFEST" || fail 'cannot secure generation manifest'
+	verify_lock_path
+	/bin/mv "$PENDING_MANIFEST" "$MANIFEST" || fail 'cannot publish generation manifest'
+	PENDING_MANIFEST=''
+}
+
+publish_install_pointer() {
+	install_pointer=$1
+	install_target=$2
+	install_temp=$ROOT/.$install_pointer.new
+	if [ -e "$install_temp" ] || [ -L "$install_temp" ]; then
+		pointer_commit "$install_temp"
+		[ "$pointer_id" = "${install_target#versions/}" ] || fail 'staged generation pointer changed'
+	else
+		/bin/ln -s "$install_target" "$install_temp" || fail 'cannot stage generation pointer'
+	fi
+	verify_lock_path
+	/bin/mv -fh "$install_temp" "$ROOT/$install_pointer" || fail 'cannot publish generation pointer'
+}
+
+contain_initial_install() {
+	[ "$INSTALL_OPERATION" = install ] || fail 'initial containment requires an initial transaction'
+	INSTALL_OWNS_STAGE=0
+	if [ "$INSTALL_CURRENT" = "$INSTALL_COMMIT" ]; then
+		verify_lock_path
+		pointer_commit "$ROOT/current"
+		[ "$pointer_id" = "$INSTALL_COMMIT" ] || fail 'recorded initial current pointer changed before containment'
+		/bin/rm "$ROOT/current" || fail 'cannot remove recorded initial current pointer'
+	fi
+	for install_link_kind in cli helper skill; do
+		case "$install_link_kind" in
+			cli) install_link=$HOME/.local/bin/forgepilot; install_link_target=$ROOT/current/bin/forgepilot ;;
+			helper) install_link=$HOME/.local/bin/forgepilot-bootstrap; install_link_target=$ROOT/current/libexec/forgepilot-bootstrap ;;
+			skill) install_link=$HOME/.agents/skills/forgepilot-onboarding; install_link_target=$ROOT/current/skills/codex/forgepilot-onboarding ;;
+		esac
+		if [ -L "$install_link" ]; then
+			verify_lock_path
+			stable_link "$install_link" "$install_link_target"
+			/bin/rm "$install_link" || fail 'cannot remove recorded initial entrypoint'
+		fi
+	done
+	verify_install_transaction_state
+	[ "$INSTALL_CURRENT" = none ] || fail 'initial current pointer remains after containment'
+	printf 'install: recorded entrypoints contained; transaction requires matching repair\n'
+}
+
+restore_upgrade_selection() {
+	[ "$INSTALL_OPERATION" = upgrade ] || fail 'old-generation restoration requires an upgrade transaction'
+	INSTALL_OWNS_STAGE=0
+	for install_temp_pointer in current previous; do
+		install_temp_path=$ROOT/.$install_temp_pointer.new
+		if [ -L "$install_temp_path" ]; then
+			verify_lock_path
+			pointer_commit "$install_temp_path"
+			if [ "$install_temp_pointer" = current ]; then
+				case "$pointer_id" in "$INSTALL_COMMIT"|"$TXN_INSTALL_OLD_CURRENT") ;; *) fail 'staged current pointer changed before restoration' ;; esac
+			else
+				case "$pointer_id" in "$TXN_INSTALL_OLD_CURRENT"|"$TXN_INSTALL_OLD_PREVIOUS") ;; *) fail 'staged previous pointer changed before restoration' ;; esac
+			fi
+			/bin/rm "$install_temp_path" || fail 'cannot clear recorded staged pointer'
+		fi
+	done
+	if [ "$INSTALL_CURRENT" != "$TXN_INSTALL_OLD_CURRENT" ]; then
+		publish_install_pointer current "versions/$TXN_INSTALL_OLD_CURRENT"
+		verify_install_transaction_state
+	fi
+	if [ "$TXN_INSTALL_OLD_PREVIOUS" = none ]; then
+		if [ "$INSTALL_PREVIOUS" != none ]; then
+			verify_lock_path
+			pointer_commit "$ROOT/previous"
+			[ "$pointer_id" = "$TXN_INSTALL_OLD_CURRENT" ] || fail 'previous pointer changed before restoration'
+			/bin/rm "$ROOT/previous" || fail 'cannot restore absent previous pointer'
+		fi
+	elif [ "$INSTALL_PREVIOUS" != "$TXN_INSTALL_OLD_PREVIOUS" ]; then
+		publish_install_pointer previous "versions/$TXN_INSTALL_OLD_PREVIOUS"
+	fi
+	verify_install_transaction_state
+	if [ "$INSTALL_MANIFEST_PHASE" != old ]; then
+		if [ -e "$ROOT/.manifest.new" ] || [ -L "$ROOT/.manifest.new" ]; then
+			private_file "$ROOT/.manifest.new"
+			/bin/rm "$ROOT/.manifest.new" || fail 'cannot clear recorded manifest staging'
+		fi
+		/bin/cp "$TEMP_DIR/install-old-manifest" "$ROOT/.manifest.new" || fail 'cannot stage old generation manifest'
+		/bin/chmod 600 "$ROOT/.manifest.new" || fail 'cannot secure old generation manifest'
+		verify_lock_path
+		/bin/mv "$ROOT/.manifest.new" "$MANIFEST" || fail 'cannot restore old generation manifest'
+	fi
+	verify_install_transaction_state
+	[ "$INSTALL_CURRENT" = "$TXN_INSTALL_OLD_CURRENT" ] && [ "$INSTALL_MANIFEST_PHASE" = old ] || fail 'old generation selection was not restored'
+	if [ "$INSTALL_NEW_TRUST" = absent ]; then
+		verify_lock_path
+		/bin/rm "$ROOT/transaction.json" || fail 'cannot finalize old generation restoration'
+		validate_layout
+		printf 'upgrade: recorded old generation restored\n'
+	else
+		printf 'upgrade: old selection restored; untrusted generation and transaction require repair\n'
+	fi
+}
+
+prepare_initial_repair() {
+	[ "$INSTALL_OPERATION" = install ] && [ "$INSTALL_RECOVERY_REPAIR" -eq 1 ] || fail 'initial repair requires a contained transaction'
+	[ "$INSTALL_TREE" = "$TXN_INSTALL_TREE" ] || fail 'repair source tree differs from recorded transaction'
+	prepare_install_stage
+	[ "$INSTALL_NEW_DIGEST" = "$TXN_INSTALL_DIGEST" ] || fail "repaired payload differs from recorded transaction: $INSTALL_NEW_DIGEST vs $TXN_INSTALL_DIGEST"
+	INSTALL_STAGE_NAME=${INSTALL_STAGE##*/}
+	INSTALL_SOURCE_HASH=$TXN_INSTALL_SOURCE
+	INSTALL_OLD_CURRENT=$TXN_INSTALL_OLD_CURRENT
+	INSTALL_OLD_PREVIOUS=$TXN_INSTALL_OLD_PREVIOUS
+	INSTALL_OLD_MANIFEST=$TXN_INSTALL_OLD_MANIFEST
+	INSTALL_RETENTION_DIGEST=$TXN_INSTALL_RETENTION
+	INSTALL_RETENTION_COUNT=$TXN_INSTALL_RETENTION_COUNT
+	INSTALL_TXN_PHASE=$TXN_INSTALL_PHASE
+	INSTALL_TRANSACTION_ACTIVE=1
+	if [ -e "$ROOT/.transaction.new" ] || [ -L "$ROOT/.transaction.new" ]; then
+		private_file "$ROOT/.transaction.new"
+		/bin/rm "$ROOT/.transaction.new" || fail 'cannot clear recorded transaction staging'
+	fi
+	verify_lock_path
+	write_install_transaction_phase
+}
+
+prepare_install_publication() {
+	verify_install_transaction_state
+	[ "$INSTALL_NEW_TRUST" = verified ] || fail 'recorded installation payload is not verified'
+	INSTALL_OWNS_STAGE=1
+	INSTALL_TRANSACTION_ACTIVE=1
+	INSTALL_NEW_DIGEST=$TXN_INSTALL_DIGEST
+	INSTALL_TREE=$TXN_INSTALL_TREE
+	INSTALL_STAGE_NAME=$TXN_INSTALL_STAGE
+	INSTALL_SOURCE_HASH=$TXN_INSTALL_SOURCE
+	INSTALL_OLD_CURRENT=$TXN_INSTALL_OLD_CURRENT
+	INSTALL_OLD_PREVIOUS=$TXN_INSTALL_OLD_PREVIOUS
+	INSTALL_OLD_MANIFEST=$TXN_INSTALL_OLD_MANIFEST
+	INSTALL_RETENTION_DIGEST=$TXN_INSTALL_RETENTION
+	INSTALL_RETENTION_COUNT=$TXN_INSTALL_RETENTION_COUNT
+	INSTALL_TXN_PHASE=$TXN_INSTALL_PHASE
+	if [ -e "$ROOT/.transaction.new" ] || [ -L "$ROOT/.transaction.new" ]; then
+		private_file "$ROOT/.transaction.new"
+		/bin/rm -f "$ROOT/.transaction.new" || fail 'cannot clear recorded transaction staging'
+	fi
+	if [ ! -e "$VERSIONS" ] && [ ! -L "$VERSIONS" ]; then
+		[ "$INSTALL_OPERATION" = install ] || fail 'upgrade versions directory is missing'
+		/bin/mkdir -m 700 "$VERSIONS" || fail 'cannot create initial versions directory'
+	fi
+	if [ "$INSTALL_OPERATION" = install ] && [ ! -e "$RETENTION_DIR" ] && [ ! -L "$RETENTION_DIR" ]; then
+		if [ ! -e "$ROOT/retention" ] && [ ! -L "$ROOT/retention" ]; then /bin/mkdir -m 700 "$ROOT/retention" || fail 'cannot create initial retention parent'; fi
+		/bin/mkdir -m 700 "$RETENTION_DIR" || fail 'cannot create initial retention store'
+	fi
+}
+
+publish_install_generation() {
+	prepare_install_publication
+	verify_install_transaction_state
+	if [ "$INSTALL_NEW_PUBLISHED" -eq 0 ]; then
+		verify_lock_path
+		/bin/mv "$INSTALL_STAGE/payload" "$VERSIONS/$INSTALL_COMMIT" || fail 'cannot publish recorded generation'
+		verify_install_transaction_state
+		[ "$INSTALL_NEW_PUBLISHED" -eq 1 ] || fail 'generation publication did not complete'
+	fi
+}
+
+publish_install_links() {
+	verify_install_transaction_state
+	[ "$INSTALL_NEW_PUBLISHED" -eq 1 ] || fail 'stable links require a published generation'
+	case "$#" in 0) install_links_from_action=0 ;; 6) install_links_from_action=1 ;; *) fail 'stable link action has wrong arguments' ;; esac
+	if [ "$INSTALL_OPERATION" = install ]; then
+		for install_link_kind in cli helper skill; do
+			if [ "$install_links_from_action" -eq 1 ]; then
+				install_link=$1
+				install_link_target=$2
+				shift 2
+			else
+				case "$install_link_kind" in
+					cli) install_link=$HOME/.local/bin/forgepilot; install_link_target=$ROOT/current/bin/forgepilot ;;
+					helper) install_link=$HOME/.local/bin/forgepilot-bootstrap; install_link_target=$ROOT/current/libexec/forgepilot-bootstrap ;;
+					skill) install_link=$HOME/.agents/skills/forgepilot-onboarding; install_link_target=$ROOT/current/skills/codex/forgepilot-onboarding ;;
+				esac
+			fi
+			if [ ! -e "$install_link" ] && [ ! -L "$install_link" ]; then
+				verify_lock_path
+				/bin/ln -s "$install_link_target" "$install_link" || fail 'cannot publish recorded stable entrypoint'
+			fi
+			verify_install_transaction_state
+		done
+	fi
+}
+
+switch_install_current() {
+	verify_install_transaction_state
+	[ "$INSTALL_NEW_PUBLISHED" -eq 1 ] || fail 'current switch requires a published generation'
+	if [ "$INSTALL_TXN_PHASE" = prepared ]; then
+		INSTALL_TXN_PHASE=switching
+		write_install_transaction_phase
+		verify_install_transaction_state
+	fi
+	if [ "$INSTALL_CURRENT" != "$INSTALL_COMMIT" ]; then
+		publish_install_pointer current "versions/$INSTALL_COMMIT"
+		verify_install_transaction_state
+	fi
+	if [ "$INSTALL_OLD_CURRENT" != none ] && [ "$INSTALL_PREVIOUS" != "$INSTALL_OLD_CURRENT" ]; then
+		publish_install_pointer previous "versions/$INSTALL_OLD_CURRENT"
+		verify_install_transaction_state
+	fi
+}
+
+publish_install_final_manifest() {
+	verify_install_transaction_state
+	[ "$INSTALL_CURRENT" = "$INSTALL_COMMIT" ] || fail 'manifest requires selected generation'
+	if [ "$INSTALL_MANIFEST_PHASE" != final ]; then
+		if [ -e "$ROOT/.manifest.new" ] || [ -L "$ROOT/.manifest.new" ]; then
+			private_file "$ROOT/.manifest.new"
+			/bin/rm -f "$ROOT/.manifest.new" || fail 'cannot clear recorded manifest staging'
+		fi
+		CURRENT_COMMIT=$INSTALL_COMMIT
+		PREVIOUS_COMMIT=''
+		if [ "$INSTALL_OLD_CURRENT" != none ]; then PREVIOUS_COMMIT=$INSTALL_OLD_CURRENT; fi
+		publish_install_manifest
+		verify_install_transaction_state
+	fi
+}
+
+finalize_install_transaction() {
+	verify_install_transaction_state
+	[ "$INSTALL_MANIFEST_PHASE" = final ] || fail 'installation manifest was not completed'
+	verify_lock_path
+	/bin/rm -f "$ROOT/transaction.json" || fail 'cannot finalize installation transaction'
+	INSTALL_TRANSACTION_ACTIVE=0
+	validate_layout
+	printf '%s: approved generation %s is current\n' "$INSTALL_OPERATION" "$INSTALL_COMMIT"
+}
+
 plan_command() {
 	plan_operation=''
+	plan_commit=''
+	plan_source=''
+	plan_agent=''
 	PLAN_FORMAT=human
 	plan_format_set=0
 	while [ "$#" -gt 0 ]; do
@@ -541,6 +2130,32 @@ plan_command() {
 				plan_operation=prune
 				shift
 				;;
+			--uninstall)
+				[ -z "$plan_operation" ] || fail 'plan accepts exactly one lifecycle mode'
+				plan_operation=uninstall
+				shift
+				;;
+			--upgrade)
+				[ -z "$plan_operation" ] || fail 'plan accepts exactly one lifecycle mode'
+				plan_operation=upgrade
+				shift
+				;;
+			--agent)
+				[ "$#" -ge 2 ] && [ -z "$plan_agent" ] || fail 'plan accepts one --agent'
+				plan_agent=$2
+				shift 2
+				;;
+			--source)
+				[ "$#" -ge 2 ] && [ -z "$plan_source" ] || fail 'plan accepts one --source'
+				plan_source=$2
+				shift 2
+				;;
+			--commit)
+				[ "$#" -ge 2 ] && [ -z "$plan_commit" ] || fail 'plan --commit requires one generation'
+				plan_commit=$2
+				valid_sha "$plan_commit" || fail 'plan --commit requires a lowercase full SHA'
+				shift 2
+				;;
 			--format)
 				[ "$#" -ge 2 ] || fail 'plan --format requires a renderer'
 				[ "$plan_format_set" -eq 0 ] || fail 'plan accepts only one renderer'
@@ -548,11 +2163,27 @@ plan_command() {
 				plan_format_set=1
 				shift 2
 				;;
-			*) fail 'this development slice supports only the prune plan mode' ;;
+			*) fail 'plan argument is not supported' ;;
 		esac
 	done
-	[ "$plan_operation" = prune ] || fail 'plan requires exactly one lifecycle mode'
-	plan_prune
+	case "$plan_operation" in
+		prune|uninstall)
+			[ -z "$plan_source" ] && [ -z "$plan_agent" ] || fail 'removal plans do not accept source options'
+			if [ "$plan_operation" = prune ]; then [ -z "$plan_commit" ] || fail 'prune does not accept --commit'; else [ -n "$plan_commit" ] || fail 'uninstall requires --commit'; fi
+			REMOVAL_OPERATION=$plan_operation
+			REMOVAL_COMMIT=$plan_commit
+			plan_removal
+			;;
+		upgrade|'')
+			[ "$plan_agent" = codex ] || fail 'source installation requires --agent codex'
+			[ -n "$plan_source" ] && [ -n "$plan_commit" ] || fail 'source installation requires --source and --commit'
+			INSTALL_OPERATION=install
+			if [ "$plan_operation" = upgrade ]; then INSTALL_OPERATION=upgrade; fi
+			INSTALL_SOURCE=$plan_source
+			INSTALL_COMMIT=$plan_commit
+			plan_install
+			;;
+	esac
 }
 
 emit_result() {
@@ -652,8 +2283,17 @@ main() {
 			[ "$#" -eq 1 ] || fail 'status accepts no options'
 			status
 			;;
-		install|upgrade|uninstall|prune)
-			fail 'Bootstrap lifecycle operations are not implemented in this development slice'
+		prune|uninstall)
+			operation=$1
+			shift
+			removal_command "$operation" "$@"
+			;;
+		install)
+			shift
+			install_command "$@"
+			;;
+		upgrade)
+			fail 'use install --upgrade with the planned source and commit'
 			;;
 		*) usage >&2; exit 2 ;;
 	esac

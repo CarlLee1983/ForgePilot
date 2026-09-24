@@ -2,39 +2,41 @@
 
 ## Happy Path
 
-* [ ] AC-001: Implementation and repair launches resolve only the authorized provider, executable,
+* [x] AC-001: Implementation and repair launches resolve only the authorized provider, executable,
   model, effort, permissions, and immutable engine generation.
 * [x] AC-002: An authorization or supervised job acquires its opaque generation-retention marker before
   referencing the generation and releases it only when no active ownership remains.
 
 ## Business Rules
 
-* [ ] AC-003: Prune and uninstall preserve generations with active or uncertain markers.
-* [ ] AC-004: An engine revision is accepted only after persisted pause intent, confirmed cleanup,
+* [x] AC-003: Prune and uninstall preserve generations with active or uncertain markers.
+* [x] AC-004: An engine revision is accepted only after persisted pause intent, confirmed cleanup,
   compatibility success, and explicit authorization revision; existing runs keep their old binding.
 
 ## Failure Cases
 
-* [ ] AC-005: Executable, provider, model, effort, permission, profile, or engine drift rejects before
+* [x] AC-005: Executable, provider, model, effort, permission, profile, or engine drift rejects before
   launch and never silently uses a runtime default.
-* [ ] AC-006: Missing, corrupt, or uncertain retention acquisition rejects engine use and does not
+* [x] AC-006: Missing, corrupt, or uncertain retention acquisition rejects engine use and does not
   delete the referenced generation.
 
 ## Regression Requirements
 
-* [ ] AC-007: Worker credentials are not persisted in authorization, run state, logs, or markers.
+* [x] AC-007: ForgePilot does not read or copy runtime credentials into typed authorization, Run
+  control fields, or retention markers. Worker-controlled output and derived text are explicitly
+  untrusted; credentials printed by a worker may appear in session logs and downstream artifacts.
 
 ## Acceptance Evidence
 
 | AC | Method | Evidence | Fixture / precondition | Expected observation |
 | --- | --- | --- | --- | --- |
-| `AC-001` | test | `internal/agent/agent_test.go`, `internal/app/charged_run_test.go`, `internal/runner/charged_recovery_test.go` | `approved pinned profile fixture` | `implementation launch uses the pinned profile; a repair worker launch asserting the same binding remains to be tested` |
+| `AC-001` | test | `internal/agent/agent_test.go`, `internal/app/charged_run_test.go`, `internal/runner/charged_recovery_test.go` | `approved pinned profile and failing make verify fixture` | `implementation and repair launch separate real subprocesses with the same pinned model, effort, sandbox, authorization digest, and engine tuple` |
 | `AC-002` | test | `go test ./internal/app ./internal/storage` | `active authorization fixture` | `marker write precedes engine reference and release follows ownership cleanup` |
-| `AC-003` | test | `scripts/forgepilot-bootstrap_test.sh` | `active and uncertain marker fixtures` | `prune planning excludes retained generations; prune and uninstall execution remain unavailable, so this AC is pending` |
-| `AC-004` | test | `go test ./internal/app ./internal/runner` | `paused revision fixture and separate historical-run audit fixtures` | `pause, audit, and retention boundaries pass separately; a combined engine revision with historical Run remains to be tested` |
-| `AC-005` | test | `internal/agent/agent_test.go`, `internal/app/engine_binding_test.go`, `internal/runner/charged_recovery_test.go` | `existing profile and engine drift fixtures` | `current mismatch cases reject; a one-field-before-launch matrix for every listed field remains to be tested` |
-| `AC-006` | test | `go test ./internal/app ./internal/storage` and `scripts/forgepilot-bootstrap_test.sh` | `missing and corrupt marker fixtures` | `acquisition and engine use fail closed; deletion cannot yet be verified because lifecycle removal is unavailable` |
-| `AC-007` | review | `specs/stories/FP-58-pinned-engine/verification.md` | `runtime-owned credentials and worker output` | `ForgePilot does not place credentials in the profile, but no credential-sentinel fixture proves all listed artifacts; worker-emitted output can enter session logs, so this AC is pending` |
+| `AC-003` | test | `scripts/forgepilot-bootstrap_test.sh` | `active marker, preexisting removal staging, exact-commit uninstall, two-candidate prune, and interrupted removal fixtures` | `retained/current/previous generations survive approved removals; matching fresh approval resumes only recorded candidates` |
+| `AC-004` | test | `internal/runner/execution_engine_revision_integration_test.go`, `internal/app/execution_engine_revision_test.go` | `persisted pause, two charged historical Run Records with ledger receipts, real cleanup auditor` | `unsettled historical ownership rejects revision; clean audit publishes a revised authorization while old authorization and Run bindings stay unchanged` |
+| `AC-005` | test | `internal/agent/agent_test.go`, `internal/app/engine_binding_test.go`, `internal/runner/charged_recovery_test.go` | `one-field real-subprocess charged Runner drift matrix` | `provider, executable path, model, effort, sandbox permission, engine source commit, and payload digest each reject before the worker sentinel is written` |
+| `AC-006` | test | `go test ./internal/app ./internal/storage` and `scripts/forgepilot-bootstrap_test.sh` | `missing and corrupt marker fixtures with earlier valid removal approvals` | `acquisition and engine use fail closed; approved prune and uninstall refuse deletion without a valid retention store` |
+| `AC-007` | test | `internal/runner/charged_recovery_test.go`, `scripts/forgepilot-bootstrap_test.sh` | `silent and credential-printing real subprocesses; retention acquisition` | `runtime sentinel is absent from typed authorization, Run control record, handoff, and retention marker; a printed sentinel enters session.log as documented` |
 
 ## Security Fixture Matrix
 

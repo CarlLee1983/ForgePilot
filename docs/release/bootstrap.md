@@ -1,9 +1,18 @@
-# Source-built Bootstrap development status
+# Source-built Bootstrap
 
-> **Not a supported installer yet.** The repository contains an incomplete
-> development slice for `status`, `generation-v1 current`, and `retention-v1`; lifecycle commands such as
-> `plan`, `install`, `upgrade`, `prune`, and `uninstall` are unavailable. Today,
-> use the source-built onboarding procedure and short prompt in this directory.
+> **Supported source-built Apple-Silicon path.** The repository contains
+> executable plan, install, upgrade, prune, uninstall, status, generation, and
+> retention paths. Disposable-home tests pass all 35 transaction-boundary
+> crash cases; a real Codex session discovered the managed skill, read the
+> matching procedure, and stopped before repository writes pending distinct
+> approval. This is not a signed, notarized, or no-Go prebuilt release.
+
+V1 removal recovery covers completed command boundaries and is bounded by the
+recorded transaction and complete payload
+identity. A crash before `transaction.json` is published can leave an
+unattributed staging file; a crash inside `rm -rf` can leave a partial
+generation. Both states fail closed for manual inspection. Recovery does not
+delete those uncertain paths automatically.
 
 The intended Bootstrap makes a developer-obtained ForgePilot source version
 available to a Codex user without inspecting or initializing any repository. It

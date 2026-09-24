@@ -1,1 +1,78 @@
-{"schema_version":1,"story_ref":"specs/stories/FP-57-bootstrap-generations","story_md_digest":"sha256:72618ddd70e002bc6891b65e1e07a37d3b2d3a9d7e02df28b0f9975cf9c239a8","acceptance_md_digest":"sha256:d0608572604d6368fc87f856d87d025a983e25796e69e646e0582864a04476b9","criteria":[{"id":"AC-001","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-002","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-003","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-004","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-005","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-006","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-007","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]}],"inputs":[],"outputs":[{"id":"fp57-bootstrap-generations"}],"decision_follow_ups":[]}
+{
+  "schema_version": 1,
+  "story_ref": "specs/stories/FP-57-bootstrap-generations",
+  "story_md_digest": "sha256:72618ddd70e002bc6891b65e1e07a37d3b2d3a9d7e02df28b0f9975cf9c239a8",
+  "acceptance_md_digest": "sha256:b491730979869e2ca98fc126589418858ec6a01f9cc8a20b7adfede3d970721b",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-002",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-003",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-004",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-005",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-006",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-007",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    }
+  ],
+  "inputs": [],
+  "outputs": [
+    {
+      "id": "fp57-bootstrap-generations"
+    }
+  ],
+  "decision_follow_ups": []
+}

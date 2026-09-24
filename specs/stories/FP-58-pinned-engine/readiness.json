@@ -1,1 +1,103 @@
-{"schema_version":1,"story_ref":"specs/stories/FP-58-pinned-engine","story_md_digest":"sha256:0d999dbfde4d9cbed9d77032349e7b5c3971232d84bb880f1bc89b55e7c4a1aa","acceptance_md_digest":"sha256:34befaf3253b436e406ebe4913bf133dd4d75b71cb40bdfcb315f3220f4ad656","criteria":[{"id":"AC-001","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-002","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-003","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-004","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-005","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-006","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]},{"id":"AC-007","operations":["plan","modify"],"owner":"runner_worker","future_identities":[]}],"inputs":[{"id":"authorization-binding","source":{"prerequisite_output":{"output_id":"fp53-plan-authorization"}}},{"id":"charged-run-binding","source":{"prerequisite_output":{"output_id":"fp54-charged-runs"}}},{"id":"managed-generation","source":{"prerequisite_output":{"output_id":"fp57-bootstrap-generations"}}}],"outputs":[{"id":"fp58-pinned-engine"}],"decision_follow_ups":[]}
+{
+  "schema_version": 1,
+  "story_ref": "specs/stories/FP-58-pinned-engine",
+  "story_md_digest": "sha256:68b17acf692af01f84ff16205802737abdb2fa0467e3b9882f8cfde05fccfc48",
+  "acceptance_md_digest": "sha256:3df5884c50d40284f4ae313a9d6753fd3d2eae3f9e33bd9c2632e0035b38fa36",
+  "criteria": [
+    {
+      "id": "AC-001",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-002",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-003",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-004",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-005",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-006",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    },
+    {
+      "id": "AC-007",
+      "operations": [
+        "plan",
+        "modify"
+      ],
+      "owner": "runner_worker",
+      "future_identities": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "authorization-binding",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp53-plan-authorization"
+        }
+      }
+    },
+    {
+      "id": "charged-run-binding",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp54-charged-runs"
+        }
+      }
+    },
+    {
+      "id": "managed-generation",
+      "source": {
+        "prerequisite_output": {
+          "output_id": "fp57-bootstrap-generations"
+        }
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "id": "fp58-pinned-engine"
+    }
+  ],
+  "decision_follow_ups": []
+}

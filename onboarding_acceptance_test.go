@@ -13,8 +13,9 @@ import (
 	"testing"
 )
 
-// The fake agent consumes installed #34 artifacts and #33's actual action plan.
-// It models approvals; it does not claim to test an LLM following prose (#39).
+// The fake agent exercises the historical zero-install #33 action planner with
+// copied adapters. Codex's managed-generation path is covered separately by
+// Bootstrap tests; this harness does not establish native Codex behavior.
 type onboardingAction struct {
 	Phase, ID, Directory, Effect string
 	Args                         []string
@@ -80,8 +81,14 @@ func newOnboardingHarness(t *testing.T, binary, platform string) *onboardingHarn
 		t.Fatal(err)
 	}
 	contract := "Shared temporary source contract: local #33 checkout at FORGEPILOT_ONBOARDING_SOURCE; common procedure docs/release/onboarding.md; temporary only, not a published immutable identity."
-	if !strings.Contains(string(installedBytes), contract) {
-		t.Fatal("installed adapter lost the common procedure reference")
+	if platform == "codex" {
+		for _, required := range []string{"generation-v1 current", "docs/release/onboarding.md", "Repository Onboarding Approval"} {
+			if !strings.Contains(string(installedBytes), required) {
+				t.Fatalf("installed managed Codex adapter lost %q", required)
+			}
+		}
+	} else if !strings.Contains(string(installedBytes), contract) {
+		t.Fatal("installed Claude adapter lost the zero-install procedure reference")
 	}
 	procedure, err := os.ReadFile(filepath.Join(h.Source, "docs/release/onboarding.md"))
 	if err != nil {

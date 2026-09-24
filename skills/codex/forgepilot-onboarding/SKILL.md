@@ -1,19 +1,27 @@
 ---
 name: forgepilot-onboarding
-description: Locate the shared ForgePilot onboarding procedure. Use when a developer asks to introduce ForgePilot to a repository.
+description: Introduce an installed ForgePilot generation to an explicitly named repository after a separate repository approval.
 ---
 
-# ForgePilot onboarding adapter
+# ForgePilot managed onboarding
 
-Optional installation: copy this `forgepilot-onboarding` directory so its
-entrypoint is `~/.agents/skills/forgepilot-onboarding/SKILL.md`. Installation
-is a deliberate user action; ForgePilot installation does not install this adapter.
+Invoke with `$forgepilot-onboarding`, an absolute target repository path, and a
+COMMIT or SNAPSHOT Candidate choice. Ask for missing inputs before proceeding.
 
-Invoke this adapter with `$forgepilot-onboarding`.
+Resolve this installed skill's physical directory with
+`cd -P "$HOME/.agents/skills/forgepilot-onboarding" && pwd -P`. It must be
+`$HOME/.local/share/forgepilot/versions/<full lowercase commit>/skills/codex/forgepilot-onboarding`.
+From that directory, use the helper at the same generation's
+`libexec/forgepilot-bootstrap` to run `generation-v1 current`. Require its
+`generation_id`, `forgepilot_path`, and `helper_path` to match that physical
+generation and require successful managed-state validation. If they differ,
+stop and ask the developer to retry after the Bootstrap transaction settles.
+Keep the returned absolute CLI and helper paths for this invocation; do not
+resolve `current`, `$PATH`, or the skill link again mid-flow.
 
-Shared temporary source contract: local #33 checkout at FORGEPILOT_ONBOARDING_SOURCE; common procedure docs/release/onboarding.md; temporary only, not a published immutable identity.
-
-Read that common procedure from the stated checkout and follow it unchanged.
-It owns source-contract failure, stop-on-failure, and human-review behavior;
-do not reproduce the procedure here. A later separately authorized immutable
-pin step atomically replaces this exact temporary string in both adapters.
+Read `docs/release/onboarding.md` from that exact generation's root and follow
+its **Managed Repository Onboarding** section. Bootstrap approval grants no
+target-repository writes. Show the target preflight, Candidate, Story, and
+proposed commands, then obtain a distinct Repository Onboarding Approval before
+running any command that writes the target. If the Story needs drafting, show
+the draft and obtain approval before writing it.

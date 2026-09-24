@@ -5,8 +5,9 @@ commit SHA with values you have independently reviewed:
 
 ```text
 Introduce ForgePilot to this repository from source repository <repository> at
-full 40-character commit SHA <sha> on an Apple Silicon Mac. First follow the inspection-only section of
-the source-built onboarding procedure. Print the exact source fetch, build,
+full 40-character commit SHA <sha> on an Apple Silicon Mac. Follow the
+Zero-install source-built walkthrough section of the onboarding procedure,
+starting with its inspection-only phase. Print the exact source fetch, build,
 make verify, entrypoint, and repository-write plan; wait for my first explicit approval before source work and my second explicit approval before repository
 writes. If Go is missing or incompatible, stop at the Go prerequisite and
 explain options. Do not install Go, commit,

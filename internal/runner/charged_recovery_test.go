@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -338,6 +339,52 @@ func TestChargedStartAndForgedResumeRefuseBeforeLaunchingWorker(t *testing.T) {
 	}
 }
 
+func TestChargedStartRejectsEachPinnedBindingDriftBeforeWorkerLaunch(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*testing.T, *Options, *app.RunnerIdentity)
+	}{
+		{"provider", func(_ *testing.T, options *Options, _ *app.RunnerIdentity) { options.RuntimeName = "fake" }},
+		{"executable", func(t *testing.T, options *Options, _ *app.RunnerIdentity) {
+			contents, err := os.ReadFile(options.RuntimeCommand)
+			if err != nil {
+				t.Fatal(err)
+			}
+			other := filepath.Join(options.Root, "other-codex")
+			if err := os.WriteFile(other, contents, 0755); err != nil {
+				t.Fatal(err)
+			}
+			options.RuntimeCommand = other
+		}},
+		{"model", func(_ *testing.T, _ *Options, identity *app.RunnerIdentity) { identity.Model = "other-model" }},
+		{"effort", func(_ *testing.T, _ *Options, identity *app.RunnerIdentity) { identity.Effort = "high" }},
+		{"permission", func(_ *testing.T, _ *Options, identity *app.RunnerIdentity) { identity.Sandbox = "danger-full-access" }},
+		{"engine source commit", func(_ *testing.T, options *Options, _ *app.RunnerIdentity) {
+			resolver := options.GenerationResolver.(staticGenerationResolver)
+			resolver.resolved.Generation.SourceCommit = strings.Repeat("c", 40)
+			options.GenerationResolver = resolver
+		}},
+		{"engine payload digest", func(_ *testing.T, options *Options, _ *app.RunnerIdentity) {
+			resolver := options.GenerationResolver.(staticGenerationResolver)
+			resolver.resolved.Generation.PayloadSHA256 = "sha256:" + strings.Repeat("d", 64)
+			options.GenerationResolver = resolver
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, runtimeCommand, sentinel, now, _ := newUnresolvedExecutionRunnerFixture(t)
+			identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+			options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+			test.change(t, &options, options.testExecutionIdentity)
+			if _, err := Start(options); err == nil {
+				t.Fatal("charged Start accepted a drifted pinned binding")
+			}
+			if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+				t.Fatalf("worker launched after %s drift: %v", test.name, err)
+			}
+		})
+	}
+}
+
 func TestChargedRunChargeSurvivesRunnerProcessCrashBeforeRunRecord(t *testing.T) {
 	root, runtimeCommand, sentinel, now, execution := newUnresolvedExecutionRunnerFixture(t)
 	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
@@ -615,6 +662,92 @@ func TestChargedDirectRunAndExactResumeUseTheSameAuthorization(t *testing.T) {
 	if !ok || goal.Execution == nil || goal.Execution.Ledger.RunsConsumed != 1 ||
 		goal.Execution.Ledger.StepsConsumed != 3 || countReservations(goal.Execution.Ledger, work.ExecutionReservationAction) != 2 {
 		t.Fatalf("direct run and exact resume did not retain one durable charged history: %#v", goal.Execution)
+	}
+}
+
+func TestChargedRepairLaunchUsesPinnedWorkerProfile(t *testing.T) {
+	root, runtimeCommand, sentinel, now, _ := newUnresolvedExecutionRunnerFixture(t)
+	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@exit 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	completionRecoveryGit(t, root, "add", "Makefile")
+	completionRecoveryGit(t, root, "commit", "-m", "failing verification fixture")
+	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+	options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	options.Budget.MaxSteps = 4
+	options.Output = io.Discard
+	t.Setenv("FORGEPILOT_TEST_CODEX_RESULT", `{"outcome":"implementation_finished","summary":"Ready for verification"}`)
+	argumentsPath := filepath.Join(root, "codex-arguments")
+	t.Setenv("FORGEPILOT_TEST_CODEX_ARGUMENTS", argumentsPath)
+
+	record, err := Start(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launches, err := os.ReadFile(sentinel)
+	if err != nil || strings.Count(string(launches), "launched\n") != 2 {
+		t.Fatalf("expected implementation and repair subprocesses: launches=%q err=%v stop=%#v", launches, err, record.Stop)
+	}
+	repairHandoff, err := os.ReadFile(filepath.Join(root, ".forgepilot", "runs", record.RunID, sessionName("WI-001", 2), "handoff.md"))
+	if err != nil || !strings.Contains(string(repairHandoff), "The latest formal Verification Log") {
+		t.Fatalf("second launched session was not a repair: handoff=%q err=%v", repairHandoff, err)
+	}
+	if record.EngineGeneration == nil || *record.EngineGeneration != *identity.EngineGeneration || record.ExecutionAuthorizationDigest == "" {
+		t.Fatalf("repair Run lost its pinned engine and authorization: %#v", record)
+	}
+	arguments, err := os.ReadFile(argumentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launchArguments := strings.Split(string(arguments), "forgepilot-test-launch\n")
+	if len(launchArguments) != 3 || launchArguments[0] != "" {
+		t.Fatalf("expected separate implementation and repair argv: %q", arguments)
+	}
+	for _, required := range []string{"--model\ntest-model\n", "--config\nmodel_reasoning_effort=\"medium\"\n", "--sandbox\nworkspace-write\n"} {
+		for index, launch := range launchArguments[1:] {
+			if !strings.Contains(launch, required) {
+				t.Fatalf("launch %d omitted pinned %q: %s", index+1, required, launch)
+			}
+		}
+	}
+}
+
+func TestRuntimeCredentialIsNotCopiedIntoForgePilotArtifacts(t *testing.T) {
+	for _, workerPrints := range []bool{false, true} {
+		name := "silent worker"
+		if workerPrints {
+			name = "worker prints credential"
+		}
+		t.Run(name, func(t *testing.T) {
+			root, runtimeCommand, _, now, _ := newUnresolvedExecutionRunnerFixture(t)
+			identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+			options := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+			options.Budget.MaxSteps = 4
+			credential := "runtime-credential-sentinel-7d53e2"
+			t.Setenv("FORGEPILOT_TEST_RUNTIME_CREDENTIAL", credential)
+			if workerPrints {
+				t.Setenv("FORGEPILOT_TEST_PRINT_CREDENTIAL", "1")
+			}
+			t.Setenv("FORGEPILOT_TEST_CODEX_RESULT", `{"outcome":"needs_human","summary":"Need a decision","needs_human":{"question":"Choose an option","options":["one"],"context":""}}`)
+			record, err := Start(options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{
+				filepath.Join(root, ".forgepilot", "state.json"),
+				filepath.Join(root, ".forgepilot", "runs", record.RunID, "run.json"),
+				filepath.Join(root, ".forgepilot", "runs", record.RunID, sessionName("WI-001", 1), "handoff.md"),
+			} {
+				body, err := os.ReadFile(path)
+				if err != nil || strings.Contains(string(body), credential) {
+					t.Fatalf("ForgePilot control artifact %s contains runtime credential or is unreadable: %v", path, err)
+				}
+			}
+			log, err := os.ReadFile(filepath.Join(root, ".forgepilot", "runs", record.RunID, sessionName("WI-001", 1), "session.log"))
+			if err != nil || strings.Contains(string(log), credential) != workerPrints {
+				t.Fatalf("worker output credential observation = %t, want %t, err=%v", strings.Contains(string(log), credential), workerPrints, err)
+			}
+		})
 	}
 }
 
@@ -1357,7 +1490,7 @@ if [ "$1" = "retention-v1" ] && [ "$2" = "acquire" ] && [ "$3" = "--generation" 
   exit 0
 fi
 if [ -n "$FORGEPILOT_TEST_CODEX_ARGUMENTS" ]; then
-  printf '%s\n' "$@" > "$FORGEPILOT_TEST_CODEX_ARGUMENTS"
+  printf '%s\n' forgepilot-test-launch "$@" >> "$FORGEPILOT_TEST_CODEX_ARGUMENTS"
 fi
 result=""
 while [ "$#" -gt 0 ]; do
@@ -1370,6 +1503,9 @@ done
 	fi
 if [ -n "$FORGEPILOT_TEST_CODEX_RESULT" ] && [ -n "$result" ]; then
   printf '%s' "$FORGEPILOT_TEST_CODEX_RESULT" > "$result"
+fi
+if [ -n "$FORGEPILOT_TEST_PRINT_CREDENTIAL" ]; then
+  printf '%s\n' "$FORGEPILOT_TEST_RUNTIME_CREDENTIAL"
 fi
 exit 0
 `)
