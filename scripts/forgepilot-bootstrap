@@ -1170,6 +1170,7 @@ check_installed_go() {
 	INSTALL_GOROOT=$(/usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin GOTOOLCHAIN=local "$INSTALL_GO" env GOROOT 2>/dev/null) || fail 'cannot inspect approved Go root'
 	case "$INSTALL_GOROOT" in /*) ;; *) fail 'approved Go root is not absolute' ;; esac
 	[ -d "$INSTALL_GOROOT" ] || fail 'approved Go root is unavailable'
+	case "$INSTALL_GOROOT" in "$INSTALL_CANONICAL_SOURCE"/*) fail 'approved Go root cannot come from the source checkout' ;; esac
 	[ "$(sha256_stdin <"$INSTALL_GO")" = "$INSTALL_GO_HASH" ] || fail 'approved Go toolchain changed during root inspection'
 }
 
@@ -1470,6 +1471,13 @@ stage_install_checkout() {
 	/bin/cp "$INSTALL_GO" "$INSTALL_STAGE/toolchain/go" || fail 'cannot stage approved Go executable'
 	/bin/chmod 700 "$INSTALL_STAGE/toolchain/go" || fail 'cannot secure staged Go executable'
 	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/go")" = "$INSTALL_GO_HASH" ] || fail 'staged Go executable differs from approved bytes'
+	install_gofmt=$INSTALL_GOROOT/bin/gofmt
+	[ -f "$install_gofmt" ] && [ ! -L "$install_gofmt" ] && [ -x "$install_gofmt" ] || fail 'approved Go formatter is unavailable or unsafe'
+	INSTALL_GOFMT_HASH=$(sha256_stdin <"$install_gofmt") || fail 'cannot hash approved Go formatter'
+	/bin/cp "$install_gofmt" "$INSTALL_STAGE/toolchain/gofmt" || fail 'cannot stage approved Go formatter'
+	/bin/chmod 700 "$INSTALL_STAGE/toolchain/gofmt" || fail 'cannot secure staged Go formatter'
+	[ "$(sha256_stdin <"$install_gofmt")" = "$INSTALL_GOFMT_HASH" ] || fail 'approved Go formatter changed during staging'
+	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/gofmt")" = "$INSTALL_GOFMT_HASH" ] || fail 'staged Go formatter differs from approved bytes'
 }
 
 build_install_cli() {
@@ -1485,12 +1493,14 @@ build_install_cli() {
 
 verify_install_source() {
 	install_build_path=$INSTALL_STAGE/toolchain:/usr/bin:/bin
+	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/gofmt")" = "$INSTALL_GOFMT_HASH" ] || fail 'staged Go formatter changed before verification'
 	(
 		cd "$INSTALL_STAGE/source" || exit 1
 		/usr/bin/env -i HOME="$HOME" PATH="$install_build_path" LC_ALL=C \
 			GOROOT="$INSTALL_GOROOT" GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off /usr/bin/make verify
 	) || fail 'approved source make verify failed'
 	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/go")" = "$INSTALL_GO_HASH" ] || fail 'staged Go executable changed during verification'
+	[ "$(sha256_stdin <"$INSTALL_STAGE/toolchain/gofmt")" = "$INSTALL_GOFMT_HASH" ] || fail 'staged Go formatter changed during verification'
 }
 
 stage_install_payload() {

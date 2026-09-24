@@ -89,7 +89,9 @@ An incompatible version stops at `go-prerequisite`, before staging.
 
 Build the exact source commit with `GOBIN` set to a user-owned versioned staging
 directory and `go install ./cmd/forgepilot`, run the disclosed `make verify`
-there, and confirm the staged CLI starts. Only then
+there using `go` and `gofmt` staged from the approved Go installation, and
+confirm the staged CLI starts. A missing or unsafe formatter stops verification.
+Only then
 perform the displayed atomic entrypoint switch. A failure leaves the existing
 entrypoint unchanged.
 

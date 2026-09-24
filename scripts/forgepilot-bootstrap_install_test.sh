@@ -12,13 +12,17 @@ assert_file() { [ -f "$1" ] || fail "expected file: $1"; }
 assert_not_path() { [ ! -e "$1" ] && [ ! -L "$1" ] || fail "unexpected path: $1"; }
 plan_id() { printf '%s\n' "$1" | /usr/bin/awk -F': ' '$1 == "Plan ID" { print $2 }'; }
 
+if PATH=/usr/bin:/bin /usr/bin/make -s -C "$script_dir/.." format >"$fixture/format.out" 2>"$fixture/format.err"; then
+	fail 'format gate accepted missing gofmt'
+fi
+
 source=$fixture/source
 home=$fixture/home
 root=$home/.local/share/forgepilot
 /bin/mkdir -p "$source/cmd/forgepilot" "$source/scripts" "$source/skills/codex/forgepilot-onboarding" "$source/docs/release" "$home"
 printf 'module github.com/CarlLee1983/ForgePilot\n\ngo 1.25.5\n' >"$source/go.mod"
 printf 'package main\nimport "fmt"\nfunc main() { fmt.Println("fixture-generation-a") }\n' >"$source/cmd/forgepilot/main.go"
-printf 'verify:\n\tgo test ./...\n\t/usr/bin/which go > %s\n' "$fixture/observed-verify-go" >"$source/Makefile"
+printf 'verify:\n\tgo test ./...\n\t/usr/bin/which go > %s\n\t/usr/bin/which gofmt > %s\n\tgofmt -d cmd/forgepilot/main.go >/dev/null\n' "$fixture/observed-verify-go" "$fixture/observed-verify-gofmt" >"$source/Makefile"
 /bin/cp "$bootstrap" "$source/scripts/forgepilot-bootstrap"
 /bin/chmod 700 "$source/scripts/forgepilot-bootstrap"
 printf '# Fixture skill A\n' >"$source/skills/codex/forgepilot-onboarding/SKILL.md"
@@ -57,6 +61,7 @@ if HOME="$home" "$bootstrap" install --agent codex --source "$source" --commit "
 assert_not_path "$root"
 HOME="$home" "$bootstrap" install --agent codex --source "$source" --commit "$generation_a" --approve "$approval" || fail 'approved initial install failed'
 case "$(/bin/cat "$fixture/observed-verify-go")" in "$home/.local/share/.forgepilot-stage."*/toolchain/go) ;; *) fail 'make verify did not use the staged approved Go executable' ;; esac
+case "$(/bin/cat "$fixture/observed-verify-gofmt")" in "$home/.local/share/.forgepilot-stage."*/toolchain/gofmt) ;; *) fail 'make verify did not use the staged approved Go formatter' ;; esac
 assert_file "$root/versions/$generation_a/bin/forgepilot"
 assert_file "$root/versions/$generation_a/libexec/forgepilot-bootstrap"
 assert_file "$root/versions/$generation_a/skills/codex/forgepilot-onboarding/SKILL.md"
@@ -74,6 +79,15 @@ printf '# Fixture procedure B\n' >"$source/docs/release/onboarding.md"
 /usr/bin/git -C "$source" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'fixture B'
 generation_b=$(/usr/bin/git -C "$source" rev-parse HEAD)
 printf '# Uncommitted working-tree drift\n' >"$source/skills/codex/forgepilot-onboarding/SKILL.md"
+missing_gofmt_bin=$fixture/missing-gofmt-bin
+/bin/mkdir -p "$missing_gofmt_bin" "$fixture/missing-gofmt-root"
+printf '#!/bin/sh\nif [ "$1" = version ]; then printf "go version go1.25.5 darwin/arm64\\n"; elif [ "$1" = env ]; then printf "%s\\n"; else exit 1; fi\n' "$fixture/missing-gofmt-root" >"$missing_gofmt_bin/go"
+/bin/chmod 700 "$missing_gofmt_bin/go"
+missing_gofmt_plan=$(PATH="$missing_gofmt_bin:$PATH" HOME="$home" "$bootstrap" plan --upgrade --agent codex --source "$source" --commit "$generation_b") || fail 'missing-formatter plan failed'
+if PATH="$missing_gofmt_bin:$PATH" HOME="$home" "$bootstrap" install --upgrade --agent codex --source "$source" --commit "$generation_b" --approve "$(plan_id "$missing_gofmt_plan")" >"$fixture/missing-gofmt.out" 2>"$fixture/missing-gofmt.err"; then fail 'install accepted missing approved Go formatter'; fi
+/usr/bin/grep -F -q 'approved Go formatter is unavailable or unsafe' "$fixture/missing-gofmt.err" || fail 'missing-formatter rejection did not reach the formatter guard'
+[ "$(/usr/bin/readlink "$root/current")" = "versions/$generation_a" ] || fail 'missing formatter changed current generation'
+HOME="$home" "$bootstrap" status >/dev/null || fail 'missing formatter left an invalid installation'
 plan=$(HOME="$home" "$bootstrap" plan --upgrade --agent codex --source "$source" --commit "$generation_b") || fail 'upgrade plan failed'
 approval=$(plan_id "$plan")
 HOME="$home" "$bootstrap" install --upgrade --agent codex --source "$source" --commit "$generation_b" --approve "$approval" || fail 'approved upgrade failed'
