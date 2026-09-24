@@ -128,11 +128,12 @@ const ResultSchema = `{
     "needs_human": {
       "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["question", "options", "context"],
+      "required": ["question", "options", "context", "external_fact"],
       "properties": {
         "question": { "type": "string" },
         "options": { "type": ["array", "null"], "items": { "type": "string" } },
-        "context": { "type": ["string", "null"] }
+        "context": { "type": ["string", "null"] },
+        "external_fact": { "type": ["string", "null"] }
       }
     },
     "error": { "type": ["string", "null"] }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -533,6 +534,11 @@ func TestResultSchemaSatisfiesStrictStructuredOutput(t *testing.T) {
 		}
 	}
 	walk("result", schema)
+	question := schema["properties"].(map[string]any)["needs_human"].(map[string]any)
+	fact, ok := question["properties"].(map[string]any)["external_fact"].(map[string]any)
+	if !ok || !reflect.DeepEqual(fact["type"], []any{"string", "null"}) {
+		t.Fatalf("Codex schema cannot produce a declared external fact: %#v", fact)
+	}
 }
 
 // The strict schema requires every key, so a runtime that has nothing to put in

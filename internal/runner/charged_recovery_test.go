@@ -1498,6 +1498,12 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 	printf 'launched\n' >> "$FORGEPILOT_LAUNCH_SENTINEL"
+	if [ "$FORGEPILOT_TEST_CODEX_HOLD" = "1" ]; then
+	  printf 'session marker\n'
+	  printf 'worker edit\n' >> "$FORGEPILOT_TEST_WORK_FILE"
+	  trap 'while IFS= read -r line; do case "$line" in *"inspect work"*) printf "pause visible before termination\n" > "$FORGEPILOT_TEST_STOP_OBSERVATION";; esac; done < "$FORGEPILOT_TEST_CONTROL_FILE"; exit 0' TERM
+	  sleep 30
+	fi
 	if [ "$FORGEPILOT_RUNNER_CRASH_AT" = "after-worker-launch" ] || [ "$FORGEPILOT_RUNNER_CRASH_AT" = "after-worker-identity-save" ]; then
 	  exec sleep 5
 	fi
@@ -1506,6 +1512,9 @@ if [ -n "$FORGEPILOT_TEST_CODEX_RESULT" ] && [ -n "$result" ]; then
 fi
 if [ -n "$FORGEPILOT_TEST_PRINT_CREDENTIAL" ]; then
   printf '%s\n' "$FORGEPILOT_TEST_RUNTIME_CREDENTIAL"
+fi
+if [ -n "$FORGEPILOT_TEST_CODEX_EXIT_CODE" ]; then
+  exit "$FORGEPILOT_TEST_CODEX_EXIT_CODE"
 fi
 exit 0
 `)
