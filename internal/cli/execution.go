@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/CarlLee1983/ForgePilot/internal/app"
 	"github.com/CarlLee1983/ForgePilot/internal/control"
 	"github.com/CarlLee1983/ForgePilot/internal/runner"
+	"github.com/CarlLee1983/ForgePilot/internal/supervision"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
@@ -25,7 +27,7 @@ const (
 
 func executionCommand(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot execution <plan|authorize|revise|retention|resume|stop|declare>")
+		return errors.New("usage: forgepilot execution <plan|authorize|revise|retention|resume|stop|declare|supervise>")
 	}
 	switch args[0] {
 	case "plan":
@@ -42,6 +44,8 @@ func executionCommand(args []string, root string, output io.Writer, resolver app
 		return stopExecution(args[1:], root, output)
 	case "declare":
 		return declareExecution(args[1:], root, output)
+	case "supervise":
+		return superviseExecution(args[1:], root, output, resolver)
 	default:
 		return fmt.Errorf("unknown execution subcommand %q", args[0])
 	}
@@ -75,7 +79,7 @@ func stopExecution(args []string, root string, output io.Writer) error {
 	if goalID == "" || requestedBy == "" || reason == "" {
 		return errors.New(executionStopUsage)
 	}
-	stopResult, stopErr := runner.RequestStopResult(root, goalID, requestedBy, reason, now())
+	stopResult, stopErr := requestExecutionStop(root, goalID, requestedBy, reason)
 	if stopErr != nil {
 		if !jsonOutput {
 			return stopErr
@@ -104,6 +108,37 @@ func stopExecution(args []string, root string, output io.Writer) error {
 	}
 	_, err = fmt.Fprintf(output, "Execution for Goal %s paused.\n", goalID)
 	return err
+}
+
+func requestExecutionStop(root, goalID, requestedBy, reason string) (runner.StopResult, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return runner.StopResult{}, err
+	}
+	manager, err := supervision.New(home)
+	if err != nil {
+		return runner.StopResult{}, err
+	}
+	id, err := supervision.ID(root, goalID)
+	if err != nil {
+		return runner.StopResult{}, err
+	}
+	job, err := manager.Load(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return runner.RequestStopResult(root, goalID, requestedBy, reason, now())
+	}
+	if err != nil {
+		return runner.StopResult{}, err
+	}
+	if job.Workspace != root || job.GoalID != goalID {
+		return runner.StopResult{}, errors.New("supervision job does not match stop target")
+	}
+	if job.Phase != supervision.PhaseBlocked {
+		if _, err := manager.SetPhase(id, supervision.PhasePaused, "stop requested", now()); err != nil {
+			return runner.StopResult{}, err
+		}
+	}
+	return runner.RequestSupervisedStopResult(root, goalID, requestedBy, reason, now())
 }
 
 func declareExecution(args []string, root string, output io.Writer) error {
@@ -147,10 +182,19 @@ func resumeExecution(args []string, root string, output io.Writer, resolver app.
 	if jsonOutput {
 		runOutput = io.Discard
 	}
-	record, err := runner.ResumeAuthorizationGoal(runner.Options{
+	options := runner.Options{
 		Root: root, Output: runOutput, Now: now, Stop: stop, Signalled: signalled,
 		GenerationResolver: resolver,
-	}, goalID)
+	}
+	record, handled, err := resumePreRunSupervision(root, goalID, options)
+	if !handled {
+		record, err = runner.ResumeAuthorizationGoal(options, goalID)
+	}
+	if err == nil {
+		if phaseErr := reflectExplicitSupervisionResume(root, goalID, record); phaseErr != nil {
+			return phaseErr
+		}
+	}
 	if jsonOutput && err == nil {
 		if record.Stop == nil {
 			return errors.New("the execution resume ended without recording why")
@@ -164,6 +208,46 @@ func resumeExecution(args []string, root string, output io.Writer, resolver app.
 		return &exitStatus{code: record.Stop.Reason.ExitCode()}
 	}
 	return reportRun(record, err, output)
+}
+
+func reflectExplicitSupervisionResume(root, goalID string, record runner.Record) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	manager, err := supervision.New(home)
+	if err != nil {
+		return err
+	}
+	id, err := supervision.ID(root, goalID)
+	if err != nil {
+		return err
+	}
+	job, err := manager.Load(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if job.Phase == supervision.PhasePaused || job.Phase == supervision.PhaseBlocked {
+		if _, err := manager.Resume(id, now()); err != nil {
+			return err
+		}
+	}
+	phase := supervision.PhasePaused
+	if record.Stop == nil {
+		phase = supervision.PhaseBlocked
+	} else {
+		switch record.Stop.Reason {
+		case runner.StopInterrupted, runner.StopTerminated, runner.StopMaxSteps, runner.StopMaxDuration:
+			phase = supervision.PhaseReady
+		case runner.StopRecoveryBlocked:
+			phase = supervision.PhaseBlocked
+		}
+	}
+	_, err = manager.SetPhase(id, phase, "explicit execution resume returned", now())
+	return err
 }
 
 func reviseExecution(args []string, root string, output io.Writer, resolver app.EngineGenerationResolver) error {

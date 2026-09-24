@@ -406,9 +406,9 @@ func TestBootstrapGenerationResolverAcceptsOnlyItsProcessGenerationHelper(t *tes
 		t.Fatal(err)
 	}
 	script := fmt.Sprintf(`#!/bin/sh
-[ "$1" = generation-v1 ] && [ "$2" = current ] || exit 9
+[ "$1" = generation-v1 ] && [ "$2" = pinned ] && [ "$3" = "%s" ] || exit 9
 printf '%%s\n' '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s","helper_path":"%s"}'
-`, generation.SourceCommit, generation.PayloadSHA256, managedExecutable, managedHelper)
+`, generation.SourceCommit, generation.SourceCommit, generation.PayloadSHA256, managedExecutable, managedHelper)
 	if err := os.WriteFile(managedHelper, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ printf '%%s\n' '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s"
 	}
 }
 
-func TestBootstrapGenerationResolverRefusesAChangedCurrentGenerationAfterProcessStart(t *testing.T) {
+func TestBootstrapGenerationResolverKeepsRetainedProcessGenerationAfterCurrentSwitch(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, ".local", "share", "forgepilot")
 	oldGeneration := work.ExecutionEngineGeneration{SourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -487,9 +487,9 @@ func TestBootstrapGenerationResolverRefusesAChangedCurrentGenerationAfterProcess
 		t.Fatal(err)
 	}
 	script := fmt.Sprintf(`#!/bin/sh
-[ "$1" = generation-v1 ] && [ "$2" = current ] || exit 9
+[ "$1" = generation-v1 ] && [ "$2" = pinned ] && [ "$3" = "%s" ] || exit 9
 printf '%%s\n' '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":"%s","helper_path":"%s"}'
-`, newGeneration.SourceCommit, newGeneration.PayloadSHA256, newExecutable, newHelper)
+`, oldGeneration.SourceCommit, oldGeneration.SourceCommit, oldGeneration.PayloadSHA256, oldExecutable, oldHelper)
 	if err := os.MkdirAll(filepath.Dir(oldHelper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -506,9 +506,9 @@ printf '%%s\n' '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s"
 		t.Fatal(err)
 	}
 
-	_, err := (BootstrapGenerationResolver{ProcessImage: BootstrapProcessImage{executablePath: oldExecutable, homePath: home, managedRoot: root}}).Resolve(t.Context())
-	if err == nil {
-		t.Fatal("resolver accepted the generation selected after its process started")
+	resolved, err := (BootstrapGenerationResolver{ProcessImage: BootstrapProcessImage{executablePath: oldExecutable, homePath: home, managedRoot: root}}).Resolve(t.Context())
+	if err != nil || resolved.Generation != oldGeneration || resolved.HelperPath != oldHelper {
+		t.Fatalf("old retained process did not keep its generation: %#v %v", resolved, err)
 	}
 }
 

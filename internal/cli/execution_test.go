@@ -214,4 +214,21 @@ func TestExecutionResumeUsesGoalScopedContract(t *testing.T) {
 	}
 }
 
+func TestSupervisionCLIRequiresPinnedAuthorizationAndExactJobPath(t *testing.T) {
+	root := preflightCLIFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := ExecuteWithGenerationResolver([]string{"execution", "supervise", "install", "--goal", "goal", "--json"},
+		root, &stdout, &stderr, executionTestGenerationResolver{}); code != 1 ||
+		!strings.Contains(stderr.String(), "no execution authorization") {
+		t.Fatalf("supervision install without authorization = exit %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Execute([]string{"execution", "supervise", "run", "--job", "relative.json"}, root, &stdout, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), "absolute JSON path") {
+		t.Fatalf("supervision run with relative record = exit %d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 const executionPlanRequestFormatVersion = "forgepilot.execution-plan-request/v2"

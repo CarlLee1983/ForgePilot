@@ -441,6 +441,13 @@ actual probes 由正式啟動管理，未重新確認的 freshness 顯示歷史�
 [accepted ADR-0035](adr/0035-supervised-goal-execution-with-bounded-rollover.md)。
 下文仍描述既有 Runner；不得把新方向當成目前的存活或續跑保證。
 
+FP-59 的 user LaunchAgent 由 `internal/supervision` 安裝並保留獨立的 job／事件紀錄，
+只負責登入後與定期喚起固定版本的 ForgePilot；`internal/cli/supervision.go` 將每次喚起
+交給既有 Runner admission。`internal/runner` 仍持有 workspace lock、Pending cleanup、
+worker ownership 與 stop/launch control lock 的唯一判準。crash resume 的 RECOVERY 扣帳
+由 `internal/app` 寫 Goal ledger，Run Record 只留 intent 與 receipt，不能成為第二份額度權威。
+LaunchAgent 沒有登出或睡眠時執行的保證；原生觀察見 operations acceptance record。
+
 FP-58 將這條引擎保留規則具體化為 per-owner retention：current Execution Authorization 與每個仍可
 launch／recover 的 supervised Run 各自以不同、domain-separated opaque marker 持有同一個或不同的
 generation。Authorization／Run record 只保存 immutable tuple 與 owner closure fact，絕不保存 raw

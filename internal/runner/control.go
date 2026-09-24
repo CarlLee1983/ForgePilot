@@ -17,6 +17,12 @@ type StopResult struct {
 	CleanupConfirmed bool
 }
 
+var ErrNoLiveRun = errors.New("goal has no live run")
+
+// SupervisionPauseRunID fences the interval before the first Run Record exists.
+// It is never a real Run ID and only an explicit supervised resume clears it.
+const SupervisionPauseRunID = "supervision-before-run"
+
 // RequestStop records a user's stop intent before it attempts to terminate the
 // current worker for goalID. The durable intent is deliberately not rolled back
 // when ownership is incomplete or cleanup cannot be confirmed: proceeding
@@ -27,6 +33,17 @@ func RequestStop(root, goalID, requestedBy, reason string, now time.Time) error 
 }
 
 func RequestStopResult(root, goalID, requestedBy, reason string, now time.Time) (StopResult, error) {
+	return requestStopResult(root, goalID, requestedBy, reason, now, false)
+}
+
+// RequestSupervisedStopResult also accepts the pre-Run launch window. Its
+// wildcard pause is durable before a LaunchAgent can reach the final worker
+// launch gate; the normal stop path still settles a recorded worker.
+func RequestSupervisedStopResult(root, goalID, requestedBy, reason string, now time.Time) (StopResult, error) {
+	return requestStopResult(root, goalID, requestedBy, reason, now, true)
+}
+
+func requestStopResult(root, goalID, requestedBy, reason string, now time.Time, supervised bool) (StopResult, error) {
 	if strings.TrimSpace(goalID) == "" {
 		return StopResult{}, errors.New("goal ID is required")
 	}
@@ -38,7 +55,9 @@ func RequestStopResult(root, goalID, requestedBy, reason string, now time.Time) 
 	if err := control.WithLock(root, func() error {
 		var err error
 		record, err = currentLiveRun(root, goalID)
-		if err != nil {
+		if errors.Is(err, ErrNoLiveRun) && supervised {
+			record = Record{RunID: SupervisionPauseRunID}
+		} else if err != nil {
 			return err
 		}
 		if err := control.UpdateLocked(root, func(state *control.State) error {
@@ -58,6 +77,10 @@ func RequestStopResult(root, goalID, requestedBy, reason string, now time.Time) 
 		return nil
 	}); err != nil {
 		return StopResult{}, err
+	}
+	if record.RunID == SupervisionPauseRunID {
+		result.CleanupConfirmed = true
+		return result, nil
 	}
 	// The pause is now durable and runner admission can no longer pass its
 	// control-lock check. Do not keep that lock while terminating: process
@@ -97,7 +120,7 @@ func currentLiveRun(root, goalID string) (Record, error) {
 		live = &copy
 	}
 	if live == nil {
-		return Record{}, fmt.Errorf("goal %s has no live run", goalID)
+		return Record{}, fmt.Errorf("%w: goal %s", ErrNoLiveRun, goalID)
 	}
 	return *live, nil
 }
@@ -106,7 +129,8 @@ func pauseFor(root, goalID, runID string) (*control.Pause, error) {
 	var pause *control.Pause
 	err := control.WithLock(root, func() error {
 		state, err := control.ReadLocked(root)
-		if err != nil || state.Pause == nil || state.Pause.GoalID != goalID || (runID != "" && state.Pause.RunID != runID) {
+		if err != nil || state.Pause == nil || state.Pause.GoalID != goalID ||
+			(runID != "" && state.Pause.RunID != runID && state.Pause.RunID != SupervisionPauseRunID) {
 			return err
 		}
 		copy := *state.Pause
@@ -114,6 +138,32 @@ func pauseFor(root, goalID, runID string) (*control.Pause, error) {
 		return nil
 	})
 	return pause, err
+}
+
+// ClearSupervisionPause consumes an explicit resume of the pre-Run stop. The
+// workspace lock excludes a competing Runner admission while the control
+// record is changed; later worker starts still recheck the control lock.
+func ClearSupervisionPause(root, goalID string) error {
+	return storage.WithWorkspaceLock(root, func() error {
+		if blocked, err := settleWorkspace(Options{Root: root}, ""); err != nil {
+			return err
+		} else if blocked != nil {
+			return fmt.Errorf("cannot resume supervised job until run %s cleanup is confirmed: %s", blocked.RunID, blocked.Stop.Detail)
+		}
+		return control.WithLock(root, func() error {
+			state, err := control.ReadLocked(root)
+			if err != nil {
+				return err
+			}
+			if state.Pause == nil || state.Pause.GoalID != goalID || state.Pause.RunID != SupervisionPauseRunID {
+				return errors.New("goal has no pre-run supervised pause to resume")
+			}
+			return control.UpdateLocked(root, func(state *control.State) error {
+				state.ClearPause()
+				return nil
+			})
+		})
+	})
 }
 
 func (runner *Runner) honorPause() (bool, error) {

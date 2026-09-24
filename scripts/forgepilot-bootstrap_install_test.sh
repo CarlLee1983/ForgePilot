@@ -105,6 +105,14 @@ case "$generation_record" in
   *"\"generation_id\":\"$generation_b\""*"\"forgepilot_path\":\"$root/versions/$generation_b/bin/forgepilot\""*"\"helper_path\":\"$root/versions/$generation_b/libexec/forgepilot-bootstrap\""*) ;;
   *) fail 'generation discovery did not bind skill, CLI, and helper to one generation' ;;
 esac
+old_generation_record=$(HOME="$home" "$root/versions/$generation_a/libexec/forgepilot-bootstrap" generation-v1 pinned "$generation_a") || fail 'retained old generation discovery failed after upgrade'
+case "$old_generation_record" in
+  *"\"generation_id\":\"$generation_a\""*"\"forgepilot_path\":\"$root/versions/$generation_a/bin/forgepilot\""*"\"helper_path\":\"$root/versions/$generation_a/libexec/forgepilot-bootstrap\""*) ;;
+  *) fail 'pinned old generation followed the new current pointer' ;;
+esac
+if HOME="$home" "$root/versions/$generation_a/libexec/forgepilot-bootstrap" generation-v1 pinned 9999999999999999999999999999999999999999 >/dev/null 2>&1; then
+  fail 'pinned generation accepted an uninstalled identity'
+fi
 [ "$physical_skill" != "$root/versions/$generation_a/skills/codex/forgepilot-onboarding" ] || fail 'old skill was unexpectedly current'
 
 digest_a=$(printf '%s\n' "$(/bin/cat "$root/manifest.json")" | /usr/bin/sed -n "s/.*\"$generation_a\":{\"payload_digest\":\"\([^\"]*\)\".*/\1/p")

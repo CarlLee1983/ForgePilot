@@ -49,6 +49,7 @@ func requiresRunnerGeneration(args []string) bool {
 	}
 	if args[0] == "execution" {
 		return len(args) > 1 && (args[1] == "resume" || args[1] == "authorize" ||
+			(args[1] == "supervise" && len(args) > 2 && (args[2] == "install" || args[2] == "run")) ||
 			(args[1] == "retention" && len(args) > 2 && args[2] == "reconcile") ||
 			(args[1] == "revise" && len(args) > 2 && args[2] == "authorize"))
 	}

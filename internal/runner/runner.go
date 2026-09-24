@@ -30,6 +30,9 @@ type Options struct {
 	Snapshot       bool
 	Budget         Budget
 	Limits         storage.ArtifactLimits
+	// Supervised makes a timer continuation observe a user's durable pause.
+	// Only an explicit execution resume may acknowledge and clear that pause.
+	Supervised bool
 	// GenerationResolver resolves the immutable managed ForgePilot generation
 	// that must be retained before this Runner can bind or charge execution.
 	GenerationResolver app.EngineGenerationResolver
@@ -280,7 +283,7 @@ func startWithWorkspaceLock(options Options, lockHeld bool) (Record, error) {
 			return err
 		}
 		defer func() { record = *runner.record }()
-		if options.controlResumeRunID != "" {
+		if options.controlResumeRunID != "" && !options.Supervised {
 			if err := app.AcknowledgeExecutionResume(options.Root, options.GoalID, options.controlResumeRunID); err != nil {
 				return err
 			}
@@ -393,6 +396,48 @@ func Resume(options Options, runID string) (Record, error) {
 	return resumeWithWorkspaceLock(options, runID, false)
 }
 
+// chargeRecovery records a fresh restart episode after cleanup and admission
+// checks, before the old stop is cleared or any new work begins. An intent in
+// the Run Record makes the ledger transaction replayable after a crash.
+func (runner *Runner) chargeRecovery(identity app.RunnerIdentity, snapshot app.RunnerReservationSnapshot) error {
+	count := 0
+	for _, reservation := range snapshot.Reservations {
+		if reservation.Kind == work.ExecutionReservationRecovery {
+			count++
+		}
+	}
+	ordinal := count + 1
+	if pending := runner.record.PendingRecoveryID; pending != "" {
+		if _, err := fmt.Sscanf(pending, runner.record.RunID+":recovery:%d", &ordinal); err != nil ||
+			pending != fmt.Sprintf("%s:recovery:%d", runner.record.RunID, ordinal) ||
+			(ordinal != count && ordinal != count+1) {
+			return fmt.Errorf("run %s has an invalid pending recovery intent", runner.record.RunID)
+		}
+	} else {
+		runner.record.PendingRecoveryID = fmt.Sprintf("%s:recovery:%d", runner.record.RunID, ordinal)
+		if err := runner.save(); err != nil {
+			return err
+		}
+	}
+	reservation, err := app.PrepareChargedRecovery(runner.options.Root, runner.record.GoalID,
+		runner.record.RunID, ordinal, identity, runner.now())
+	if err != nil {
+		return err
+	}
+	receipt, err := work.ExecutionReservationReceiptFor(reservation)
+	if err != nil {
+		return err
+	}
+	if _, exists := appReceipt(runner.record.ReservationReceipts, receipt.ReservationID); !exists {
+		runner.record.ReservationReceipts = append(runner.record.ReservationReceipts, receipt)
+		if err := runner.save(); err != nil {
+			return err
+		}
+	}
+	runner.record.PendingRecoveryID = ""
+	return runner.save()
+}
+
 // resumeWithWorkspaceLock is the lock-aware body of Resume. Authorization
 // continuation uses it while holding the same workspace lock in which it
 // rechecked the anchor, preventing a stale exact-resume decision.
@@ -422,6 +467,8 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		if err := existing.Limits.Validate(); err != nil {
 			return fmt.Errorf("run %s has invalid artifact limits: %w", runID, err)
 		}
+		needsRecoveryCharge := existing.ExecutionAuthorizationDigest != "" &&
+			(existing.PendingRecoveryID != "" || existing.Stop == nil || existing.Worker != nil || len(existing.UnresolvedPending()) != 0)
 		// A resume launches sessions on this workspace exactly as a fresh run
 		// does, so it clears the same bar: a worker another run left behind is
 		// still a writer here, and the workspace lock says nothing about it.
@@ -593,8 +640,16 @@ func resumeWithWorkspaceLock(options Options, runID string, lockHeld bool) (Reco
 		if err != nil {
 			return err
 		}
-		if err := app.AcknowledgeExecutionResume(options.Root, existing.GoalID, existing.RunID); err != nil {
-			return err
+		if needsRecoveryCharge {
+			if err := runner.chargeRecovery(identity, reservationSnapshot); err != nil {
+				return err
+			}
+		}
+		runner.crashAt("before-resume-acknowledgment")
+		if !options.Supervised {
+			if err := app.AcknowledgeExecutionResume(options.Root, existing.GoalID, existing.RunID); err != nil {
+				return err
+			}
 		}
 		// Only an admitted exact resume consumes the prior stop. Keep it durable
 		// if authorization or accounting validation above rejects the request.
@@ -720,7 +775,9 @@ func startAuthorizationSuccessorWithLock(options Options, anchor Record, authori
 	successor := resumeOptions(options, anchor)
 	successor.RuntimeName = authorization.WorkerProfile.Runtime
 	successor.RuntimeCommand = authorization.WorkerProfile.ExecutablePath
-	successor.controlResumeRunID = anchor.RunID
+	if !options.Supervised {
+		successor.controlResumeRunID = anchor.RunID
+	}
 	return startWithWorkspaceLock(successor, lockHeld)
 }
 
@@ -739,10 +796,6 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 		// Selection shares the continuation lock with the anchor decision. A
 		// successor created by another Runner cannot appear after this list is
 		// read and leave this call continuing an older anchor.
-		root, err := filepath.EvalSymlinks(options.Root)
-		if err != nil {
-			return err
-		}
 		state, err := storage.Load(options.Root)
 		if err != nil {
 			return err
@@ -751,25 +804,11 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 		if !ok || goal.Execution == nil || len(goal.Execution.Authorizations) == 0 {
 			return fmt.Errorf("goal %q has no current execution authorization", goalID)
 		}
-		runIDs, err := storage.ListRuns(options.Root)
+		selected, found, err := LatestAuthorizationRun(options.Root, goalID, goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1].Digest)
 		if err != nil {
 			return err
 		}
-		var selected *Record
-		for _, runID := range runIDs {
-			candidate, err := LoadRecord(options.Root, runID)
-			if err != nil {
-				return err
-			}
-			if candidate.Workspace != root || candidate.GoalID != goalID || candidate.ExecutionAuthorizationDigest == "" {
-				continue
-			}
-			if selected == nil || preferAuthorizationRun(candidate, *selected, goal.Execution.Authorizations[len(goal.Execution.Authorizations)-1].Digest) {
-				copy := candidate
-				selected = &copy
-			}
-		}
-		if selected == nil {
+		if !found {
 			return fmt.Errorf("goal %q has no authorization-bound run to continue", goalID)
 		}
 		record, err = resumeAuthorizationWithWorkspaceLock(options, selected.RunID, true)
@@ -777,6 +816,38 @@ func ResumeAuthorizationGoal(options Options, goalID string) (Record, error) {
 	}
 	err := storage.WithWorkspaceLock(options.Root, operation)
 	return record, err
+}
+
+// LatestAuthorizationRun selects a Goal's relevant charged history. Callers
+// outside the workspace lock may use this for presentation or routing only;
+// ResumeAuthorizationGoal repeats selection under the admission lock.
+func LatestAuthorizationRun(root, goalID, currentDigest string) (Record, bool, error) {
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return Record{}, false, err
+	}
+	runIDs, err := storage.ListRuns(root)
+	if err != nil {
+		return Record{}, false, err
+	}
+	var selected *Record
+	for _, runID := range runIDs {
+		candidate, err := LoadRecord(root, runID)
+		if err != nil {
+			return Record{}, false, err
+		}
+		if candidate.Workspace != canonicalRoot || candidate.GoalID != goalID || candidate.ExecutionAuthorizationDigest == "" {
+			continue
+		}
+		if selected == nil || preferAuthorizationRun(candidate, *selected, currentDigest) {
+			copy := candidate
+			selected = &copy
+		}
+	}
+	if selected == nil {
+		return Record{}, false, nil
+	}
+	return *selected, true, nil
 }
 
 func preferAuthorizationRun(candidate, selected Record, currentDigest string) bool {
@@ -1830,7 +1901,8 @@ func (runner *Runner) implement(action work.NextAction, decision app.Decision) e
 		if err != nil {
 			return err
 		}
-		if controlState.Pause != nil && controlState.Pause.GoalID == runner.record.GoalID && controlState.Pause.RunID == runner.record.RunID {
+		if controlState.Pause != nil && controlState.Pause.GoalID == runner.record.GoalID &&
+			(controlState.Pause.RunID == runner.record.RunID || controlState.Pause.RunID == SupervisionPauseRunID) {
 			blockedByPause = true
 			return nil
 		}

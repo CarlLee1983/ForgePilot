@@ -392,12 +392,16 @@ func PrepareChargedRun(root, goalID, runID string, identity RunnerIdentity, now 
 	}, identity)
 }
 
-// PrepareChargedRecovery records an exact-run recovery before a resumed run
-// can launch another worker. Its ID is stable for the run, making a crash at
-// this boundary charged once rather than free or double charged.
-func PrepareChargedRecovery(root, goalID, runID string, identity RunnerIdentity, now time.Time) (work.ExecutionReservation, error) {
+// PrepareChargedRecovery reserves one recovery episode before an interrupted
+// run can launch more work. The caller persists ordinal as an intent first, so
+// a crash between this transaction and its Run Record receipt replays the same
+// charge. A later episode receives the next ordinal and spends another unit.
+func PrepareChargedRecovery(root, goalID, runID string, ordinal int, identity RunnerIdentity, now time.Time) (work.ExecutionReservation, error) {
+	if ordinal < 1 {
+		return work.ExecutionReservation{}, errors.New("recovery ordinal must be positive")
+	}
 	return prepareChargedReservation(root, goalID, work.ExecutionReservation{
-		ID: runID + ":recovery", Kind: work.ExecutionReservationRecovery, RunID: runID, CreatedAt: now.UTC(),
+		ID: fmt.Sprintf("%s:recovery:%d", runID, ordinal), Kind: work.ExecutionReservationRecovery, RunID: runID, CreatedAt: now.UTC(),
 	}, identity)
 }
 

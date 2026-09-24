@@ -152,8 +152,8 @@ func CaptureBootstrapProcessImage(home string) (BootstrapProcessImage, error) {
 
 // BootstrapGenerationResolver asks only the helper adjacent to the generation
 // that launched this process. It never accepts a caller-selected helper or
-// resolves current: the process image anchors helper trust and makes an
-// upgrade between launch and admission fail closed.
+// follows current: an older retained process keeps its own generation after
+// an installation upgrade.
 type BootstrapGenerationResolver struct {
 	ProcessImage BootstrapProcessImage
 }
@@ -163,9 +163,9 @@ func (resolver BootstrapGenerationResolver) Resolve(ctx context.Context) (Resolv
 	if err != nil {
 		return ResolvedBootstrapGeneration{}, err
 	}
-	output, err := exec.CommandContext(ctx, helperPath, "generation-v1", "current").Output()
+	output, err := exec.CommandContext(ctx, helperPath, "generation-v1", "pinned", generationID).Output()
 	if err != nil {
-		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve current Bootstrap generation: %w", err)
+		return ResolvedBootstrapGeneration{}, fmt.Errorf("resolve pinned Bootstrap generation: %w", err)
 	}
 	var result struct {
 		ProtocolVersion int    `json:"protocol_version"`
@@ -184,7 +184,7 @@ func (resolver BootstrapGenerationResolver) Resolve(ctx context.Context) (Resolv
 	}
 	if result.ProtocolVersion != 1 || !validEngineGeneration(generation) ||
 		generation.SourceCommit != generationID || result.ForgePilotPath != expectedExecutable || result.HelperPath != helperPath {
-		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap helper did not confirm the current managed ForgePilot generation")
+		return ResolvedBootstrapGeneration{}, errors.New("Bootstrap helper did not confirm the pinned managed ForgePilot generation")
 	}
 	return ResolvedBootstrapGeneration{Generation: generation, HelperPath: helperPath}, nil
 }
@@ -204,21 +204,8 @@ func (image BootstrapProcessImage) generationHelperPath() (string, string, error
 		return "", "", errors.New("ForgePilot process image is not a managed generation executable")
 	}
 	helper := filepath.Join(image.managedRoot, "versions", parts[1], "libexec", "forgepilot-bootstrap")
-	stableHelper := filepath.Join(image.homePath, ".local", "bin", "forgepilot-bootstrap")
 	if err := validateManagedHelperPaths(image, helper); err != nil {
 		return "", "", err
-	}
-	if err := safeManagedSymlink(stableHelper, os.Getuid()); err != nil {
-		return "", "", err
-	}
-	target, err := os.Readlink(stableHelper)
-	if err != nil || target != filepath.Join(image.managedRoot, "current", "libexec", "forgepilot-bootstrap") {
-		return "", "", errors.New("Bootstrap stable helper link is missing or drifted")
-	}
-	anchoredHelper, err := filepath.EvalSymlinks(stableHelper)
-	canonicalHelper, canonicalErr := filepath.EvalSymlinks(helper)
-	if err != nil || canonicalErr != nil || anchoredHelper != canonicalHelper {
-		return "", "", errors.New("Bootstrap stable helper does not select the process generation")
 	}
 	return parts[1], helper, nil
 }
@@ -276,18 +263,6 @@ func safeManagedExecutable(path string, uid int) error {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int(stat.Uid) != uid || stat.Nlink != 1 || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0400 == 0 {
 		return fmt.Errorf("managed executable %q has unsafe ownership, mode, or links", path)
-	}
-	return nil
-}
-
-func safeManagedSymlink(path string, uid int) error {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink == 0 {
-		return fmt.Errorf("managed symlink %q is missing or unsafe", path)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != uid {
-		return fmt.Errorf("managed symlink %q has unexpected ownership", path)
 	}
 	return nil
 }

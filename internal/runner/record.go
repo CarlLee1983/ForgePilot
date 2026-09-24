@@ -260,6 +260,9 @@ type Record struct {
 	RetentionClosure    *RetentionClosure                  `json:"retention_closure,omitempty"`
 	RunReservationID    string                             `json:"run_reservation_id,omitempty"`
 	ReservationReceipts []work.ExecutionReservationReceipt `json:"reservation_receipts,omitempty"`
+	// PendingRecoveryID is written before its ledger charge. A crash before the
+	// matching receipt is saved replays this exact episode, not a free retry.
+	PendingRecoveryID string `json:"pending_recovery_id,omitempty"`
 	// RunPreparationState keeps an initial record nonrunnable across the
 	// record/ledger transaction boundary. A retry must finish this exact intent
 	// before it can create another run or launch a worker.

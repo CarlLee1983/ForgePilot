@@ -809,3 +809,28 @@ their own durable closure. The FP-58 acceptance commands remain
 `go test ./internal/app ./internal/runner`, and
 `scripts/forgepilot-bootstrap_test.sh`; repository-wide full and race gates
 remain FP-61 / final-acceptance work.
+
+### FP-59 macOS supervised execution
+
+| Command | Contract |
+|---|---|
+| `forgepilot execution supervise install --goal <goal-id> --json` | Install one user LaunchAgent for the current pinned, authorized Goal and immutable ForgePilot executable. The job record binds the workspace, authorization digest, and deadline. |
+| `forgepilot execution supervise status --goal <goal-id> --json` | Read the persisted job, plist installation, and launchd load state. It grants no action. |
+| `forgepilot execution supervise uninstall --goal <goal-id> --json` | Persist pause intent and confirm worker cleanup before unloading the user LaunchAgent; retain the job record for audit. |
+| `forgepilot execution supervise run --job <absolute-job-path>` | LaunchAgent entrypoint. Rechecks the pinned authorization, engine, deadline, workspace, and existing Run before delegating admission and recovery to Runner. A timer never clears a pause or human wait. |
+
+The LaunchAgent has `RunAtLoad` and a 60-second interval, without `KeepAlive`.
+It runs only in the logged-in user session, with the workspace as its working
+directory and the absolute pinned executable as its process image. Closing an
+observer does not terminate it. An expired, blocked, or paused job does not
+start a new writer. Exact-run crash recovery writes an episode intent, consumes
+one authorization `RECOVERY` unit after cleanup and admission validation, and
+saves its ledger receipt before new work. A crash between charge and receipt
+replays the same intent; a later episode consumes another unit. Native login,
+reboot, and sleep/wake observations are recorded separately in
+[the operations acceptance record](operations/macos-supervision-acceptance.md).
+Generation helpers installed before FP-59 do not implement the pinned query.
+Those older process images fail closed on supervised admission; a job must be
+installed from an FP-59 generation after the authorization is explicitly
+revised to that engine. This compatibility choice was decided during FP-59;
+the old helper and authorization history are not rewritten.

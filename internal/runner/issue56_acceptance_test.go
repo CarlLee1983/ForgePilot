@@ -20,7 +20,7 @@ import (
 
 func TestChargedWorkerStopPersistsPauseAndPreservesWork(t *testing.T) {
 	root, runtimeCommand, sentinel, now, _ := newUnresolvedExecutionRunnerFixture(t)
-	_ = resolveExecutionIdentityForRunnerTest(t, root, now)
+	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
 	revision := strings.TrimSpace(completionRecoveryGit(t, root, "rev-parse", "HEAD"))
 	if err := storage.Update(root, func(state *work.State) error {
 		if err := state.AddGoalWithPolicies("historical", "Historical Goal", "", root, work.ReviewPerGoal, work.CompletionVerified, now); err != nil {
@@ -140,6 +140,18 @@ func TestChargedWorkerStopPersistsPauseAndPreservesWork(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatalf("stop lost the worker's artifact: %v", err)
+	}
+	// A LaunchAgent timer is not an explicit resume, even after the real worker
+	// has exited. It must not acknowledge the durable pause for this Run.
+	supervised := chargedRunnerTestOptions(root, runtimeCommand, now, identity)
+	supervised.Supervised = true
+	continued, err := ResumeAuthorizationGoal(supervised, "g")
+	if err != nil || continued.Stop == nil || continued.Stop.Reason != StopUserPaused {
+		t.Fatalf("automatic continuation ignored operator stop: %#v, %v", continued.Stop, err)
+	}
+	controlState, err = control.Read(root)
+	if err != nil || controlState.Pause == nil || controlState.Pause.RunID != live.RunID {
+		t.Fatalf("automatic continuation cleared operator stop: %#v, %v", controlState.Pause, err)
 	}
 }
 

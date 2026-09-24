@@ -79,6 +79,12 @@ and cleanup are fail-closed, and recovery charges are bounded accounting events 
 * Use real subprocesses for process-group and recovery behavior; fake runtimes alone are insufficient.
 * Do not claim uninterrupted execution across logout, reboot, or sleep.
 
+Decided during FP-59: the managed Bootstrap helper gains a pinned-generation
+query so a retained executable can revalidate itself after `current` changes.
+Generations installed before this query existed fail closed for supervised
+admission; moving their authorization to a newer generation requires the
+explicit engine-revision flow. Historical helper files are not rewritten.
+
 ## Guidance
 
 Relevant:

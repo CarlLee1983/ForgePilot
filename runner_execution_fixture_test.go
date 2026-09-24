@@ -50,15 +50,18 @@ func managedRunnerTestImage(t *testing.T, builtBinary string) (string, string) {
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1:$2" in
-  generation-v1:current)
+	  generation-v1:current)
     printf '%%s\n' %s ;;
+	  generation-v1:pinned)
+	    [ "$3" = %s ] || exit 9
+	    printf '%%s\n' %s ;;
   retention-v1:acquire|retention-v1:release)
     [ "$3" = --generation ] && [ "$4" = %s ] && [ "$5" = --payload-digest ] && [ "$6" = %s ] && [ "$7" = --reference ] && [ -n "$8" ] || exit 9
     if [ "$2" = acquire ]; then result=acquired; else result=released; fi
     printf '{"protocol_version":1,"result":"%%s","generation_id":"%%s","payload_digest":"%%s"}\n' "$result" "$4" "$6" ;;
   *) exit 9 ;;
 esac
-`, shellQuote(string(current)), shellQuote(runnerTestGenerationCommit), shellQuote(runnerTestPayloadDigest))
+`, shellQuote(string(current)), shellQuote(runnerTestGenerationCommit), shellQuote(string(current)), shellQuote(runnerTestGenerationCommit), shellQuote(runnerTestPayloadDigest))
 	if err := os.WriteFile(helper, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}

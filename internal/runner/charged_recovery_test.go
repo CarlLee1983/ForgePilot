@@ -27,6 +27,55 @@ type staticGenerationResolver struct {
 	calls    *int
 }
 
+func TestRecoveryChargeReplaysOneEpisodeAndExhaustsTheFiniteCap(t *testing.T) {
+	root, runtimeCommand, _, now, _ := newUnresolvedExecutionRunnerFixture(t)
+	identity := resolveExecutionIdentityForRunnerTest(t, root, now)
+	runner, err := newRunner(chargedRunnerTestOptions(root, runtimeCommand, now, identity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := app.ReconcileRunnerReservationReceipts(root, "g", runner.record.RunID,
+		runner.record.RunReservationID, runner.record.ReservationReceipts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.chargeRecovery(identity, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Goals[0].Execution.Ledger.RecoveriesConsumed != 1 || runner.record.PendingRecoveryID != "" {
+		t.Fatalf("first recovery charge = %#v", state.Goals[0].Execution.Ledger)
+	}
+	// Simulate a crash after the ledger commit but before the Run Record receipt.
+	runner.record.PendingRecoveryID = runner.record.RunID + ":recovery:1"
+	runner.record.ReservationReceipts = runner.record.ReservationReceipts[:1]
+	if err := runner.save(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = app.ReconcileRunnerReservationReceipts(root, "g", runner.record.RunID,
+		runner.record.RunReservationID, runner.record.ReservationReceipts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.record.ReservationReceipts = snapshot.Receipts
+	if err := runner.chargeRecovery(identity, snapshot); err != nil {
+		t.Fatalf("replay charged a second time: %v", err)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Goals[0].Execution.Ledger.RecoveriesConsumed != 1 {
+		t.Fatal("replayed recovery consumed a second unit")
+	}
+	if err := runner.chargeRecovery(identity, snapshot); err == nil || !strings.Contains(err.Error(), "recovery cap") {
+		t.Fatalf("second episode beyond cap = %v", err)
+	}
+}
+
 func (resolver staticGenerationResolver) Resolve(context.Context) (app.ResolvedBootstrapGeneration, error) {
 	if resolver.calls != nil {
 		(*resolver.calls)++
@@ -420,7 +469,7 @@ func TestChargedRunChargeSurvivesRunnerProcessCrashBeforeRunRecord(t *testing.T)
 		t.Fatalf("exact retry of durable Run intent: %v", err)
 	}
 	if resumed.RunID != pending.RunID || resumed.RunPreparationState != "" || resumed.Stop == nil ||
-		resumed.Stop.Reason != StopMaxSteps || resumed.Steps != 1 || len(resumed.ReservationReceipts) != 2 {
+		resumed.Stop.Reason != StopMaxSteps || resumed.Steps != 1 || len(resumed.ReservationReceipts) != 3 {
 		t.Fatalf("recovered Run intent = %#v; want finalized charge and one START step", resumed)
 	}
 	stateAfterRetry, err := storage.Load(root)
@@ -472,7 +521,7 @@ func TestChargedRunIntentSurvivesRunnerProcessCrashBeforeRunCharge(t *testing.T)
 		t.Fatalf("exact retry of pre-charge Run intent: %v", err)
 	}
 	if resumed.RunID != pending.RunID || resumed.RunPreparationState != "" || resumed.Stop == nil ||
-		resumed.Stop.Reason != StopMaxSteps || resumed.Steps != 1 || len(resumed.ReservationReceipts) != 2 {
+		resumed.Stop.Reason != StopMaxSteps || resumed.Steps != 1 || len(resumed.ReservationReceipts) != 3 {
 		t.Fatalf("recovered pre-charge Run intent = %#v; want one RUN charge and one START step", resumed)
 	}
 	state, err = storage.Load(root)
@@ -813,7 +862,7 @@ func TestChargedStepReservationReplaysAfterCrashBeforeRunRecordReceipt(t *testin
 	}
 	goal, _ := state.GoalByID(execution.GoalID)
 	ledger := goal.Execution.Ledger
-	if ledger.RunsConsumed != 1 || ledger.StepsConsumed != 1 || len(ledger.Reservations) != 2 {
+	if ledger.RunsConsumed != 1 || ledger.StepsConsumed != 1 || ledger.RecoveriesConsumed != 0 || len(ledger.Reservations) != 2 {
 		t.Fatalf("step charge did not survive the abrupt Runner exit: %#v", ledger)
 	}
 	runIDs, err := storage.ListRuns(root)
@@ -854,7 +903,7 @@ func TestChargedStepReservationReplaysAfterCrashBeforeRunRecordReceipt(t *testin
 		t.Fatal(err)
 	}
 	goal, _ = state.GoalByID(execution.GoalID)
-	if goal.Execution.Ledger.RunsConsumed != 1 || goal.Execution.Ledger.StepsConsumed != 1 || len(goal.Execution.Ledger.Reservations) != 2 {
+	if goal.Execution.Ledger.RunsConsumed != 1 || goal.Execution.Ledger.StepsConsumed != 1 || goal.Execution.Ledger.RecoveriesConsumed != 1 || len(goal.Execution.Ledger.Reservations) != 3 {
 		t.Fatalf("step replay charged again or lost the original charge: %#v", goal.Execution.Ledger)
 	}
 	record, err = LoadRecord(root, record.RunID)
@@ -1171,6 +1220,18 @@ func TestResumeAuthorizationGoalSelectsTheLatestStoppedChargedRun(t *testing.T) 
 	runIDs, err = storage.ListRuns(root)
 	if err != nil || len(runIDs) != 2 {
 		t.Fatalf("Goal-scoped continuation did not persist exactly one successor: ids=%v err=%v", runIDs, err)
+	}
+}
+
+func TestLatestAuthorizationRunIgnoresLegacyHistory(t *testing.T) {
+	root, _, _, now, _ := newUnresolvedExecutionRunnerFixture(t)
+	legacy := Record{RunID: "run-legacy-history", Workspace: root, GoalID: "g", StartedAt: now,
+		Attempts: map[string]int{}, HumanWaits: map[string]int{}, Stop: &Stop{Reason: StopInterrupted, At: now}}
+	if err := legacy.save(root, storage.ArtifactLimits{}, now); err != nil {
+		t.Fatal(err)
+	}
+	if selected, found, err := LatestAuthorizationRun(root, "g", "sha256:current"); err != nil || found {
+		t.Fatalf("legacy Run routed to authorization resume: found=%t run=%#v err=%v", found, selected, err)
 	}
 }
 

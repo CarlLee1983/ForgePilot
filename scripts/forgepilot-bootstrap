@@ -15,6 +15,7 @@ Usage:
   forgepilot-bootstrap plan --prune
   forgepilot-bootstrap status
   forgepilot-bootstrap generation-v1 current
+  forgepilot-bootstrap generation-v1 pinned SHA
   forgepilot-bootstrap uninstall --commit SHA --approve PLAN_ID
   forgepilot-bootstrap prune --approve PLAN_ID
   forgepilot-bootstrap retention-v1 acquire|release --generation SHA --payload-digest DIGEST --reference TOKEN
@@ -292,10 +293,11 @@ status() {
 		"$GENERATION_COUNT" "$CURRENT_COMMIT" "$previous_display" "$RETENTION_COUNT"
 }
 
-# generation-v1 is the machine-readable counterpart to status for a managed
-# ForgePilot process. It reports immutable paths within the generation observed
-# during one rechecked read, never a later resolution of current or PATH.
-generation_current() {
+# generation-v1 reports an exact verified generation tuple. `current` retains
+# its distribution-selection meaning; `pinned SHA` lets a retained process
+# validate its own immutable image after current changes.
+generation_report() {
+	requested_generation=$1
 	setup_paths
 	setup_temp
 	trap cleanup EXIT HUP INT TERM
@@ -314,10 +316,18 @@ generation_current() {
 		[ "$retention_before" = "$RETENTION_DIGEST" ] &&
 		[ "$retention_count_before" -eq "$RETENTION_COUNT" ] &&
 		[ "$generation_count_before" -eq "$GENERATION_COUNT" ] || fail 'managed state changed during generation discovery'
-	printf '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":' "$CURRENT_COMMIT" "$CURRENT_DIGEST"
-	json_string "$ROOT/versions/$CURRENT_COMMIT/bin/forgepilot"
+	if [ "$requested_generation" = current ]; then
+		selected_generation=$CURRENT_COMMIT
+		selected_digest=$CURRENT_DIGEST
+	else
+		selected_generation=$requested_generation
+		selected_digest=$(/usr/bin/awk -F '\t' -v id="$selected_generation" '$1 == id { print $2 }' "$manifest_tuples") || fail 'cannot inspect pinned generation tuple'
+		[ -n "$selected_digest" ] || fail 'pinned generation is not installed'
+	fi
+	printf '{"protocol_version":1,"generation_id":"%s","payload_digest":"%s","forgepilot_path":' "$selected_generation" "$selected_digest"
+	json_string "$ROOT/versions/$selected_generation/bin/forgepilot"
 	printf ',"helper_path":'
-	json_string "$ROOT/versions/$CURRENT_COMMIT/libexec/forgepilot-bootstrap"
+	json_string "$ROOT/versions/$selected_generation/libexec/forgepilot-bootstrap"
 	printf '}\n'
 }
 
@@ -2286,8 +2296,13 @@ main() {
 			run_retention_protocol "$@"
 			;;
 		generation-v1)
-			[ "$#" -eq 2 ] && [ "$2" = current ] || fail 'generation-v1 accepts only current'
-			generation_current
+			if [ "$#" -eq 2 ] && [ "$2" = current ]; then
+				generation_report current
+			elif [ "$#" -eq 3 ] && [ "$2" = pinned ] && valid_sha "$3"; then
+				generation_report "$3"
+			else
+				fail 'generation-v1 accepts current or pinned SHA'
+			fi
 			;;
 		status)
 			[ "$#" -eq 1 ] || fail 'status accepts no options'

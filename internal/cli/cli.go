@@ -77,6 +77,9 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
                                     continue through the current execution authorization
   execution stop --goal <goal-id> --by <name> --reason <reason> [--json]
   execution declare --request <path> --json
+	  execution supervise install --goal <goal-id> --json
+	  execution supervise status --goal <goal-id> --json
+	  execution supervise uninstall --goal <goal-id> --json
 
   execution revise plan --request <path> --json
   execution revise authorize --request <path> --approval-token <token> --by <name> --json

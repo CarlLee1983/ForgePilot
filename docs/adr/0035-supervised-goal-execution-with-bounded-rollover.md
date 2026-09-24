@@ -236,8 +236,11 @@ Run Record 沒有跨 run 總帳，也不提供主 Session 關閉後存活的保�
 runtime probe 都是可觀察的相容性變更；必須在 spec／migration／操作文件與驗收中處理。
 本輪只完成設計文件，沒有修改或清理既有 release／Story 工作樹變更。
 
-**邊界路徑註記：** TUI 與 supervisor 的實作路徑尚未定案；下列相關條件先記為設計邊界，
-後續 spec 決定實作位置時須在本節補入實際路徑，不能以角色名稱當成已有的程式碼邊界。
+**邊界路徑註記：** 原決策時 TUI 與 supervisor 的實作路徑尚未定案；下列相關條件先記為設計邊界。
+實作位置定案時須在本節補入實際路徑，不能以角色名稱當成已有的程式碼邊界。
+FP-59 決定 supervisor 的實作路徑為 `internal/supervision`（user LaunchAgent 與 job event record）
+及 `internal/cli/supervision.go`（入口），執行與恢復仍由 `internal/runner`、扣帳由
+`internal/app`／`internal/work` 擁有；TUI 路徑仍待定。這是 FP-59 實作期間的邊界定案。
 Bootstrap 的規劃入口為 `scripts/forgepilot-bootstrap`，由
 [source-built Bootstrap spec](../specs/source-built-bootstrap.md) 指定，目前尚未實作。
 

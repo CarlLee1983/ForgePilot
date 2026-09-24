@@ -82,6 +82,9 @@ func TestRequiresRunnerGenerationForPinnedAuthorizationAndRunnerCommands(t *test
 		{[]string{"execution", "retention", "reconcile", "--json"}, true},
 		{[]string{"execution", "retention", "unknown"}, false},
 		{[]string{"execution", "resume", "--goal", "g"}, true},
+		{[]string{"execution", "supervise", "install", "--goal", "g", "--json"}, true},
+		{[]string{"execution", "supervise", "run", "--job", "/tmp/job.json"}, true},
+		{[]string{"execution", "supervise", "status", "--goal", "g", "--json"}, false},
 	} {
 		if got := requiresRunnerGeneration(test.arguments); got != test.want {
 			t.Errorf("requiresRunnerGeneration(%q) = %t, want %t", test.arguments, got, test.want)
