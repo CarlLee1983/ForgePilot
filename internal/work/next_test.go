@@ -33,18 +33,14 @@ func TestActionableNextPrioritizesExistingAgentWork(t *testing.T) {
 		t.Fatal("ActionableNext changed state")
 	}
 
-	if err := state.Start(second.ID, now); err != nil {
-		t.Fatal(err)
+	// Only one work item may run, so the second start is refused and next keeps
+	// pointing at the first rather than offering the second.
+	if err := state.Start(second.ID, now); err == nil {
+		t.Fatal("started a second work item while the first is RUNNING")
 	}
 	action = state.ActionableNext(RepositoryState{})
 	if action.Kind != NextActionResume || action.Item.ID != first.ID {
-		t.Fatalf("multiple equally-created RUNNING action = %#v", action)
-	}
-
-	state.WorkItems[0].CreatedAt = now.Add(time.Minute)
-	action = state.ActionableNext(RepositoryState{})
-	if action.Kind != NextActionResume || action.Item.ID != second.ID {
-		t.Fatalf("created-at ordered RUNNING action = %#v", action)
+		t.Fatalf("action with a second READY item = %#v, want RESUME of the running one", action)
 	}
 }
 
@@ -81,7 +77,7 @@ func TestActionableNextReverifiesStaleCandidates(t *testing.T) {
 			Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 		passVerification(t, &state, now, candidate)
 		fresh := state.ActionableNext(RepositoryState{SnapshotDigest: candidate.Digest})
-		if fresh.Kind != NextActionWaitHumanReview {
+		if fresh.Kind != NextActionWait {
 			t.Fatalf("fresh snapshot action = %#v", fresh)
 		}
 		stale := state.ActionableNext(RepositoryState{SnapshotDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})
@@ -95,9 +91,9 @@ func TestActionableNextUsesExistingReadySelection(t *testing.T) {
 	old, same := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
 	state := State{SchemaVersion: SchemaVersion, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1,
 		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, RequireApproval: true}},
-		WorkItems: []Item{{ID: "WI-003", GoalID: "g", StoryRef: "specs/stories/three", Status: Ready, CreatedAt: same},
-			{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/two", Status: Ready, CreatedAt: same},
-			{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/one", Status: Ready, CreatedAt: old}}}
+		WorkItems: []Item{{ID: "WI-003", GoalID: "g", StoryRef: "specs/stories/three", Status: NotStarted, CreatedAt: same},
+			{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/two", Status: NotStarted, CreatedAt: same},
+			{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/one", Status: NotStarted, CreatedAt: old}}}
 	action := state.ActionableNext(RepositoryState{})
 	if action.Kind != NextActionStart || action.Item.ID != "WI-001" || action.Reason != "earliest READY work" {
 		t.Fatalf("action = %#v", action)
@@ -109,8 +105,9 @@ func TestActionableNextReportsOnlyHumanBlockersWhenNothingCanAdvance(t *testing.
 		state, now, revision := summaryFixture(t)
 		passVerification(t, &state, now, Candidate{Kind: CommitCandidate, Revision: revision})
 		action := state.ActionableNext(RepositoryState{Revision: revision})
-		if action.Kind != NextActionWaitHumanReview || action.Reason != "human review required" {
-			t.Fatalf("action = %#v", action)
+		want := []Waiting{{Kind: WaitReview, ItemID: "WI-001", GoalID: "goal", Reason: "human review required"}}
+		if action.Kind != NextActionWait || action.Reason != "human review required" || !reflect.DeepEqual(action.Waiting, want) {
+			t.Fatalf("action = %#v, want WAIT listing %#v", action, want)
 		}
 	})
 
@@ -121,8 +118,9 @@ func TestActionableNextReportsOnlyHumanBlockersWhenNothingCanAdvance(t *testing.
 			t.Fatal(err)
 		}
 		action := state.ActionableNext(RepositoryState{})
-		if action.Kind != NextActionWaitGate || action.Reason != "unresolved Gate "+gate.ID {
-			t.Fatalf("action = %#v", action)
+		want := []Waiting{{Kind: WaitGate, ItemID: "WI-001", GoalID: "goal", GateID: gate.ID, Reason: "unresolved Gate " + gate.ID}}
+		if action.Kind != NextActionWait || !reflect.DeepEqual(action.Waiting, want) {
+			t.Fatalf("action = %#v, want WAIT listing %#v", action, want)
 		}
 	})
 
@@ -139,11 +137,10 @@ func TestActionableNextReportsOnlyHumanBlockersWhenNothingCanAdvance(t *testing.
 		}
 	})
 
-	t.Run("dependency pending is not a waiting recommendation", func(t *testing.T) {
+	t.Run("a PENDING dependent is not a wait", func(t *testing.T) {
 		state, now, _ := summaryFixture(t)
 		// WI-001 has not finished, so the dependency is genuinely unsatisfied: a
-		// PENDING downstream item is neither a human-only wait nor a readiness
-		// that has merely fallen out of date.
+		// PENDING downstream item is not something a person or an agent can act on.
 		if err := state.Start("WI-001", now); err != nil {
 			t.Fatal(err)
 		}
@@ -151,18 +148,10 @@ func TestActionableNextReportsOnlyHumanBlockersWhenNothingCanAdvance(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		if blocked.Status != Pending {
-			t.Fatalf("fixture status = %s", blocked.Status)
+		if got := state.DisplayStatus(blocked.ID); got != "PENDING" {
+			t.Fatalf("fixture status = %s", got)
 		}
 		if action := state.ActionableNext(RepositoryState{}); action.Kind != NextActionResume || action.Item.ID != "WI-001" {
-			t.Fatalf("action = %#v", action)
-		}
-		state.WorkItems[0].Status = Done
-		state.WorkItems[1].Status = Pending
-		// With the dependency actually satisfied, the out-of-date persisted
-		// readiness is an agent action — a reconciliation — not a human wait.
-		action := state.ActionableNext(RepositoryState{})
-		if action.Kind != NextActionReconcile || action.Item.ID != blocked.ID {
 			t.Fatalf("action = %#v", action)
 		}
 	})
@@ -204,7 +193,7 @@ func TestActionableNextReportsACompletedGoalOnlyWhenNothingElseIsActive(t *testi
 	// finished one is history, not an action.
 	later := lifecycleNow.Add(time.Hour)
 	state.Goals = append(state.Goals, Goal{ID: "h", Title: "Other", Repository: "/repo", Status: GoalActive, CreatedAt: later, UpdatedAt: later})
-	state.WorkItems = append(state.WorkItems, Item{ID: "h1", GoalID: "h", StoryRef: "specs/stories/h1", Status: Ready, CreatedAt: later, UpdatedAt: later})
+	state.WorkItems = append(state.WorkItems, Item{ID: "h1", GoalID: "h", StoryRef: "specs/stories/h1", Status: NotStarted, CreatedAt: later, UpdatedAt: later})
 	action = state.ActionableNext(RepositoryState{Revision: revisionOne})
 	if action.Kind != NextActionStart || action.Item.ID != "h1" {
 		t.Fatalf("a completed Goal masked another Goal's work: %#v", action)
@@ -214,7 +203,7 @@ func TestActionableNextReportsACompletedGoalOnlyWhenNothingElseIsActive(t *testi
 	// Goal is still not announced: not every Goal has ended.
 	state.WorkItems[1].Status = Verifying
 	state.WorkItems[1].CurrentRun = &Run{VerificationRunID: "VR-009", Revision: revisionOne, CandidateKind: CommitCandidate}
-	if action = state.ActionableNext(RepositoryState{Revision: revisionOne}); action.Kind != NextActionNone {
+	if action = state.ActionableNext(RepositoryState{Revision: revisionOne}); action.Kind == NextActionGoalCompleted || action.Kind == NextActionNone {
 		t.Fatalf("an ACTIVE Goal remains but the answer was %#v", action)
 	}
 }

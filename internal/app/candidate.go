@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"github.com/CarlLee1983/ForgePilot/internal/repository"
+	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
@@ -33,7 +34,21 @@ func CandidateFacts(ctx context.Context, state *work.State, root string) (work.R
 			needsSnapshotDigest = true
 		}
 	}
-	return resolveFacts(ctx, root, needsCommitRevision, needsSnapshotDigest)
+	facts, err := resolveFacts(ctx, root, needsCommitRevision, needsSnapshotDigest)
+	if err != nil {
+		return work.RepositoryState{}, err
+	}
+	// A VERIFYING Work Item whose verifier is gone is an orphan that verify
+	// reclaims; telling it from a live run is a fact about the process table.
+	for _, item := range state.WorkItems {
+		if item.Status == work.Verifying && !storage.VerificationRunning(root, item.ID) {
+			if facts.AbandonedRuns == nil {
+				facts.AbandonedRuns = map[string]bool{}
+			}
+			facts.AbandonedRuns[item.ID] = true
+		}
+	}
+	return facts, nil
 }
 
 // resolveFacts reads exactly the Git facts a caller asked for. Facts that

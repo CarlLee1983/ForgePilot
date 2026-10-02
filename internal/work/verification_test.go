@@ -29,9 +29,9 @@ func TestVerifiableRejectsWorkThatCannotBeVerified(t *testing.T) {
 	if err := state.Verifiable("WI-001"); err != nil {
 		t.Fatalf("rejected RUNNING work: %v", err)
 	}
-	state.WorkItems[0].Status = Pending
+	state.WorkItems[0].Status = NotStarted
 	if err := state.Verifiable("WI-001"); err == nil {
-		t.Fatal("accepted PENDING work")
+		t.Fatal("accepted NOT_STARTED work")
 	}
 	state.WorkItems[0].Status = Review
 	if err := state.Verifiable("WI-001"); err != nil {

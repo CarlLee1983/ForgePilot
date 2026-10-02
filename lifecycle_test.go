@@ -13,15 +13,15 @@ import (
 // statusesOf reads the durable status of every Work Item and of the Goal, so an
 // assertion is about what a separate process would find rather than about what
 // a command printed.
-func statusesOf(t *testing.T, root, goalID string) (map[string]work.Status, work.GoalStatus) {
+func statusesOf(t *testing.T, root, goalID string) (map[string]string, work.GoalStatus) {
 	t.Helper()
 	state, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	statuses := map[string]work.Status{}
+	statuses := map[string]string{}
 	for _, item := range state.WorkItems {
-		statuses[item.ID] = item.Status
+		statuses[item.ID] = state.DisplayStatus(item.ID)
 	}
 	goal, ok := state.GoalByID(goalID)
 	if !ok {
@@ -30,7 +30,7 @@ func statusesOf(t *testing.T, root, goalID string) (map[string]work.Status, work
 	return statuses, goal.Status
 }
 
-func wantStatuses(t *testing.T, root, goalID string, want map[string]work.Status, wantGoal work.GoalStatus) {
+func wantStatuses(t *testing.T, root, goalID string, want map[string]string, wantGoal work.GoalStatus) {
 	t.Helper()
 	got, goal := statusesOf(t, root, goalID)
 	for id, status := range want {
@@ -71,7 +71,7 @@ func TestPassCompletesWorkUnlocksDownstreamAndCompletesTheGoal(t *testing.T) {
 	}
 	// What a separate process reads back: DONE and the unlock landed together,
 	// and the Goal is still open.
-	wantStatuses(t, root, "chain", map[string]work.Status{"first": work.Done, "second": work.Ready}, work.GoalActive)
+	wantStatuses(t, root, "chain", map[string]string{"first": "DONE", "second": "READY"}, work.GoalActive)
 	if output, err := command(binary, root, "next"); err != nil || !strings.Contains(output, "Next: second") || !strings.Contains(output, "Action: forgepilot start second") {
 		t.Fatalf("next after the first PASS = %q, %v", output, err)
 	}
@@ -96,7 +96,7 @@ func TestPassCompletesWorkUnlocksDownstreamAndCompletesTheGoal(t *testing.T) {
 			t.Fatalf("verify output %q lacks %q", output, want)
 		}
 	}
-	wantStatuses(t, root, "chain", map[string]work.Status{"first": work.Done, "second": work.Done}, work.GoalCompleted)
+	wantStatuses(t, root, "chain", map[string]string{"first": "DONE", "second": "DONE"}, work.GoalCompleted)
 
 	if output, err := command(binary, root, "next"); err != nil || !strings.Contains(output, "Goal chain is completed") {
 		t.Fatalf("next after the Goal completed = %q, %v", output, err)
@@ -126,14 +126,14 @@ func TestFailKeepsWorkRunningAndAGoalWithOpenWorkDoesNotComplete(t *testing.T) {
 	if output, err := command(binary, root, "verify", "left"); err != nil || !strings.Contains(output, "FAIL") || !strings.Contains(output, "left RUNNING") {
 		t.Fatalf("verify of a failing check = %q, %v", output, err)
 	}
-	wantStatuses(t, root, "pair", map[string]work.Status{"left": work.Running, "right": work.Ready}, work.GoalActive)
+	wantStatuses(t, root, "pair", map[string]string{"left": "RUNNING", "right": "READY"}, work.GoalActive)
 
 	writeVerify(t, root, passingVerify)
 	mustRun(t, binary, root, "verify", "left")
-	wantStatuses(t, root, "pair", map[string]work.Status{"left": work.Done, "right": work.Ready}, work.GoalActive)
+	wantStatuses(t, root, "pair", map[string]string{"left": "DONE", "right": "READY"}, work.GoalActive)
 	mustRun(t, binary, root, "start", "right")
 	mustRun(t, binary, root, "verify", "right")
-	wantStatuses(t, root, "pair", map[string]work.Status{"left": work.Done, "right": work.Done}, work.GoalCompleted)
+	wantStatuses(t, root, "pair", map[string]string{"left": "DONE", "right": "DONE"}, work.GoalCompleted)
 }
 
 // With an Approval Requirement a PASS waits in REVIEW. Approval completes the
@@ -153,7 +153,7 @@ func TestApprovalRequirementRoutesPassThroughReview(t *testing.T) {
 	if err != nil || !strings.Contains(output, "first REVIEW") || strings.Contains(output, "second READY") {
 		t.Fatalf("verify first = %q, %v; want a PASS that waits in REVIEW and unlocks nothing", output, err)
 	}
-	wantStatuses(t, root, "careful", map[string]work.Status{"first": work.Review, "second": work.Pending}, work.GoalActive)
+	wantStatuses(t, root, "careful", map[string]string{"first": "REVIEW", "second": "PENDING"}, work.GoalActive)
 	if output, err := command(binary, root, "next"); err != nil || !strings.Contains(output, "Waiting: first") || !strings.Contains(output, "human review required") {
 		t.Fatalf("next while REVIEW = %q, %v", output, err)
 	}
@@ -162,7 +162,7 @@ func TestApprovalRequirementRoutesPassThroughReview(t *testing.T) {
 	if err != nil || !strings.Contains(output, "first DONE") || !strings.Contains(output, "second READY") {
 		t.Fatalf("approve first = %q, %v", output, err)
 	}
-	wantStatuses(t, root, "careful", map[string]work.Status{"first": work.Done, "second": work.Ready}, work.GoalActive)
+	wantStatuses(t, root, "careful", map[string]string{"first": "DONE", "second": "READY"}, work.GoalActive)
 
 	// Rejection returns the work to RUNNING; only a fresh PASS gets it back to REVIEW.
 	mustRun(t, binary, root, "start", "second")
@@ -174,12 +174,12 @@ func TestApprovalRequirementRoutesPassThroughReview(t *testing.T) {
 	if err != nil || !strings.Contains(output, "second RUNNING") {
 		t.Fatalf("reject second = %q, %v", output, err)
 	}
-	wantStatuses(t, root, "careful", map[string]work.Status{"second": work.Running}, work.GoalActive)
+	wantStatuses(t, root, "careful", map[string]string{"second": "RUNNING"}, work.GoalActive)
 	if output, err := command(binary, root, "review", "approve", "second"); err == nil {
 		t.Fatalf("approved work that is RUNNING: %s", output)
 	}
 	mustRun(t, binary, root, "verify", "second")
-	wantStatuses(t, root, "careful", map[string]work.Status{"second": work.Review}, work.GoalActive)
+	wantStatuses(t, root, "careful", map[string]string{"second": "REVIEW"}, work.GoalActive)
 
 	// HEAD moves: the REVIEW is stale, approval is refused and says why, and next
 	// recommends verifying again.
@@ -191,7 +191,7 @@ func TestApprovalRequirementRoutesPassThroughReview(t *testing.T) {
 	if err == nil || !strings.Contains(output, "stale") {
 		t.Fatalf("approve of a stale REVIEW = %q, %v; want a refusal that says stale", output, err)
 	}
-	wantStatuses(t, root, "careful", map[string]work.Status{"second": work.Review}, work.GoalActive)
+	wantStatuses(t, root, "careful", map[string]string{"second": "REVIEW"}, work.GoalActive)
 	state, loadErr := storage.Load(root)
 	if loadErr != nil {
 		t.Fatal(loadErr)
@@ -210,7 +210,7 @@ func TestApprovalRequirementRoutesPassThroughReview(t *testing.T) {
 	if err != nil || !strings.Contains(output, "second DONE") || !strings.Contains(output, "Goal careful COMPLETED") {
 		t.Fatalf("approve after re-verifying = %q, %v", output, err)
 	}
-	wantStatuses(t, root, "careful", map[string]work.Status{"first": work.Done, "second": work.Done}, work.GoalCompleted)
+	wantStatuses(t, root, "careful", map[string]string{"first": "DONE", "second": "DONE"}, work.GoalCompleted)
 }
 
 // Review is a boundary a Goal opts into. Without an Approval Requirement there
@@ -261,14 +261,14 @@ func TestApprovalIsRefusedWhileAGateIsOpenAndWorksOnceItCloses(t *testing.T) {
 	if err == nil || !strings.Contains(output, "GATE-001") {
 		t.Fatalf("approve under an open gate = %q, %v; want a refusal naming the gate", output, err)
 	}
-	wantStatuses(t, root, "queue", map[string]work.Status{"WI-001": work.Review, "WI-002": work.Pending}, work.GoalActive)
+	wantStatuses(t, root, "queue", map[string]string{"WI-001": "REVIEW", "WI-002": "PENDING"}, work.GoalActive)
 
 	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "yes")
 	output, err = command(binary, root, "review", "approve", "WI-001")
 	if err != nil || !strings.Contains(output, "WI-001 DONE") || !strings.Contains(output, revision[:12]) {
 		t.Fatalf("approve after the gate closed = %q, %v", output, err)
 	}
-	wantStatuses(t, root, "queue", map[string]work.Status{"WI-001": work.Done, "WI-002": work.Ready}, work.GoalActive)
+	wantStatuses(t, root, "queue", map[string]string{"WI-001": "DONE", "WI-002": "READY"}, work.GoalActive)
 }
 
 // Cancelling a Goal while a run is in flight still records what the run found,
@@ -298,7 +298,7 @@ func TestCancellingMidRunStillRecordsTheEvidenceWithoutCompleting(t *testing.T) 
 	if latest.Result != work.Pass || latest.Revision != revision {
 		t.Fatalf("evidence = %#v, want PASS at %s", latest, revision)
 	}
-	wantStatuses(t, root, "queue", map[string]work.Status{"WI-001": work.Running}, work.GoalCancelled)
+	wantStatuses(t, root, "queue", map[string]string{"WI-001": "RUNNING"}, work.GoalCancelled)
 }
 
 // A Goal has exactly one way to stop other than finishing, and it needs a
@@ -318,7 +318,7 @@ func TestGoalCancelNeedsAReasonAndTheOtherGoalCommandsAreGone(t *testing.T) {
 	if output, err := command(binary, root, "goal", "cancel", "queue", "--reason", "no longer needed"); err != nil || !strings.Contains(output, "CANCELLED") {
 		t.Fatalf("cancel = %q, %v", output, err)
 	}
-	wantStatuses(t, root, "queue", map[string]work.Status{"WI-001": work.Ready}, work.GoalCancelled)
+	wantStatuses(t, root, "queue", map[string]string{"WI-001": "NOT_STARTED"}, work.GoalCancelled)
 	if output, err := command(binary, root, "goal", "cancel", "queue", "--reason", "again"); err == nil {
 		t.Fatalf("cancelled a cancelled goal: %s", output)
 	}

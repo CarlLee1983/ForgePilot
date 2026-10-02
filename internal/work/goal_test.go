@@ -29,8 +29,8 @@ func TestGoalCancelRequiresAReasonAndStopsNewWork(t *testing.T) {
 	if err := state.Verifiable("WI-001"); err == nil {
 		t.Fatal("verified work under a cancelled goal")
 	}
-	if _, ok := state.Next(); ok {
-		t.Fatal("next selected work under a cancelled goal")
+	if action := state.ActionableNext(RepositoryState{}); action.Kind != NextActionGoalCancelled {
+		t.Fatalf("next = %#v, want the cancelled Goal reported and no work selected", action)
 	}
 	if got := state.WorkItemStatus("WI-001"); got != Review {
 		t.Fatalf("WI-001 = %s, want REVIEW untouched", got)

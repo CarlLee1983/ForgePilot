@@ -31,13 +31,13 @@ ADR-0024、ADR-0025、ADR-0030 與 ADR-0033。
 | `goal import <plan-path>` | 讀 Goal Plan，一次建立 Goal 與整張 DAG；任何驗證失敗整份不寫入。重新匯入規則見下 |
 | `goal cancel <goal-id> --reason <text>` | Goal 由 ACTIVE 轉為 CANCELLED，不再出現在 `next` |
 | `next [--json]` | 純讀；回傳唯一一個建議動作與理由。`--json` 為穩定的機器可讀形狀 |
-| `start <work-id>` | READY 工作轉為 RUNNING；已有一件 RUNNING 或 VERIFYING、或工作有未解除 Gate 時拒絕 |
-| `verify <work-id> [--snapshot]` | 先回收孤兒 run，再在 detached worktree 對確切 Candidate（預設 commit，`--snapshot` 為未 commit 工作樹的 snapshot）跑 `make verify`，寫入 Evidence |
+| `start <work-id>` | READY 工作轉為 RUNNING；已有一件 RUNNING 或 VERIFYING（含孤兒 VERIFYING）、或工作有未解除 Gate 時拒絕，錯誤指出佔位的工作 |
+| `verify <work-id> [--snapshot]` | 先回收孤兒 run，再在 detached worktree 對確切 Candidate（預設 commit，`--snapshot` 為未 commit 工作樹的 snapshot）跑 `make verify`，寫入 Evidence。對 REVIEW 工作重新驗證（會轉為 VERIFYING）時，另一件工作 RUNNING 或 VERIFYING 則拒絕 |
 | `gate open --work <work-id> --question <text> --option <text> --option <text> [--reason <text>]` | 開一個 Gate 擋住該工作；`--option` 可重複，至少兩個 |
 | `gate resolve <gate-id> --option <text> [--note <text>] [--by <name>]` | 選定選項並記錄自述決策者 |
 | `gate cancel <gate-id> --reason <text> [--by <name>]` | 撤銷不再需要的 Gate |
 | `review approve <work-id> [--note <text>] [--by <name>]` | 僅適用 Goal 要求 Approval 時的 REVIEW 工作；Candidate 未 stale 且無未解除 Gate 才 DONE |
-| `review reject <work-id> --reason <text> [--by <name>]` | REVIEW 工作回到 RUNNING |
+| `review reject <work-id> --reason <text> [--by <name>]` | REVIEW 工作回到 RUNNING；另一件工作 RUNNING 或 VERIFYING 時拒絕（結果是 RUNNING，受單一佔位規則約束），錯誤指出佔位的工作 |
 | `status [--goal <goal-id>] [--work <work-id>] [--json]` | 列出節點、狀態、讀取時計算的 readiness、最新 Evidence 與未解除 Gate，並對每件未完成工作說明為何不能前進 |
 
 生命週期（持久化狀態：未開始、`RUNNING`、`VERIFYING`、`REVIEW`、`DONE`；PENDING／READY 是讀取時依依賴是否全 DONE 的投影，不保存）：

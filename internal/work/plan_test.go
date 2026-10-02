@@ -120,10 +120,10 @@ func TestImportCreatesGoalAndWholeDAGInPlanOrder(t *testing.T) {
 		t.Fatalf("goal = %#v", goal)
 	}
 	var order []string
-	status := map[string]Status{}
+	status := map[string]string{}
 	for _, item := range state.WorkItems {
 		order = append(order, item.ID)
-		status[item.ID] = item.Status
+		status[item.ID] = state.DisplayStatus(item.ID)
 		if item.GoalID != "billing" {
 			t.Errorf("%s belongs to %q", item.ID, item.GoalID)
 		}
@@ -131,12 +131,12 @@ func TestImportCreatesGoalAndWholeDAGInPlanOrder(t *testing.T) {
 	if !reflect.DeepEqual(order, []string{"sync-job", "schema", "report", "docs"}) {
 		t.Fatalf("work item order = %v, want the plan's node order", order)
 	}
-	if status["schema"] != Ready || status["docs"] != Ready || status["sync-job"] != Pending || status["report"] != Pending {
+	if status["schema"] != "READY" || status["docs"] != "READY" || status["sync-job"] != "PENDING" || status["report"] != "PENDING" {
 		t.Fatalf("readiness = %v", status)
 	}
 	// Node order is the tie-break between READY work: schema precedes docs.
-	if next, ok := state.Next(); !ok || next.ID != "schema" {
-		t.Fatalf("next = %#v, %v; want schema, the first READY node", next, ok)
+	if next := state.ActionableNext(RepositoryState{}); next.Kind != NextActionStart || next.Item.ID != "schema" {
+		t.Fatalf("next = %#v; want schema, the first READY node", next)
 	}
 }
 
@@ -243,10 +243,10 @@ func TestReimportRules(t *testing.T) {
 		if err := state.Validate(); err != nil {
 			t.Fatal(err)
 		}
-		if got := state.item("c").Status; got != Ready {
+		if got := state.DisplayStatus("c"); got != "READY" {
 			t.Errorf("c depends only on a DONE node and is %s, want READY", got)
 		}
-		if got := state.item("d").Status; got != Pending {
+		if got := state.DisplayStatus("d"); got != "PENDING" {
 			t.Errorf("d depends on unfinished nodes and is %s, want PENDING", got)
 		}
 		if got := state.item("a").Status; got != Done {

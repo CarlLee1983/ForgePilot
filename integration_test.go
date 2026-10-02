@@ -584,7 +584,7 @@ func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
 		if got := strings.Contains(output, "stale"); got != want {
 			t.Fatalf("status stale = %v, want %v: %q", got, want, output)
 		}
-		summary, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+		summary, err := command(binary, root, "status", "--work", "WI-001")
 		if err != nil {
 			t.Fatalf("summary = %q, %v", summary, err)
 		}
@@ -802,7 +802,10 @@ func TestVerifyIsVisibleSerializedAndRecoversFromInterruption(t *testing.T) {
 	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	addWork(t, binary, root, "queue", "specs/stories/b.md")
 	mustRun(t, binary, root, "start", "WI-001")
-	mustRun(t, binary, root, "start", "WI-002")
+	// The workspace has one execution slot, so WI-002 cannot be RUNNING beside it.
+	if output, err := command(binary, root, "start", "WI-002"); err == nil || !strings.Contains(output, "only one work item") {
+		t.Fatalf("started a second work item = %q, %v", output, err)
+	}
 	// Long enough that the test controls when the run ends, never the clock.
 	slow := writeVerify(t, root, "verify:\n\t@sleep 30\n")
 
@@ -821,16 +824,16 @@ func TestVerifyIsVisibleSerializedAndRecoversFromInterruption(t *testing.T) {
 	if output, err := command(binary, root, "verify", "WI-001"); err == nil {
 		t.Fatalf("verified WI-001 twice concurrently: %s", output)
 	}
-	// The canonical command is repository-global, so a different anchor is also
-	// refused before it enters VERIFYING or creates execution artifacts.
-	if output, err := command(binary, root, "verify", "WI-002"); err == nil || !strings.Contains(output, "canonical verification is already running") {
-		t.Fatalf("concurrent repository verification = %q, %v", output, err)
+	// A different anchor is refused before it enters VERIFYING or creates
+	// execution artifacts.
+	if output, err := command(binary, root, "verify", "WI-002"); err == nil {
+		t.Fatalf("verified a second work item concurrently: %s", output)
 	}
 	state, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.WorkItems[1].Status != work.Running || state.WorkItems[1].CurrentRun != nil {
+	if state.WorkItems[1].Status != work.NotStarted || state.WorkItems[1].CurrentRun != nil {
 		t.Fatalf("refused second anchor changed state: %#v", state.WorkItems[1])
 	}
 
@@ -979,7 +982,7 @@ func TestWorkItemStatusSummary(t *testing.T) {
 		t.Fatalf("status changed\nwant:\n%s\ngot:\n%s", wantFull, full)
 	}
 
-	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	output, err := command(binary, root, "status", "--work", "WI-001")
 	if err != nil {
 		t.Fatalf("summary = %q, %v", output, err)
 	}
@@ -995,7 +998,7 @@ func TestWorkItemStatusSummary(t *testing.T) {
 	if err != nil || !strings.Contains(full, "Goal fast ACTIVE: Fast\n  Approval required: no\n  WI-002 READY specs/stories/b.md\n    not verified\n    Gates: 0 open\n") {
 		t.Fatalf("status of a Goal without approval = %q, %v", full, err)
 	}
-	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	output, err = command(binary, root, "status", "--work", "WI-002")
 	if err != nil || !strings.Contains(output, "Approval required: no\n") || !strings.Contains(output, "Review: not required\n") {
 		t.Fatalf("summary of work without approval = %q, %v", output, err)
 	}
@@ -1003,14 +1006,15 @@ func TestWorkItemStatusSummary(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"status", "--work"},
 		{"status", "--work", ""},
-		{"status", "--work", "WI-001"},
 		{"status", "--summary"},
+		{"status", "--goal"},
+		{"status", "--json", "--json"},
 	} {
 		if output, err := command(binary, root, arguments...); err == nil || !strings.Contains(output, "usage: forgepilot status") {
 			t.Fatalf("%v = %q, %v; want usage failure", arguments, output, err)
 		}
 	}
-	if output, err := command(binary, root, "status", "--work", "WI-999", "--summary"); err == nil || !strings.Contains(output, `unknown work item "WI-999"`) {
+	if output, err := command(binary, root, "status", "--work", "WI-999"); err == nil || !strings.Contains(output, `unknown work item "WI-999"`) {
 		t.Fatalf("unknown work summary = %q, %v", output, err)
 	}
 }
@@ -1019,7 +1023,7 @@ func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T
 	root, binary := fixture(t)
 	revision := reviewable(t, binary, root)
 
-	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	output, err := command(binary, root, "status", "--work", "WI-001")
 	if err != nil {
 		t.Fatalf("summary after PASS = %q, %v", output, err)
 	}
@@ -1031,7 +1035,7 @@ func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T
 
 	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Choose", "--option", "one", "--option", "two")
 	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Discard", "--option", "one", "--option", "two")
-	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	output, err = command(binary, root, "status", "--work", "WI-001")
 	if err != nil {
 		t.Fatalf("summary with gates = %q, %v", output, err)
 	}
@@ -1039,7 +1043,7 @@ func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T
 		t.Fatalf("multiple-gate summary = %q", output)
 	}
 	mustRun(t, binary, root, "gate", "resolve", "GATE-002", "--option", "one")
-	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	output, err = command(binary, root, "status", "--work", "WI-001")
 	if err != nil {
 		t.Fatalf("summary with gate = %q, %v", output, err)
 	}
@@ -1053,7 +1057,7 @@ func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T
 		t.Fatalf("approve under an open gate = %q, %v; want a refusal naming GATE-001", output, err)
 	}
 	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "one")
-	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	output, err = command(binary, root, "status", "--work", "WI-001")
 	if err != nil {
 		t.Fatalf("summary after unblocking = %q, %v", output, err)
 	}
@@ -1061,7 +1065,7 @@ func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T
 		t.Fatalf("unblocked summary = %q", output)
 	}
 	mustRun(t, binary, root, "review", "approve", "WI-001")
-	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
+	output, err = command(binary, root, "status", "--work", "WI-001")
 	if err != nil {
 		t.Fatalf("summary after DONE = %q, %v", output, err)
 	}
@@ -1080,7 +1084,7 @@ func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalCancellation(t *testin
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, failingVerify)
 	mustRun(t, binary, root, "verify", "WI-001")
-	output, err := command(binary, root, "status", "--work", "WI-001", "--summary")
+	output, err := command(binary, root, "status", "--work", "WI-001")
 	if err != nil {
 		t.Fatalf("summary after FAIL = %q, %v", output, err)
 	}
@@ -1088,29 +1092,32 @@ func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalCancellation(t *testin
 		t.Fatalf("failed-verification summary = %q", output)
 	}
 
+	// WI-001 passes into REVIEW, which frees the workspace's single execution
+	// slot for WI-002.
 	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
 	addWork(t, binary, root, "queue", "specs/stories/b.md")
 	mustRun(t, binary, root, "start", "WI-002")
 	mustRun(t, binary, root, "verify", "WI-002")
 	mustRun(t, binary, root, "review", "reject", "WI-002", "--reason", "fix it")
-	output, err = command(binary, root, "status", "--summary", "--work", "WI-002")
+	output, err = command(binary, root, "status", "--work", "WI-002")
 	if err != nil {
 		t.Fatalf("summary after rejection = %q, %v", output, err)
 	}
-	if !strings.Contains(output, "Review: EV-003 REJECTED") || !strings.Contains(output, "Completion: changes requested") {
+	if !strings.Contains(output, "Review: EV-004 REJECTED") || !strings.Contains(output, "Completion: changes requested") {
 		t.Fatalf("rejected-review summary = %q", output)
 	}
 	mustRun(t, binary, root, "verify", "WI-002")
-	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	output, err = command(binary, root, "status", "--work", "WI-002")
 	if err != nil {
 		t.Fatalf("summary after re-verification = %q, %v", output, err)
 	}
-	if !strings.Contains(output, "Verification: EV-004 PASS") || !strings.Contains(output, "Review: EV-003 REJECTED") || !strings.Contains(output, "Completion: awaiting human review") {
+	if !strings.Contains(output, "Verification: EV-005 PASS") || !strings.Contains(output, "Review: EV-004 REJECTED") || !strings.Contains(output, "Completion: awaiting human review") {
 		t.Fatalf("re-verified summary = %q", output)
 	}
 
 	mustRun(t, binary, root, "goal", "cancel", "queue", "--reason", "awaiting decision")
-	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	output, err = command(binary, root, "status", "--work", "WI-002")
 	if err != nil {
 		t.Fatalf("summary with cancelled goal = %q, %v", output, err)
 	}
@@ -1867,10 +1874,10 @@ func TestApprovalCompletesWorkAndUnlocksTheQueue(t *testing.T) {
 	if state.WorkItemStatus("WI-001") != work.Done {
 		t.Fatalf("WI-001 = %s, want DONE", state.WorkItemStatus("WI-001"))
 	}
-	if state.WorkItemStatus("WI-002") != work.Ready {
+	if state.DisplayStatus("WI-002") != "READY" {
 		t.Fatalf("WI-002 = %s, want READY", state.WorkItemStatus("WI-002"))
 	}
-	if state.WorkItemStatus("WI-003") != work.Pending {
+	if state.DisplayStatus("WI-003") != "PENDING" {
 		t.Fatalf("WI-003 = %s, want PENDING: WI-002 is not done yet", state.WorkItemStatus("WI-003"))
 	}
 
@@ -1978,7 +1985,7 @@ func TestEndToEndQueueAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.WorkItemStatus("WI-001") != work.Done || state.WorkItemStatus("WI-002") != work.Ready {
+	if state.WorkItemStatus("WI-001") != work.Done || state.DisplayStatus("WI-002") != "READY" {
 		t.Fatalf("queue did not advance: %#v", state.WorkItems)
 	}
 	verification, ok := state.LatestVerification("WI-001")
