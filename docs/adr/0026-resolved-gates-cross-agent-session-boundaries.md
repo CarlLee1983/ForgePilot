@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Resolved Gates cross Agent Session boundaries
 
 Runner 每次 attempt 都建立新的 Agent Session，因此前一個 session 等待 Human Decision 後，下一個 session 不能只從未受信任的 attempt summary 猜答案。交接必須從目前的 ForgePilot state 即時投影該 Work Item 與其所有 transitive prerequisites 上的 RESOLVED Gate，包含原問題、選定選項與 resolution note；依 Gate 開立順序呈現，排除 OPEN、CANCELLED、sibling 與 downstream Gate。Runner 不做語意相似度判定、不自動套用決策，也不代替人解除 Gate；若要讓等價決策成為可機器判斷的 identity，必須另行設計明確 schema 與 authority policy。

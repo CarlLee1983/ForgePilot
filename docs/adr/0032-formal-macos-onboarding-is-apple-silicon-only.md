@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # 正式 macOS onboarding 僅支援 Apple Silicon
 
 ForgePilot 的正式 macOS source-built onboarding 支援面限定為 Apple Silicon

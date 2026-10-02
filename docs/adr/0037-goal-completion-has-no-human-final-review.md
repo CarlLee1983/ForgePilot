@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # ADR-0037：Goal completion 不等待人工終審
 
 ## Status

@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # 正式 macOS Release 先建立簽署與可驗證的發佈鏈
 
 **Status relation:** [ADR-0030](0030-source-built-onboarding-without-apple-developer.md) 改定目前

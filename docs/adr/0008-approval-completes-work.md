@@ -1,3 +1,7 @@
+---
+status: partially superseded by ADR-0040
+---
+
 # 沒有完成指令：approve 在條件滿足時直接完成工作
 
 `review approve` 記錄 APPROVED 的 Human Review Evidence；若同一 revision 的最新 Verification 為 PASS 且該 Work Item 沒有未解除的 Gate，就在同一次交易內進入 DONE 並解鎖下游依賴。ForgePilot 不提供 `done`、`complete` 或任何等價的指令。

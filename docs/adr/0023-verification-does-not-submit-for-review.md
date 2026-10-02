@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Verification records evidence; explicit submission opens Human Review
 
 `forgepilot verify` records the result of the canonical automated check. For a

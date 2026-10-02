@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Candidate Verification 的 PASS 以一個 shared run fan-out
 
 repository 的 canonical check 判斷的是一個 immutable Candidate 與該次 Resolved Runtime，而不是某一張 Work Item 私有的程式片段；同一 Goal 的 stale REVIEW／VERIFIED 工作逐張重跑同一個 global command，會製造多個其實沒有發生的 execution identities。`internal/app.Verify` 因此維持單一 caller interface，但 implementation 會以 anchor 為入口選出同 Goal、已有 PASS 且只因本次 Candidate 而 stale 的合法 cohort，只執行一個 canonical subprocess。PASS 在同一個 state transaction 內為 anchor 與 completion 時仍未改變、仍合法且 prerequisite-closed 的 recipients 各建立 Work Item-specific Evidence；每筆 Evidence 保留自己的 ID 與 Story association，同時共享一個 Verification Run ID、Candidate、Resolved Runtime、command、result、完成時間與 log identity。

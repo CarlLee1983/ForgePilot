@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Source-built Bootstrap separates distribution from Repository Onboarding
 
 **Status relation:** This ADR supersedes only the coupled source-acquisition and target-onboarding portions of [ADR-0024](0024-onboarding-stays-outside-the-offline-cli.md) and [ADR-0030](0030-source-built-onboarding-without-apple-developer.md). It preserves their fixed-source, installed-Go, explicit-approval, offline-core boundaries; it does not revive the signed-binary path deferred by ADR-0025 or expand the Apple-Silicon-only support boundary in ADR-0032.

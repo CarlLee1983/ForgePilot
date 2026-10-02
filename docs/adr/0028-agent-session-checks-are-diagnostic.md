@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0040
 ---
 
 # Agent Session checks are diagnostic; Runner owns Verification

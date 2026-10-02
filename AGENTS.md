@@ -6,11 +6,13 @@
 
 管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5、P0／P1 與 Goal-level Review Policy 全部實作完成，另有 Long-running Runner MVP（`forgepilot run`）；roadmap 沒有下一個 milestone，後續工作來自 dogfood，開在 issue tracker 上。
 
+**定位正在收斂**：[ADR-0040](docs/adr/0040-forgepilot-is-a-passive-dag-ledger.md) 把 ForgePilot 定為被動的 DAG 帳本，Runner、supervised execution、自管分發等能力待移除。動任何程式碼前先讀它；下面提到這些能力的條目描述的是收斂前的程式碼，與 ADR-0040 衝突時以 ADR-0040 為準。
+
 ## 讀的順序
 
 1. [CONTEXT.md](CONTEXT.md) — 詞彙。把 Story 與 Work Item 混用是這個 domain 最容易犯的錯
 2. [docs/architecture.md](docs/architecture.md) — 責任邊界、資料模型、狀態規則、各階段的開工前定案
-3. [docs/adr/README.md](docs/adr/README.md) — 35 份 accepted 決定與其失效條件；目前沒有 proposed 的開放問題
+3. [docs/adr/README.md](docs/adr/README.md) — 決定與其失效條件；0040 取代了其中 27 份；目前沒有 proposed 的開放問題
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約表（**flag 命名以此為準**）與各階段 exit checklist
 5. `docs/specs/` — M1–M4 每個 milestone 一個 `m*/` 目錄，收 spec 與 ticket；M5 之後改以單一檔案記錄（`m5-dogfood-friction.md`），衍生的工作以 issue 追蹤
 

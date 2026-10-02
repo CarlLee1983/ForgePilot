@@ -4,6 +4,8 @@
 
 MVP 的 M1–M5、P0-001–P0-003、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
+**定位收斂（[ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md)，待實作）：** ForgePilot 是被動的 DAG 帳本。外部 Agent 驅動迴圈；ForgePilot 判定下一個合法動作、保存 Evidence、在完成的同一交易內解鎖下游。本文件中 Runner、supervised execution、Distribution／Bootstrap、Whole-DAG Story readiness、Runtime resolution、Verification fan-out、Goal-level Review Policy、External Work Reference 與各 schema 升版段落描述的是**收斂前仍存在的程式碼**，不是目標設計；實作收斂時逐段刪除或改寫。兩者衝突時以 ADR-0040 為準。
+
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
 本文件的視覺化見 [diagrams/](diagrams/README.md)：狀態機、分層與依賴方向、交易邊界，以及 `verify` 與 `review approve` 的順序。圖與本文件衝突時以本文件與程式碼為準。
@@ -16,7 +18,7 @@ MVP 的 M1–M5、P0-001–P0-003、P1-004 Deterministic Runtime Resolution 與 
 | ForgePilot | Goal、工作佇列、狀態、Gate、Evidence index、Candidate identity、next-work selection |
 | PraxisBound | Story schema、acceptance criteria、工程流程、coding standards、測試與驗證契約、人工審查原則 |
 | Repository | 程式碼、tests、formatters、linters、type／architecture checks、canonical `make verify` |
-| Agent | 讀取 Story、實作、修復、推理與工具操作 |
+| Agent | 驅動 DAG 迴圈：依 `next` 取得動作，讀取 Story、實作、修復、呼叫 `verify` |
 
 Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不讀取程式碼後自行判斷正確性，也不替代 PraxisBound 的工程 lifecycle。
 
@@ -28,11 +30,11 @@ Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不�
    - **ADR 決策固化**：架構取捨與技術約定先寫成 ADR，定案後不可無因推翻。
    - **Spec 規格界定**：根據 ADR 撰寫系統架構規格、模組邊界與狀態機契約。
    - **Story & AC 拆分**：將 Spec 拆解為具體可驗收的獨立 Story，每個 Story 具備明確的 Acceptance Criteria 與測試驗證指令。
-2. **下游圖執行與控制面 (ForgePilot)**：
-   - **Work Item DAG 拓撲編排**：以 `goal create` 建立目標，`work add --story <ref> --depends-on <prereqs>` 將所有 Stories 組裝為嚴密的有向無環圖（DAG）。未滿足依賴者為 `PENDING`，滿足者推進至 `READY`。
-   - **單點實作與驗證**：由 Runner 派發專屬 Agent Session 接單實作；Agent 只執行交接指定的 focused checks。Agent 回報 `implementation_finished` 後，ForgePilot 才在 explicit `verify` 或 Runner 的 verification orchestration 中，對 immutable Candidate 的隔離 checkout 執行 repository canonical `make verify` 並保存 Evidence。
-   - **預算約束與一次收斂**：驗證失敗才在明確的 Attempt 預算內進入有限 Repair 迴圈；超限或遇架構決策（Gate）立即中斷等待人類。預設 `WORK_ITEM` policy 的 PASS 先進 REVIEW，只有 Human `review approve` 成為 DONE 才解鎖下游；`GOAL` policy 的 PASS 才可成為 VERIFIED 以推進依賴。
-   - **拓撲順序與完成邊界**：ForgePilot 始終握有合法轉移與順序仲裁權，即時提供依確定排序選出的 `next` 建議動作；其他 independently READY Work Item 仍可合法 `start`。GOAL policy 在 current Candidate 驗證條件全部成立後由 Runner 原子完成 Goal，不設人工 final-review 停止模式。
+2. **下游 DAG 帳本 (ForgePilot)**：
+   - **Goal Plan 匯入**：`goal import <plan>` 一次建立 Goal 與所有節點，節點 ID 即 Work Item ID；再次匯入只接受新增節點。ForgePilot 只驗證合法 DAG 與 Story 路徑存在。
+   - **拓撲推進**：Readiness 讀取時計算；`next` 給出唯一建議動作，同時最多一件 RUNNING。外部 Agent 依建議 `start`、實作、`verify`。
+   - **完成條件**：`verify` 在 immutable Candidate 的隔離 checkout 執行 repository canonical `make verify`；PASS 即 DONE 並同交易解鎖下游。Goal 有 Approval Requirement 時 PASS 先進 REVIEW，`review approve` 後才 DONE。全部 DONE 時 Goal 自動完成。
+   - **人工介入**：需要人判斷時以 Gate 記錄並阻擋該工作；換 session 的 Agent 由 `status`／`next` 得知正在等人。
 
 Breaking change、architecture trade-off、security-sensitive decision、production operation、destructive action、scope expansion、ambiguous requirement、merge／release authorization 都需要明確 Human Decision。M3 起這些決策以 Gate 表示並保存；merge／release authorization 仍不在產品範圍內，Gate resolution 不授予該權限。
 

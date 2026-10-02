@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # 目前的正式導入從固定 source version 本機建置
 
 **Status relation:** [ADR-0032](0032-formal-macos-onboarding-is-apple-silicon-only.md)

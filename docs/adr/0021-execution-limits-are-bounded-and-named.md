@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # 執行期限是有界的，而且每一個都有名字
 
 Runner 有三種可以打斷一段執行的東西：使用者送來的 SIGINT／SIGTERM、整個 run 的 `--max-duration`，以及單次執行的 `--agent-timeout`／`--verify-timeout`。它們全部經由同一個被取消的 context 送達，所以在被打斷的那一端看起來一模一樣——`context.Canceled` 對三者是同一個字。

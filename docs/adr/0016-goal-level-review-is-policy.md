@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Goal-level review is a policy, not a review bypass
 
 **Status:** accepted; the human Goal-final-review option described below is superseded in part by [ADR-0037](0037-goal-completion-has-no-human-final-review.md).

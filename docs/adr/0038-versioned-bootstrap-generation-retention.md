@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Versioned Bootstrap generation retention
 
 ADR-0033 的 immutable generation 以完整 Bootstrap Source commit 與 canonical SHA-256 payload digest 組成 identity；managed path 仍以 source commit 命名，同一 commit 若再次產生不同 payload 必須拒絕覆寫。每代另安裝同版 `forgepilot-bootstrap` helper，讓 CLI、Codex skill 與 retention manager 經同一個 `current` pointer 發佈。

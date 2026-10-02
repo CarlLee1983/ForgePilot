@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # 未確認的清理是持久化事實，不是一次停止訊息
 
 [ADR-0021](0021-execution-limits-are-bounded-and-named.md) 已經決定「送出 signal 不等於清理完成」，而且無法確認時要停在 `RECOVERY_BLOCKED`。它沒有說的是那個判斷活多久。目前它只活到這個 Runner 程序結束為止：`RECOVERY_BLOCKED` 寫進 `Stop.Reason`，而下一次啟動只檢查 `Worker != nil`，於是一個沒有 Worker 的未確認清理——canonical check 的程序群組、runtime preflight 的 probe、一個還卡在 filter 裡的 Git——在重啟、換 run ID 或換 Goal 之後就消失了。`Stop` 是「上一次為什麼結束」，`resume` 本來就會清掉它；把恢復阻擋寄存在同一個欄位，等於讓 resume 順手放行它。

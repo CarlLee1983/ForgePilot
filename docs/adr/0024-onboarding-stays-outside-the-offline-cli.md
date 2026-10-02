@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # 安裝與 Agent 導入留在離線治理 CLI 之外
 
 **Status relation:** [ADR-0030](0030-source-built-onboarding-without-apple-developer.md) 以固定 source

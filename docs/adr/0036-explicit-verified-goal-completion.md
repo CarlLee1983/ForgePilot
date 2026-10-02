@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # ADR-0036：以明確 policy 讓 Goal 可在驗證後自動完成
 
 ## Status

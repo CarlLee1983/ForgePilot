@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # External Work Reference 是 Goal-scoped 的 idempotency key
 
 外部 Agent 只能透過公開 CLI 建立 Work Item，不能安全讀寫 `.forgepilot/`。在一批

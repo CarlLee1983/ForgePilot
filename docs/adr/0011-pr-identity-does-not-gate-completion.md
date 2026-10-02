@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # PR identity 不參與完成判定
 
 M4 讓 Human Review Evidence 可以攜帶 PR reference，但 DONE 的四項條件一字不改，`Stale` 的定義也一字不改。PR reference 是識別資料，沒有任何規則讀它。

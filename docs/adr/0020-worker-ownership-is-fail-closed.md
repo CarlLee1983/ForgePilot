@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Worker 程序 ownership 採 fail-closed
 
 Runner 會啟動長時間執行的 coding CLI 子程序。Runner 自己被 kill、當機或被 SIGINT 中斷時，那個子程序可能還活著，而且還在寫 workspace。恢復時必須回答一個問題：現在可不可以啟動新的 writer。

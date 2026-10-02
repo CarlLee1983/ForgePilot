@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Runner 可以啟動本機 coding CLI，治理判定仍不依賴模型
 
 [ADR-0010](0010-no-outbound-network-requests.md) 把界線畫在「ForgePilot 不主動發出對外請求——不自行 HTTP，也不 spawn `gh`」。Long-running Runner 需要啟動 Codex 之類的本機 coding CLI，而那個 CLI 會連線到模型服務。這一份記錄界線如何被重新描述，以及哪一半沒有改變。

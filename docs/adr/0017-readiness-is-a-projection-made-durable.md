@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Readiness is a projection made durable, and stale VERIFIED re-verification is owed, not immediate
 
 `next` stays a pure query, so persisted PENDING readiness that outlived the Gate or stale Candidate which withdrew it needs an explicit writer: `forgepilot reconcile --goal <goal-id>` recomputes one ACTIVE Goal's PENDING/READY readiness from current repository facts, resolved inside the same locked state transaction, and refuses the whole command when a required fact cannot be read. It is a legal state transition, not a verification bypass: it reuses the one dependency-progression predicate, so it can promote exactly what a fresh `work add` would have made READY and nothing more — it appends no Evidence, answers no Gate, changes no review policy, and never touches RUNNING, VERIFYING, REVIEW, VERIFIED or DONE. READY remains orthogonal to blocking (ADR-0007): a reconciled Work Item with its own OPEN Gate still cannot start. `next` and `reconcile` share the predicate, so a recommendation is never one the command would report as unchanged.

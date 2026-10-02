@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0040
 ---
 
 # Story readiness contract is upstream-owned and ForgePilot consumes it read-only

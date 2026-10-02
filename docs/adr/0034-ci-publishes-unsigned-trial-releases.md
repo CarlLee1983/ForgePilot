@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # CI 只發佈經核准的 unsigned maintainer trial prerelease
 
 **Status relation:** 此 ADR 延伸 [ADR-0025](0025-formal-macos-release-trust.md) 的「draft 後人工

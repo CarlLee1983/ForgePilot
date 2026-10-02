@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0040
 ---
 
 # 完整計畫下的有界背景執行

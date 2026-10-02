@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Runtime Contract 屬於 Candidate，Resolved Runtime 屬於 Verification Run
 
 ForgePilot 只在 immutable Candidate 的 detached checkout 解析 runtime declarations，並在 canonical precheck 之前解析本機已安裝且符合全部 contract constraints 的 executables。每個 runtime command 先在 private temporary bin directory 綁到已驗證的 executable，再組成該次 Verification subprocess 的 environment，避免不同 manager bin directories 互相遮蔽；目錄隨命令清理。不 source shell profile、不修改 repository declaration、不切換 global manager state，也不安裝 runtime。沒有支援的 declaration 才完整沿用 caller environment。

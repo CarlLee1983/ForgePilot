@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0040
+---
+
 # Runner 執行，ForgePilot 判定
 
 Long-running Runner 最容易長成的形狀，是一個自己記得「做到哪裡」的第二套工作狀態機：它讀一份啟動時的工作清單、自己標記完成、自己決定下一張。那個形狀被拒絕。
