@@ -16,35 +16,14 @@ import (
 )
 
 func Execute(args []string, cwd string, stdout, stderr io.Writer) int {
-	return execute(args, cwd, stdout, stderr, nil)
-}
-
-// ExecuteWithGenerationResolver supplies the immutable Bootstrap generation
-// captured by the process entrypoint. Only Runner admission consumes it; other
-// commands retain Execute's ordinary local CLI behavior.
-func ExecuteWithGenerationResolver(args []string, cwd string, stdout, stderr io.Writer, resolver app.EngineGenerationResolver) int {
-	return execute(args, cwd, stdout, stderr, resolver)
-}
-
-func execute(args []string, cwd string, stdout, stderr io.Writer, resolver app.EngineGenerationResolver) int {
-	err := run(args, cwd, stdout, resolver)
-	if err == nil {
-		return 0
+	if err := run(args, cwd, stdout); err != nil {
+		fmt.Fprintf(stderr, "forgepilot: %v\n", err)
+		return 1
 	}
-	// A run that stops for a Gate, a budget or another bounded condition has not
-	// necessarily failed: its stop reason carries the actionable outcome.
-	var status *exitStatus
-	if errors.As(err, &status) {
-		if status.err != nil {
-			fmt.Fprintf(stderr, "forgepilot: %v\n", status.err)
-		}
-		return status.code
-	}
-	fmt.Fprintf(stderr, "forgepilot: %v\n", err)
-	return 1
+	return 0
 }
 
-const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|reconcile|verify|run|execution|gate|review|status>"
+const usageSummary = "usage: forgepilot <init|migrate|goal|work|next|start|reconcile|verify|gate|review|status>"
 
 // Asking what the commands are must not require an initialized repository:
 // discovering the CLI is the step before deciding to run it anywhere.
@@ -55,35 +34,14 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   init                              create .forgepilot state in the current repository
   migrate                           upgrade state written by an older binary
   goal create --id <id> --title <t> [--review-policy <work-item|goal>] [--json]
-                                    GOAL automatically completes after all checks pass
+                                    a GOAL-policy Goal completes with goal complete once every check is current
   goal <block|unblock|complete|cancel> <goal-id>
-  goal preflight --request <path> --json
-                                    inspect a reviewed Goal Plan without mutation
   work add --goal <id> --story <path> [--depends-on <work-id>] [--external-ref <ref>] [--json]
   work list --goal <id> --json     list one Goal's Work Items for machine use
   next                              recommend the next legal agent action
   start <work-id>                   move a READY work item to RUNNING
   reconcile --goal <goal-id>        recompute one Goal's PENDING/READY readiness
   verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
-  run --goal <goal-id> --runtime <codex|fake> --snapshot [--dry-run]
-                                    drive one GOAL-policy goal to completion or a bounded stop
-  run status <run-id> [--json]      what that run concluded, and the goal's readiness now
-  run resume <run-id>               continue a stopped run without resetting its budget
-  execution plan --request <path> --json
-                                    preview a reviewed Goal Plan without mutation
-  execution authorize --request <path> --approval-token <token> --by <name> --json
-                                    atomically adopt and authorize an initial Goal Plan
-  execution resume --goal <goal-id> [--json]
-                                    continue through the current execution authorization
-  execution stop --goal <goal-id> --by <name> --reason <reason> [--json]
-  execution declare --request <path> --json
-	  execution supervise install --goal <goal-id> --json
-	  execution supervise status --goal <goal-id> --json
-	  execution supervise uninstall --goal <goal-id> --json
-
-  execution revise plan --request <path> --json
-  execution revise authorize --request <path> --approval-token <token> --by <name> --json
-                                    preview then atomically authorize an additive reviewed revision
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
   review request <work-id>            submit a passing WORK_ITEM candidate for human review
@@ -91,11 +49,10 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   status [--work <work-id> --summary] print full status, or one Work Item's current summary
 
 ForgePilot does not replace PraxisBound or your coding agent. Nothing here makes
-a network request; the run command launches the local coding CLI you name, and
-that CLI may contact a model service of its own.
+a network request.
 `
 
-func run(args []string, cwd string, output io.Writer, resolver app.EngineGenerationResolver) error {
+func run(args []string, cwd string, output io.Writer) error {
 	if len(args) == 0 {
 		return errors.New(usageSummary)
 	}
@@ -132,10 +89,6 @@ func run(args []string, cwd string, output io.Writer, resolver app.EngineGenerat
 		return reconcile(args[1:], root, output)
 	case "verify":
 		return verify(args[1:], root, output)
-	case "run":
-		return runCommand(args[1:], root, output, resolver)
-	case "execution":
-		return executionCommand(args[1:], root, output, resolver)
 	case "gate":
 		return gate(args[1:], root, output)
 	case "review":
@@ -165,11 +118,9 @@ func migrate(args []string, root string, output io.Writer) error {
 
 func goal(args []string, root string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot goal <create|block|unblock|complete|cancel|preflight>")
+		return errors.New("usage: forgepilot goal <create|block|unblock|complete|cancel>")
 	}
 	switch args[0] {
-	case "preflight":
-		return goalPreflight(args[1:], root, output)
 	case "create":
 		return createGoal(args[1:], root, output)
 	case "block":
@@ -249,7 +200,7 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 		return errors.New("--reason is required")
 	}
 	if target == work.GoalCompleted {
-		if err := storage.Update(root, func(state *work.State) error { return state.CompleteGoal(id, now()) }); err != nil {
+		if err := app.CompleteGoal(context.Background(), root, id, now); err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(output, "Goal %s %s\n", id, target)
@@ -381,7 +332,7 @@ func next(args []string, root string, output io.Writer) error {
 	case work.NextActionNone:
 		_, err = fmt.Fprintln(output, "No actionable work.")
 	case work.NextActionCompleteGoal:
-		_, err = fmt.Fprintf(output, "Goal %s is ready for automatic completion.\nAction: runner will complete the Goal transactionally\nReason: %s\n", action.Goal.ID, action.Reason)
+		_, err = fmt.Fprintf(output, "Goal %s is ready for automatic completion.\nAction: forgepilot goal complete %s\nReason: %s\n", action.Goal.ID, action.Goal.ID, action.Reason)
 	case work.NextActionGoalCompleted:
 		_, err = fmt.Fprintf(output, "Goal %s is already completed.\n", action.Goal.ID)
 	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
@@ -453,7 +404,7 @@ func nextActionText(state *work.State, action work.NextAction) string {
 		// at a time; the Work Item it is about is already on the Next: line.
 		return fmt.Sprintf("forgepilot reconcile --goal %s", action.Item.GoalID)
 	case work.NextActionCompleteGoal:
-		return "runner completes the Goal transactionally"
+		return fmt.Sprintf("forgepilot goal complete %s", action.Goal.ID)
 	default:
 		return ""
 	}
@@ -524,7 +475,7 @@ func status(args []string, root string, output io.Writer) error {
 			if item.CurrentRun != nil && !storage.VerificationRunning(root, item.ID) {
 				// verify reclaims an abandoned run before anything can refuse the
 				// command, so this instruction works even when the work is blocked.
-				note = " (runner is gone; run forgepilot verify to recover)"
+				note = " (verifier is gone; run forgepilot verify to recover)"
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
 				verificationSummary(&state, item.ID, revision, digest), reviewSummary(&state, item.ID, goal.ReviewPolicy)); err != nil {

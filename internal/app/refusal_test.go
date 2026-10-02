@@ -15,7 +15,7 @@ import (
 func TestRefusalSurvivesWrappingAndDoesNotSwallowOtherFailures(t *testing.T) {
 	cause := errors.New("work item \"WI-001\" is blocked by GATE-001")
 	refusal := refuse(cause)
-	if !IsRefusal(refusal) {
+	if !isRefusal(refusal) {
 		t.Fatal("a refusal is not recognised as one")
 	}
 	if refusal.Error() != cause.Error() {
@@ -24,7 +24,7 @@ func TestRefusalSurvivesWrappingAndDoesNotSwallowOtherFailures(t *testing.T) {
 	if !errors.Is(refusal, cause) {
 		t.Fatal("a refusal hides the error it was built from")
 	}
-	if !IsRefusal(fmt.Errorf("verify WI-001: %w", refusal)) {
+	if !isRefusal(fmt.Errorf("verify WI-001: %w", refusal)) {
 		t.Fatal("a wrapped refusal is not recognised as one")
 	}
 
@@ -32,10 +32,15 @@ func TestRefusalSurvivesWrappingAndDoesNotSwallowOtherFailures(t *testing.T) {
 		t.Fatal("refusing nothing produced an error")
 	}
 	operational := fmt.Errorf("git rev-parse HEAD: %w", errors.New("not a repository"))
-	if IsRefusal(operational) {
+	if isRefusal(operational) {
 		t.Fatal("an operational failure was classified as a refusal")
 	}
-	if IsRefusal(ErrVerificationTimedOut) {
+	if isRefusal(ErrVerificationTimedOut) {
 		t.Fatal("a timeout was classified as a refusal; it is neither that nor a FAIL")
 	}
+}
+
+func isRefusal(err error) bool {
+	var refusal *Refusal
+	return errors.As(err, &refusal)
 }

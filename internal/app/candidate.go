@@ -1,8 +1,7 @@
-// Package app holds the orchestration the CLI and the Runner share. It is the
+// Package app holds the orchestration behind the CLI. It is the
 // only place allowed to combine internal/work's rules with internal/storage's
-// transactions and internal/repository's Git facts, so neither a command nor a
-// Runner ever grows a second copy of a decision. See
-// docs/adr/0019-runner-executes-forgepilot-decides.md.
+// transactions and internal/repository's Git facts, so no command grows a
+// second copy of a decision.
 package app
 
 import (

@@ -845,7 +845,7 @@ func TestGoalReviewPolicyRunsAcrossWorkItemsToAutomaticCompletion(t *testing.T) 
 	if err != nil {
 		t.Fatalf("next at completion boundary = %q, %v", output, err)
 	}
-	for _, want := range []string{"Goal queue is ready for automatic completion", "Action: runner will complete the Goal transactionally"} {
+	for _, want := range []string{"Goal queue is ready for automatic completion", "Action: forgepilot goal complete queue"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("next output %q does not contain %q", output, want)
 		}
@@ -853,8 +853,43 @@ func TestGoalReviewPolicyRunsAcrossWorkItemsToAutomaticCompletion(t *testing.T) 
 	if output, err = command(binary, root, "review", "approve", "WI-001"); err == nil || !strings.Contains(output, "GOAL review policy") {
 		t.Fatalf("Work Item review under GOAL policy = %q, %v", output, err)
 	}
-	if output, err = command(binary, root, "goal", "complete", "queue"); err == nil || !strings.Contains(output, "completes through current verification") {
-		t.Fatalf("direct Goal completion under GOAL policy = %q, %v", output, err)
+	// The action `next` names must be the command that completes the Goal.
+	if output, err = command(binary, root, "goal", "complete", "queue"); err != nil || !strings.Contains(output, "Goal queue COMPLETED") {
+		t.Fatalf("goal complete under GOAL policy = %q, %v", output, err)
+	}
+	state, err = storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goal, _ := state.GoalByID("queue"); goal.Status != work.GoalCompleted {
+		t.Fatalf("Goal status = %s, want COMPLETED", goal.Status)
+	}
+	if _, ok := state.GoalCompletionEvidenceFor("queue"); !ok {
+		t.Fatal("completion left no Goal completion evidence")
+	}
+}
+
+func TestGoalCompleteRefusesGoalPolicyGoalWhoseVerificationIsStale(t *testing.T) {
+	root, binary := fixture(t)
+	mustRun(t, binary, root, "init")
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal")
+	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	mustRun(t, binary, root, "start", "WI-001")
+	writeVerify(t, root, passingVerify)
+	mustRun(t, binary, root, "verify", "WI-001")
+	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, root, "later")
+	if output, err := command(binary, root, "goal", "complete", "queue"); err == nil || !strings.Contains(output, "not ready to complete") {
+		t.Fatalf("goal complete on stale verification = %q, %v", output, err)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goal, _ := state.GoalByID("queue"); goal.Status != work.GoalActive {
+		t.Fatalf("refused completion changed the Goal to %s", goal.Status)
 	}
 }
 
@@ -1433,7 +1468,7 @@ func TestVerifyIsVisibleSerializedAndRecoversFromInterruption(t *testing.T) {
 	if state.WorkItems[0].Status != work.Verifying || state.WorkItems[0].CurrentRun == nil {
 		t.Fatalf("killed run did not leave an orphan: %#v", state.WorkItems[0])
 	}
-	if output, err := command(binary, root, "status"); err != nil || !strings.Contains(output, "runner is gone") {
+	if output, err := command(binary, root, "status"); err != nil || !strings.Contains(output, "verifier is gone") {
 		t.Fatalf("status did not report the orphan: %q, %v", output, err)
 	}
 	before, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))

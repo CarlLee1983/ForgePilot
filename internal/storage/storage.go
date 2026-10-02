@@ -168,9 +168,6 @@ func writeFileAtomically(directory, destination string, encoded []byte) error {
 	if err := os.Rename(temporaryName, destination); err != nil {
 		return err
 	}
-	if err := injectedDirectorySyncFailure(destination); err != nil {
-		return err
-	}
 	return syncDirectory(directory)
 }
 
