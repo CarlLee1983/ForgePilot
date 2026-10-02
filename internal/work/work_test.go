@@ -108,8 +108,8 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 	if err == nil {
 		t.Fatal("accepted an older schema version")
 	}
-	if !strings.Contains(err.Error(), "export-plan") || !strings.Contains(err.Error(), "goal import") {
-		t.Fatalf("older-version error %q does not point at the export tool and goal import", err)
+	if !strings.Contains(err.Error(), "no longer supported") || !strings.Contains(err.Error(), "goal import") {
+		t.Fatalf("older-version error %q does not say the schema is unsupported and point at goal import", err)
 	}
 	if strings.Contains(err.Error(), "newer") {
 		t.Fatalf("older-version error %q claims the state is newer", err)
@@ -121,8 +121,8 @@ func TestSchemaVersionErrorsDistinguishOlderFromNewer(t *testing.T) {
 	if err == nil {
 		t.Fatal("accepted a newer schema version")
 	}
-	if !strings.Contains(err.Error(), "newer") || strings.Contains(err.Error(), "export-plan") {
-		t.Fatalf("newer-version error %q must say newer and must not suggest exporting", err)
+	if !strings.Contains(err.Error(), "newer") || strings.Contains(err.Error(), "goal import") {
+		t.Fatalf("newer-version error %q must say newer and must not suggest re-importing", err)
 	}
 }
 

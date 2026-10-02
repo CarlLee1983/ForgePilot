@@ -395,7 +395,7 @@ func TestOldSchemaStateIsRefusedWithTheExportInstructions(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%v ran against a schema 18 state: %s", arguments[0], output)
 		}
-		for _, want := range []string{"schema version 18", "tools/export-plan", "--state", "--out", "goal import"} {
+		for _, want := range []string{"schema version 18", "no longer supported", "goal import"} {
 			if !strings.Contains(output, want) {
 				t.Errorf("%v: output %q lacks %q", arguments[0], output, want)
 			}
@@ -408,13 +408,13 @@ func TestOldSchemaStateIsRefusedWithTheExportInstructions(t *testing.T) {
 		t.Fatal("a refused command rewrote the old state")
 	}
 
-	// A newer state is refused too, without the export instructions.
+	// A newer state is refused too, without the re-import instructions.
 	newer := strings.Replace(legacy, `"schema_version":18`, fmt.Sprintf(`"schema_version":%d`, work.SchemaVersion+1), 1)
 	if err := os.WriteFile(path, []byte(newer), 0600); err != nil {
 		t.Fatal(err)
 	}
 	output, err := command(binary, root, "status")
-	if err == nil || !strings.Contains(output, "newer than this binary supports") || strings.Contains(output, "export-plan") {
+	if err == nil || !strings.Contains(output, "newer than this binary supports") || strings.Contains(output, "goal import") {
 		t.Fatalf("newer schema = %q, %v", output, err)
 	}
 }

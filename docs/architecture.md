@@ -44,7 +44,6 @@ Go 1.25.5、只用標準函式庫、module `github.com/CarlLee1983/ForgePilot`�
 | `internal/storage` | state snapshot、交易鎖、decode／validate、原子保存、Verification 的 flock |
 | `internal/process` | 程序群組的啟動、有界停止與停止確認；`make verify` 會 fork，只終止它的 leader 會讓真正的工作繼續跑 |
 
-`tools/export-plan` 是一次性的匯出腳本（見下方「Schema 19」），在產品 binary 之外；三個採用 repository 遷移完成後即刪除。
 
 由入口組裝依賴。不為每個 entity 預先建立 Save／Get repository interfaces；`storage.Update(root, func(*work.State) error)` 是唯一的回呼形態。
 
@@ -179,7 +178,7 @@ State snapshot 包含 `schema_version`、`next_evidence_id`、`next_gate_id`、`
 
 ### Schema 19
 
-目前的 schema 版本是 19，是一次斷代：新 binary 只讀 19，沒有 migration 框架，也沒有 `migrate` 指令。讀到較舊的 state 時拒絕並指出一次性匯出腳本，讀到較新的拒絕為「較新 schema」，避免舊 binary 重新保存時丟失未知欄位。既有 repository 的做法是：在 ForgePilot 原始碼 checkout 執行 `go run ./tools/export-plan --state <舊 state.json> --out <dir>`，為每個未完成的 Goal 輸出一份 Goal Plan，把舊 `.forgepilot/` 封存（不刪除），`init` 後逐份 `goal import`。下一次升版時再決定需不需要 migration 框架。
+目前的 schema 版本是 19，是一次斷代：新 binary 只讀 19，沒有 migration 框架，也沒有 `migrate` 指令。讀到較舊的 state 時拒絕並建議以 Goal Plan 重新 `goal import`，讀到較新的拒絕為「較新 schema」，避免舊 binary 重新保存時丟失未知欄位。既有 repository 的做法是：為每個未完成的 Goal 寫一份 Goal Plan，把舊 `.forgepilot/` 封存（不刪除），`init` 後逐份 `goal import`；一次性匯出腳本已在三個採用 repository 遷移後刪除。下一次升版時再決定需不需要 migration 框架。
 
 ## 網路與程序邊界
 

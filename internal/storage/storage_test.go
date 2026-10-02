@@ -101,15 +101,15 @@ func TestLoadRejectsCorruptOlderAndNewerState(t *testing.T) {
 
 	write(stateWithVersion(work.SchemaVersion + 1))
 	_, err := Load(root)
-	if err == nil || !strings.Contains(err.Error(), "newer") || strings.Contains(err.Error(), "export-plan") {
-		t.Fatalf("newer schema: %v; want a refusal that says newer and does not suggest exporting", err)
+	if err == nil || !strings.Contains(err.Error(), "newer") || strings.Contains(err.Error(), "goal import") {
+		t.Fatalf("newer schema: %v; want a refusal that says newer and does not suggest re-importing", err)
 	}
 
 	for _, version := range []int{work.SchemaVersion - 1, 1} {
 		write(stateWithVersion(version))
 		_, err = Load(root)
-		if err == nil || !strings.Contains(err.Error(), "export-plan") {
-			t.Fatalf("schema %d: %v; want a refusal naming the export tool", version, err)
+		if err == nil || !strings.Contains(err.Error(), "no longer supported") || !strings.Contains(err.Error(), "goal import") {
+			t.Fatalf("schema %d: %v; want a refusal that says unsupported and points at goal import", version, err)
 		}
 	}
 
