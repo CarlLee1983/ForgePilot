@@ -10,7 +10,8 @@ Evidence，並在節點完成的同一次交易內解鎖下游。它不啟動 co
 除了 Git 與受管理 repository 的 canonical `make verify` 之外不啟動任何程序，也不發出網路請求。
 
 **文件狀態：** 2026-10-02 的 `grill-with-docs` 兩輪 Q1–Q12 均獲使用者「照建議」確認，
-共識摘要已獲明確確認。這是已定案、尚未實作的收斂；程式碼在實作完成前仍含被移除的能力。
+共識摘要已獲明確確認。這是已定案、實作中的收斂：Runner、supervised execution 與 Story readiness review 已移除
+（`Goal.Execution` 資料模型暫留以相容 schema 18，schema 19 斷代時刪除）；其餘被移除的能力在實作完成前仍存在於程式碼中。
 
 ## 依據
 
