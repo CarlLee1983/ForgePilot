@@ -23,7 +23,7 @@ import (
 // arrive together, and only one of them used to survive: the ctx.Err() branch
 // returned first, so an unconfirmed process group vanished from the result
 // whenever a stop happened to reach the same stage. These drive the real
-// orchestration — storage transactions, Git, the runtime preflight, the check —
+// orchestration — storage transactions, Git, the canonical preflight, the check —
 // with the confirmation step failed by an internal seam, because a group that
 // genuinely survives SIGKILL is not something a test may create.
 // See docs/adr/0022-pending-cleanup-outlives-the-process.md.

@@ -4,7 +4,7 @@
 
 MVP 的 M1–M5、P0-001–P0-003、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
-**定位收斂（[ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md)，待實作）：** ForgePilot 是被動的 DAG 帳本。外部 Agent 驅動迴圈；ForgePilot 判定下一個合法動作、保存 Evidence、在完成的同一交易內解鎖下游。本文件中 Runner、supervised execution、Distribution／Bootstrap、Whole-DAG Story readiness、Runtime resolution、Verification fan-out、Goal-level Review Policy、External Work Reference 與各 schema 升版段落描述的是**收斂前仍存在的程式碼**，不是目標設計；實作收斂時逐段刪除或改寫。兩者衝突時以 ADR-0040 為準。
+**定位收斂（[ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md)，進行中）：** Runtime resolution 與 Verification fan-out 已移除（持久化欄位保留至 schema 19 斷代）。 ForgePilot 是被動的 DAG 帳本。外部 Agent 驅動迴圈；ForgePilot 判定下一個合法動作、保存 Evidence、在完成的同一交易內解鎖下游。本文件中 Runner、supervised execution、Distribution／Bootstrap、Whole-DAG Story readiness、Goal-level Review Policy、External Work Reference 與各 schema 升版段落描述的是**收斂前仍存在的程式碼**，不是目標設計；實作收斂時逐段刪除或改寫。兩者衝突時以 ADR-0040 為準。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 
@@ -208,6 +208,8 @@ CLI 不接受 completion-policy 選項；state 中該欄位由 Review Policy 推
 
 ### Candidate Verification fan-out 與 schema v9
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 `internal/app.Verify` 仍由一張 anchor Work Item 觸發，但 repository canonical check 對 immutable Candidate 與 Resolved Runtime 只執行一次。PASS 時，`internal/work` 在單一 transaction 內為 anchor 與同 Goal、已有 stale PASS、狀態為 REVIEW／VERIFIED、沒有 OPEN Gate、且 prerequisite closure 仍成立的 recipients 各建立一筆 Evidence。這些 Evidence 的 ID 與 Story association 各自獨立，卻共享 Verification Run ID、Candidate、runtime、command、result、timestamp 與 log。FAIL／INTERRUPTED 仍只記 anchor；optional recipients 不進 VERIFYING，crash reclaim 也維持 anchor-only。
 
 begin transaction 產生只存在記憶體的 `FanoutPlan`，凍結 optional item、Goal、Gate、latest Verification 與遞迴 prerequisite facts；completion 重新比對並反覆重算 closure，任何改變都明確列為 skipped，不抹去 anchor 誠實取得的 PASS。全部 Evidence 與 status 先落到 final value，才以 transaction 內解析的 live repository facts refresh readiness 一次；facts 失敗時整組 Evidence 保留，promotion fail closed。
@@ -316,6 +318,8 @@ Gate 與 Goal 規則不在 CLI 重建：RUNNING／REVIEW／VERIFIED 是否仍可
 completion 是 presentation text，不是新狀態。它只投影現有 Work Item status、latest Evidence、Goal status、Gate status 與 stale 判定；Gate 與 Goal 保持各自原有的 blocking 規則，DONE 仍為終態。GOAL policy 的 fresh VERIFIED 顯示 `verified for goal completion`，stale 時仍顯示 `verification stale`。APPROVED 後才因 Gate／Goal 解除或新的 matching PASS 而滿足所有條件時，projection 明確提示重跑既有的 `review approve`，不暗中完成。summary 只列出 unresolved Gate IDs，避免已 RESOLVED／CANCELLED 的歷史遮蔽當前行動。
 
 ### P1-004 Deterministic Runtime Resolution 與 schema v7
+
+> 已由 ADR-0040 移除，以下為歷史紀錄。
 
 Runtime Contract 屬於 Candidate 的內容，因此 discovery 固定發生在 COMMIT／SNAPSHOT 已建立的 detached checkout 內，不得先讀 main worktree。`internal/repository` 提供單一 runtime resolver interface，封裝 declaration parsing、precedence、local installation／shim discovery、actual-version validation 與 child-process environment；`internal/cli` 只接收 opaque Resolved Runtime、印 summary，並把 actual version values 傳給 domain。canonical target precheck 與真正的 `make verify` 接收同一份 environment，避免把關條件與交易使用不同 PATH。
 

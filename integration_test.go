@@ -1045,6 +1045,9 @@ func TestVerifyRecordsEvidenceOnlyForTheWorkItemItWasAskedAbout(t *testing.T) {
 	for _, id := range []string{"WI-001", "WI-002"} {
 		latest, ok := after.LatestVerification(id)
 		original, _ := before.LatestVerification(id)
+		if after.WorkItemStatus(id) != before.WorkItemStatus(id) {
+			t.Fatalf("%s status = %s, want it untouched (%s)", id, after.WorkItemStatus(id), before.WorkItemStatus(id))
+		}
 		if !ok || latest.ID != original.ID || latest.Revision != original.Revision {
 			t.Fatalf("%s latest verification = %#v, want it untouched (%#v)", id, latest, original)
 		}
