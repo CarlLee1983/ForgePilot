@@ -22,7 +22,7 @@ ForgePilot 是被動的 DAG 帳本（[ADR-0040](adr/0040-forgepilot-is-a-passive
 |---|---|
 | `init` | 在 Git repository 建立 `.forgepilot/` 與空 state |
 | `goal import <plan-path>` | 讀 Goal Plan，一次建立 Goal 與整張 DAG；任何驗證失敗整份不寫入。重新匯入規則見下 |
-| `goal cancel <goal-id> --reason <text>` | Goal 由 ACTIVE 轉為 CANCELLED，不再出現在 `next` |
+| `goal cancel <goal-id> --reason <text>` | Goal 由 ACTIVE 轉為 CANCELLED，其工作不再被 `next` 推薦；沒有其他 ACTIVE Goal 時 `next` 說明它已取消 |
 | `next [--json]` | 純讀；回傳唯一一個建議動作與理由。`--json` 為穩定的機器可讀形狀 |
 | `start <work-id>` | READY 工作轉為 RUNNING；已有一件 RUNNING 或 VERIFYING（含孤兒 VERIFYING）、或工作有未解除 Gate 時拒絕，錯誤指出佔位的工作 |
 | `verify <work-id> [--snapshot]` | 先回收孤兒 run，再在 detached worktree 對確切 Candidate（預設 commit，`--snapshot` 為未 commit 工作樹的 snapshot）跑 `make verify`，寫入 Evidence。對 REVIEW 工作重新驗證（會轉為 VERIFYING）時，另一件工作 RUNNING 或 VERIFYING 則拒絕 |
@@ -79,6 +79,7 @@ JSON，以標準函式庫解析，拒絕未知欄位：
 | 變更面 | 每次變更的檢查 | 升格為 full gate 的條件 |
 |---|---|---|
 | 非執行文件（Markdown、README、Agent skill、一般 HTML／CSS） | `git diff --check`；核對已改引用、指令與相對 `href`／`src`；HTML／CSS 於本機瀏覽器開啟已改頁面，確認版面與已改連結可用 | Story／acceptance 明定、整合交付，或同次改動也觸及其他列 |
+| 靜態站首頁（`docs/index.html`、`docs/en/index.html`） | 同非執行文件；兩份是同一頁的繁中與英文版，改一份要同步另一份（結構、範例輸出、連結），並各在桌面與手機寬度開啟確認 | 同上 |
 | `docs/diagrams/` 的圖規格與產物 | 依 [圖的重新產生程序](diagrams/README.md#怎麼重新產生) render 與 visual-check | 同上 |
 | Go、module metadata、Makefile 或 canonical verification 行為 | `make verify` | integration／Human final acceptance 時另跑 `go test -race -count=1 ./...`；Story 也可明定 race gate |
 
