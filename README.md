@@ -59,7 +59,7 @@ ForgePilot 是被動的 DAG 帳本：工單拆分完成後，外部 coding Agent
 go install github.com/CarlLee1983/ForgePilot/cmd/forgepilot@<tag>
 ```
 
-`<tag>` 換成要安裝的發行 tag；`v0.3.1` 以前的 tag 是收斂前的產品，仍含 Runner 與舊 schema，本文描述的是收斂後的版本。
+`<tag>` 換成要安裝的發行 tag；`v0.3.1`（含）以前的 tag 是收斂前的產品，仍含 Runner 與舊 schema，本文描述的是收斂後的版本；收斂後尚未發行新 tag 時，可用 `@main`。
 
 Skill 以手動複製安裝：把 repository 的 `skills/<agent>/forgepilot/` 目錄複製到對應 Agent 的 skill 目錄——Claude Code 為 `~/.claude/skills/`（`skills/claude-code/`），Codex 為 `~/.agents/skills/`（`skills/codex/`）。skill 教 Agent 照 `next → start → 實作 → verify` 推進整張 DAG，遇到需要人判斷的事開 Gate 並停下。
 
