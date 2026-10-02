@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -753,7 +753,7 @@
         <h3>Storage 交易層 (internal/storage)</h3>
         <p><strong>責任：</strong>OS 檔案鎖排他控制、單一 JSON 快照反序列化、原子寫入替換。</p>
         <p style="margin-top: 0.5rem; font-size: 0.88rem; color: var(--text-faint);">
-          ✔ 唯一的儲存入口：<code>storage.Update(root, func(*work.State))</code>。<br>
+          ✔ 唯一的儲存入口：<code>storage.Update(root, func(*work.State) error)</code>。<br>
           ✔ 跨實體原子交易，杜絕讀寫競爭與局部殘留狀態。
         </p>
       </div>
@@ -801,15 +801,24 @@
         </div>
         <span>internal/storage/storage.go · Atomic Read-Modify-Write Pipeline</span>
       </div>
-      <pre class="code-body"><code><span class="c-comment">// storage.Update 執行的 8 步無損寫入管線</span>
+      <pre class="code-body"><code><span class="c-comment">// storage.Update 的讀-改-寫管線（摘要，省略錯誤處理）</span>
 <span class="c-keyword">func</span> <span class="c-func">Update</span>(root <span class="c-type">string</span>, operation <span class="c-keyword">func</span>(*work.<span class="c-type">State</span>) <span class="c-type">error</span>) <span class="c-type">error</span> {
+    <span class="c-comment">// [0] 正規化 repository 路徑 (canonicalRoot)</span>
+    root, _ = canonicalRoot(root)
+
     <span class="c-comment">// [1] 取得 OS 核心檔案排他鎖 (Crash-Safe，進程終止由核心自動解除)</span>
     <span class="c-keyword">return</span> withLock(directory, <span class="c-keyword">func</span>() <span class="c-type">error</span> {
         <span class="c-comment">// [2] 載入並反序列化當前完整快照</span>
         state, _ := load(directory)
+        <span class="c-comment">//     確認 state 屬於這個 repository</span>
+        <span class="c-keyword">if</span> err := validateRepository(state, root); err != nil { <span class="c-keyword">return</span> err }
 
         <span class="c-comment">// [3] 執行純記憶體領域邏輯 (狀態推進、產生 Evidence、Goal 自動完成)</span>
-        <span class="c-keyword">if</span> err := operation(&state); err != nil { <span class="c-keyword">return</span> err }
+        <span class="c-comment">//     回傳 ErrNoChange 表示無事可寫，直接結束、不落盤</span>
+        <span class="c-keyword">if</span> err := operation(&state); err != nil {
+            <span class="c-keyword">if</span> errors.<span class="c-func">Is</span>(err, ErrNoChange) { <span class="c-keyword">return nil</span> }
+            <span class="c-keyword">return</span> err
+        }
 
         <span class="c-comment">// [4] 全域一致性防護檢查 (拒絕 cycle、重複依賴、無效關聯)</span>
         <span class="c-keyword">if</span> err := state.<span class="c-func">Validate</span>(); err != nil { <span class="c-keyword">return</span> err }
@@ -862,7 +871,7 @@
       <div class="flow-step">
         <div class="flow-step-num">STAGE 02</div>
         <h4>READY</h4>
-        <p>所有前置依賴全部達成 DONE，且無未解 Gate。成為 <code>next</code> 的推薦對象；同一 workspace 同時最多一件 RUNNING 或 VERIFYING。</p>
+        <p>所有前置依賴全部達成 DONE（readiness 只看依賴；未解 Gate 是另一個與狀態正交的阻擋條件，擋的是 start 與完成）。成為 <code>next</code> 的推薦對象；同一 workspace 同時最多一件 RUNNING 或 VERIFYING。</p>
         <span class="flow-badge">動作：forgepilot start</span>
       </div>
 
@@ -877,7 +886,7 @@
         <div class="flow-step-num">STAGE 04</div>
         <h4>VERIFYING</h4>
         <p>已鎖定 Candidate，正在隔離 Worktree 執行專案自身的 <code>make verify</code>。</p>
-        <span class="flow-badge">產出：PASS Evidence</span>
+        <span class="flow-badge">產出：PASS / FAIL / INTERRUPTED Evidence</span>
       </div>
 
       <div class="flow-step">

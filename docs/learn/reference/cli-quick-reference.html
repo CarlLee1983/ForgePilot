@@ -57,7 +57,7 @@
   <tbody>
     <tr><td><code>init</code></td><td>—</td><td>在目前 repository root 建立 <code>.forgepilot/</code>，並往 <code>.gitignore</code> 補上 entry。重複執行不覆寫。</td></tr>
     <tr><td><code>goal import</code></td><td><code>&lt;plan-path&gt;</code></td><td>讀 Goal Plan（JSON），一次建立 Goal 與整張 DAG；節點 ID 即 Work Item ID。任何驗證失敗整份不寫入。重新匯入同一 Goal 只接受新增節點。</td></tr>
-    <tr><td><code>goal cancel</code></td><td><code>&lt;goal-id&gt; --reason</code></td><td>ACTIVE → CANCELLED，不再出現在 <code>next</code>。</td></tr>
+    <tr><td><code>goal cancel</code></td><td><code>&lt;goal-id&gt; --reason</code></td><td>ACTIVE → CANCELLED，其工作不再被 <code>next</code> 推薦；沒有其他 ACTIVE Goal 時 <code>next</code> 會說明它已取消。</td></tr>
     <tr><td><code>next</code></td><td><code>[--json]</code></td><td><strong>純查詢</strong>。只回傳一個建議動作與理由，不 start、不改狀態。<code>--json</code> 的每個欄位永遠存在。</td></tr>
     <tr><td><code>start</code></td><td><code>&lt;work-id&gt;</code></td><td>READY → RUNNING。在寫交易內重查 Goal、依賴、Gate 與佔位。</td></tr>
     <tr><td><code>verify</code></td><td><code>&lt;work-id&gt; [--snapshot]</code></td><td>先回收孤兒；無 flag 時在隔離 worktree 對乾淨 HEAD 跑 <code>make verify</code>，<code>--snapshot</code> 時對 immutable working-tree snapshot 執行，append Evidence。PASS 即 DONE（Goal 要求 Approval 時進 REVIEW）。</td></tr>
@@ -128,7 +128,7 @@
     <tr><td>對不要求 Approval 的 Goal 執行 <code>review</code></td><td>拒絕並說明原因</td></tr>
     <tr><td><code>gate resolve</code> 給了未列出的選項</td><td>拒絕。選項全都不對時的正確動作是 <code>cancel</code> 再重開一個</td></tr>
     <tr><td><code>review reject</code> 沒給 <code>--reason</code></td><td>拒絕</td></tr>
-    <tr><td>state schema 版本不符</td><td>拒讀。較舊者指向一次性匯出工具，較新者明說本 binary 不支援</td></tr>
+    <tr><td>state schema 版本不符</td><td>拒讀。較舊者建議為每個 Goal 寫 Goal Plan、移開 <code>.forgepilot</code> 後重新 <code>init</code> 與 <code>goal import</code>；較新者明說本 binary 不支援</td></tr>
     <tr><td>沒設定 <code>git config user.email</code> 又沒給 <code>--by</code></td><td>拒絕，並指名該用哪個 flag</td></tr>
   </tbody>
 </table>

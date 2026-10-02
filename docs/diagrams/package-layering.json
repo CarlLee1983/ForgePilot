@@ -66,7 +66,7 @@
       "id": "app",
       "type": "backend",
       "label": "internal/app",
-      "sublabel": "verify、goal import 的 orchestration",
+      "sublabel": "verify、import、start 的協調",
       "pos": [
         440,
         240
@@ -192,7 +192,7 @@
       "id": "cli-app",
       "from": "cli",
       "to": "app",
-      "label": "verify／import"
+      "label": "verify／import／start"
     },
     {
       "id": "app-work",
@@ -241,6 +241,18 @@
       "from": "cli",
       "to": "storage",
       "label": "Load／Update"
+    },
+    {
+      "id": "cli-repository",
+      "from": "cli",
+      "to": "repository",
+      "label": "status／review 讀取"
+    },
+    {
+      "id": "app-process",
+      "from": "app",
+      "to": "process",
+      "label": "停止預算"
     }
   ],
   "cards": [
@@ -249,7 +261,7 @@
       "title": "依賴只往下",
       "items": [
         "cli 串接流程，但不自行判斷 transition 是否合法",
-        "work 與 storage 都不知道 cli 的存在；status、review 的讀取路徑 cli 直接用 storage 與 repository"
+        "work 與 storage 都不知道 cli 的存在；status、review、gate 的讀取路徑 cli 直接用 storage、repository 與 work 的型別"
       ]
     },
     {

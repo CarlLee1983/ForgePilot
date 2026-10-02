@@ -50,14 +50,14 @@
   <p class="lede">一份就跑得完的手冊：整條流程、每一個會擋住你的地方、<code>status</code> 每一行的意思，以及為什麼它要這樣擋。所有輸出都是實跑貼上來的。</p>
 </header>
 
-<p>這份文件取代原本的分課設計。你已經知道所有名詞與規則，它們定義在 <a href="../../CONTEXT.md">CONTEXT.md</a>、<a href="../architecture.md">architecture.md</a> 與 <a href="../adr/README.md">ADR</a>，這裡不重講。這裡只回答一件事，<strong>手放在鍵盤上的時候該打什麼、會看到什麼、被擋住時該怎麼辦</strong>。</p>
+<p>這份文件取代原本的分課設計。你已經知道所有名詞與規則，它們定義在 <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md">CONTEXT.md</a>、<a href="../architecture.md">architecture.md</a> 與 <a href="../adr/README.md">ADR</a>，這裡不重講。這裡只回答一件事，<strong>手放在鍵盤上的時候該打什麼、會看到什麼、被擋住時該怎麼辦</strong>。</p>
 
 <div class="callout go">
   <span class="label">怎麼用這份文件</span>
   <p>ForgePilot 不跑迴圈，<strong>迴圈是你（或你的 coding Agent）在跑</strong>：問 <code>next</code>、做它說的事、再問一次。從頭到尾照著打一遍，大約二十分鐘。<a href="#status">讀懂 status</a> 與 <a href="#refusals">它會拒絕你的地方</a> 兩節可以單獨當參考查。最後有六題<a href="#quiz">自我檢查</a>，考的是「這個情況下會發生什麼」而不是定義。</p>
 </div>
 
-<p class="muted">本文所有輸出都來自 macOS 上以真實 binary 對真實 git repository 的實跑，只把 git 身分置換成 <code>you@example.com</code>、repository 路徑換成 <code>/path/to/your/repo</code>。SHA 與 log 檔名是那次實跑的真值，你自己跑會不同。</p>
+<p class="muted">本文所有輸出都來自 macOS 上以真實 binary 對真實 git repository 的實跑，只把 git 身分置換成 <code>you@example.com</code>、repository 路徑換成 <code>/path/to/your/repo</code>。SHA 是那次實跑的真值，你自己跑會不同；log 檔名只完整列出第一個，其餘以 <code>…</code> 省略時間戳與隨機尾碼。</p>
 
 <h2 id="setup">起手式：兩件會先絆倒你的事</h2>
 
@@ -171,16 +171,25 @@ Log: /path/to/your/repo/.forgepilot/logs/VR-001-387a3db9aa84-20261002T111154.971
   <p>FAIL 讓工作留在 RUNNING，<code>next</code> 轉為 <code>REPAIR</code>，<code>status --work</code> 的 <code>Completion</code> 寫著原因：</p>
 <pre class="out"><code>Next: schema
 State: RUNNING
+Goal: billing-sync
+Story: specs/stories/schema
 Action: repair implementation and verify again
 Reason: latest verification failed
 
 schema RUNNING
+Goal: billing-sync ACTIVE
+Approval required: no
+Story: specs/stories/schema
 Verification: EV-001 FAIL at 387a3db9aa84 (snapshot)
 Review: not required
 Blocking gates: none
 <b>Completion: verification failed</b></code></pre>
   <p>讀 <code>Log:</code> 指的檔案、修好（這裡是 <code>rm fail.flag</code>）再 verify。PASS 的那一刻，工作<strong>直接是 DONE</strong>，下游同一次交易解鎖：</p>
-<pre class="out"><code>EV-002 PASS at ebb442a6660aad42a643362bee868e45a792ddd6
+<pre class="out"><code>Candidate: SNAPSHOT
+Revision: ebb442a6660aad42a643362bee868e45a792ddd6
+Base: c06edae6bff8569ec12497e5eff409175fd009dc
+Log: /path/to/your/repo/.forgepilot/logs/VR-002-ebb442a6660a-….log
+EV-002 PASS at ebb442a6660aad42a643362bee868e45a792ddd6
 <b>schema DONE</b>
 <b>sync-job READY</b></code></pre>
   <p class="muted">驗證跑到一半被中斷（Ctrl-C、關終端機、關機）會被誠實記為 INTERRUPTED、工作退回 RUNNING，永遠不會寫成通過或失敗；<code>next</code> 在下一次 <code>verify</code> 回收它之前會給 <code>RECOVER</code>。Evidence 只累積，不覆寫。</p>
@@ -195,9 +204,11 @@ forgepilot verify sync-job
 forgepilot start docs
 forgepilot verify docs</code></pre>
 <pre class="out"><code>sync-job RUNNING
+Log: /path/to/your/repo/.forgepilot/logs/VR-003-c06edae6bff8-….log
 EV-003 PASS at c06edae6bff8569ec12497e5eff409175fd009dc
 <b>sync-job DONE</b>
 docs RUNNING
+Log: /path/to/your/repo/.forgepilot/logs/VR-004-c06edae6bff8-….log
 EV-004 PASS at c06edae6bff8569ec12497e5eff409175fd009dc
 <b>docs DONE</b>
 <b>Goal billing-sync COMPLETED</b></code></pre>
@@ -212,7 +223,9 @@ EV-004 PASS at c06edae6bff8569ec12497e5eff409175fd009dc
 Goal audit imported: 1 nodes
   audit-log READY specs/stories/audit-log
 $ forgepilot start audit-log
+audit-log RUNNING
 $ forgepilot verify audit-log
+Log: /path/to/your/repo/.forgepilot/logs/VR-005-c06edae6bff8-….log
 EV-005 PASS at c06edae6bff8569ec12497e5eff409175fd009dc
 <b>audit-log REVIEW</b>
 $ forgepilot next
@@ -241,11 +254,19 @@ Reviewed by: you@example.com (self-asserted; ForgePilot does not authenticate id
 <pre class="out"><code>forgepilot: review approve audit-log: work item "audit-log" has a stale verified candidate: its PASS EV-005 no longer names the current candidate; run forgepilot verify audit-log
 
 audit-log REVIEW
-Verification: EV-005 PASS at 92701d4f62f0 (stale)
+Goal: audit ACTIVE
+Approval required: yes
+Story: specs/stories/audit-log
+Verification: EV-005 PASS at c06edae6bff8 (stale)
+Review: not reviewed
+Blocking gates: none
 Completion: verification stale
+Cannot advance: waiting for review approve
 
 Next: audit-log
 State: REVIEW
+Goal: audit
+Story: specs/stories/audit-log
 Action: forgepilot verify audit-log
 Reason: verified candidate is stale</code></pre>
   <p>approve 被拒、不留紀錄，<code>next</code> 直接給出該跑的指令。你審的是新的 HEAD，通過驗證的是舊的那個 commit，<strong>重新 verify 一次</strong>讓兩者對齊。DONE 的工作則不判 stale：它已經完成，後續 commit 不會讓它重開。</p>
@@ -256,7 +277,7 @@ Reason: verified candidate is stale</code></pre>
   <h3>放棄整個 Goal</h3>
 <pre><code>forgepilot goal cancel billing-sync --reason "需求取消"</code></pre>
 <pre class="out"><code>Goal billing-sync CANCELLED</code></pre>
-  <p>被取消的 Goal 不再出現在 <code>next</code>，底下未完成的工作不能 start，<code>status</code> 說明 <code>goal billing-sync is CANCELLED</code>，也不能再匯入。進行中的驗證跑完仍會記錄 Evidence。</p>
+  <p>被取消的 Goal 的工作不再被 <code>next</code> 推薦；沒有其他 ACTIVE Goal 時，<code>next</code> 回 <code>Goal billing-sync is cancelled (需求取消). No actionable work.</code>。底下未完成的工作不能 start，<code>status</code> 說明 <code>goal billing-sync is CANCELLED</code>，也不能再匯入。進行中的驗證跑完仍會記錄 Evidence。</p>
 </div>
 
 <h2 id="status">讀懂 status 的每一行</h2>
@@ -292,7 +313,7 @@ Next: none</code></pre>
 <tr><td><code>PENDING</code> / <code>READY</code></td><td>讀取時依「依賴是否全部 DONE」算出來的，不保存。READY 不表示可以忽略該工作自己的 Gate。</td></tr>
 <tr><td><code>not verified</code> / <code>not reviewed</code></td><td>刻意講出來的缺席，不是留白。沉默的缺席會被讀成沒問題的結果。</td></tr>
 <tr><td><code>EV-004 PASS at c06edae6bff8</code></td><td>最新一筆驗證結果與它綁定的 revision；snapshot Candidate 顯示為 <code>PASS snapshot …</code>。Evidence 只累積不覆寫，編號連續。</td></tr>
-<tr><td><code>(stale)</code></td><td>REVIEW 工作的這筆 PASS 驗的不是現在的 Candidate。它不觸發任何 transition，只是誠實標示，並讓 <code>next</code> 建議重新驗證。</td></tr>
+<tr><td><code>(stale)</code></td><td><code>status --work</code> 的寫法；完整 <code>status</code> 會多說原因：<code>(stale; HEAD is now …)</code> 或 <code>(stale; workspace no longer matches verified snapshot)</code>。REVIEW 工作的這筆 PASS 驗的不是現在的 Candidate。它不觸發任何 transition，只是誠實標示，並讓 <code>next</code> 建議重新驗證。</td></tr>
 <tr><td><code>Cannot advance: …</code></td><td>這件工作為什麼不能往前，是依賴、Gate、等待 approval、佔位、驗證進行中，還是 Goal 已結束。</td></tr>
 <tr><td><code>Gates: N open</code></td><td>擋住這件工作的 Gate 數。底下逐條列出所有開過的 Gate，含已解決與已取消的。</td></tr>
 <tr><td><code>(self-asserted)</code></td><td>身分來自 <code>git config user.email</code> 或 <code>--by</code>，沒有任何認證。這幾個字是刻意印出來的，免得誰把它當成經過驗證的簽章。</td></tr>
@@ -426,7 +447,7 @@ Next: none</code></pre>
 
 <footer>
   <p>速查表：<a href="reference/cli-quick-reference.html">ForgePilot CLI 快速參考</a>（設計成印得出來的一頁）</p>
-  <p>延伸：<a href="../diagrams/work-item-lifecycle.html">狀態機圖</a> · <a href="../../CONTEXT.md">詞彙</a> · <a href="../adr/README.md">ADR</a> · <a href="RESOURCES.md">來源清單</a></p>
+  <p>延伸：<a href="../diagrams/work-item-lifecycle.html">狀態機圖</a> · <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md">詞彙</a> · <a href="../adr/README.md">ADR</a> · <a href="RESOURCES.md">來源清單</a></p>
   <p>文件與實際行為不符時<strong>以程式碼為準</strong>。指令的真實行為在 <code>internal/cli/*.go</code>，每一條流程都有以獨立 process 跑真實 Git repository 的整合測試。</p>
 </footer>
 

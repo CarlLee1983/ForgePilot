@@ -332,11 +332,14 @@
 <pre><code>forgepilot verify schema
   ├─ 在隔離的 detached worktree，對確切的 Candidate 跑 make verify
   ├─ 記錄 Evidence                ← 一定會發生：PASS / FAIL / INTERRUPTED
-  └─ 結果是 PASS，且沒有未解除的 Gate、Goal 是 ACTIVE 嗎？
-       ├─ Goal 不要求 Approval ─▶ DONE，下游立刻 READY（同一次交易）
-       │                           最後一件 DONE ─▶ Goal 自動 COMPLETED
-       ├─ Goal 要求 Approval  ─▶ REVIEW，等人 review approve 才 DONE
-       └─ FAIL / INTERRUPTED  ─▶ 退回 RUNNING，next 給 REPAIR / RECOVER</code></pre>
+  └─ 依結果與 Goal 決定狀態
+       ├─ PASS，Goal 不要求 Approval、無未解 Gate ─▶ DONE，下游立刻 READY（同一次交易）
+       │                                              最後一件 DONE ─▶ Goal 自動 COMPLETED
+       ├─ PASS，Goal 要求 Approval ─▶ REVIEW，等人 review approve 才 DONE（approve 再檢查 Gate）
+       ├─ PASS，但 Goal 非 ACTIVE，或不要求 Approval 而有未解 Gate ─▶ 留在 RUNNING
+       ├─ FAIL        ─▶ 退回 RUNNING，next 給 REPAIR
+       └─ INTERRUPTED ─▶ 退回 RUNNING，next 給 RESUME
+          （回收前還卡在 VERIFYING 的孤兒執行，next 給 RECOVER）</code></pre>
 
 <p class="muted">沒有完成指令，所以 <code>status</code> 是使用者唯一能得知「為什麼還沒完成」的地方：它對每件未完成工作都說明為何不能前進（依賴、Gate、等待 approval、佔位、Goal 已結束），<strong>不能對未完成的原因沉默</strong>——這條被測試釘住。</p>
 
@@ -444,7 +447,7 @@
 
 <footer>
   <p>Go 1.25.5，只用標準函式庫。初始支援平台是 macOS 的本機檔案系統——程序鎖使用 OS <code>flock</code>，其他平台尚未驗證行為相同，因此不宣稱支援。</p>
-  <p>細節見 <a href="architecture.md">architecture.md</a>、<a href="../CONTEXT.md">CONTEXT.md</a>、<a href="adr/README.md">ADR</a> 與 <a href="diagrams/README.md">四張架構圖</a>。</p>
+  <p>細節見 <a href="architecture.md">architecture.md</a>、<a href="https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md">CONTEXT.md</a>、<a href="adr/README.md">ADR</a> 與 <a href="diagrams/README.md">四張架構圖</a>。</p>
 </footer>
 
 </div>

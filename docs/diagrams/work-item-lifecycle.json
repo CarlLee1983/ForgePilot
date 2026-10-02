@@ -29,7 +29,7 @@
           "verifying",
           "review"
         ],
-        "note": "FAIL、INTERRUPTED 與 REJECTED 都回到 RUNNING；要求 Approval 的 Goal，REVIEW 在 Candidate stale 時可再次 verify。"
+        "note": "FAIL、INTERRUPTED 與 REJECTED 都回到 RUNNING；REVIEW 可隨時再次 verify（Candidate stale 時 next 會建議這麼做）；PASS 時若有未解 Gate 或 Goal 非 ACTIVE，工作留在 RUNNING。"
       },
       {
         "id": "gate-dimension",
@@ -168,6 +168,12 @@
       "variant": "security"
     },
     {
+      "id": "review-verifying",
+      "from": "review",
+      "to": "verifying",
+      "label": "再次 verify"
+    },
+    {
       "id": "gate-blocks-approve",
       "from": "gate",
       "to": "review",
@@ -189,7 +195,8 @@
       "title": "退回與重驗",
       "items": [
         "FAIL 與 INTERRUPTED 都退回 RUNNING",
-        "INTERRUPTED 是沒有結果，不是失敗"
+        "INTERRUPTED 是沒有結果，不是失敗",
+        "PASS 當下有未解 Gate 或 Goal 非 ACTIVE 時留在 RUNNING，由之後的 verify 完成"
       ]
     },
     {
