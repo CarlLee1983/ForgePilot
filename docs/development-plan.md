@@ -60,7 +60,8 @@ JSON，以標準函式庫解析，拒絕未知欄位：
 - `goal.id`、`goal.title` 必填，至少一個節點；`description` 選填；`require_approval` 選填，預設 `false`。
 - 節點順序是多個 READY 時推薦順序的 tie-break。
 - 依賴只能指向同一 Goal 的節點。
-- 匯入拒絕：有環、指向不存在節點、自我依賴、重複依賴、重複節點 ID，以及不存在、路徑穿越或 symlink 逃逸的 Story 路徑。錯誤訊息指出節點與欄位。
+- `story` 是 repository-relative 路徑，必須存在且位於 `specs/stories/` 底下（可為檔案或目錄；`specs/stories/` 本身必須存在）。
+- 匯入拒絕：有環、指向不存在節點、自我依賴、重複依賴、重複節點 ID，以及不存在、不在 `specs/stories/` 底下、路徑穿越或 symlink 逃逸的 Story 路徑。錯誤訊息指出節點與欄位。
 - 重新匯入同一 Goal：Goal 的 `id`、`title`、`description`、`require_approval` 必須與既有相同；計畫必須列出每個既有節點（漏列即拒絕，計畫永遠是整張 DAG），其 `story` 必須逐字相同、`depends_on` 以集合比較相同（重排不算改動，重複仍拒絕），且不重新檢查既有節點的 Story 是否存在，避免已完成而後來被搬走的 Story 凍結整個 Goal；只接受新節點，新節點可依賴新舊節點（含已 DONE 者）；完全相同為無變化的成功；終態 Goal（COMPLETED、CANCELLED）拒絕；整份原子寫入。
 
 ### 移除

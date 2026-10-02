@@ -1063,8 +1063,8 @@
     const fsBtn = document.getElementById('fsToggleBtn');
 
     function updateHud() {
-      const pad = (n) => String(n + 1).padStart(2, '0');
-      hudCounter.textContent = `${pad(currentSlide)} / ${pad(slides.length)}`;
+      const pad = (n) => String(n).padStart(2, '0');
+      hudCounter.textContent = `${pad(currentSlide + 1)} / ${pad(slides.length)}`;
       
       // 更新導覽列高亮
       const navLinks = document.querySelectorAll('.deck-nav a');

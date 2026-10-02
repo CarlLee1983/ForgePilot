@@ -66,6 +66,6 @@ forgepilot goal import <plan-path>
 }
 ```
 
-節點 `id` 就是 Work Item ID，`start`、`verify` 都用它；`story` 必須是 repository 內存在的目錄。計畫有任何錯（環、未知或重複依賴、不存在的 Story 路徑、未知欄位）整份不寫入，錯誤訊息指出節點與欄位。補單時改計畫檔再匯入同一個 Goal：只能新增節點，既有節點必須全數列出且內容不變。
+節點 `id` 就是 Work Item ID，`start`、`verify` 都用它；`story` 必須是 repository 內 `specs/stories/` 底下存在的路徑。計畫有任何錯（環、未知或重複依賴、不存在的 Story 路徑、未知欄位）整份不寫入，錯誤訊息指出節點與欄位。補單時改計畫檔再匯入同一個 Goal：只能新增節點，既有節點必須全數列出且內容不變。
 
 不確定現況或不知道某件工作為何不能前進時，執行 `forgepilot status`（`--goal`、`--work`、`--json`）：每件未完成工作都會說明阻擋的原因。
