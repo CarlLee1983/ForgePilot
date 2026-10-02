@@ -953,140 +953,101 @@ func TestVerifyRunsOutsideTheMainWorktree(t *testing.T) {
 	}
 }
 
-func TestCommitRuntimeDiscoveryIgnoresMainWorktreeOnlyDeclaration(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "start", "WI-001")
-	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forgepilot/\n.node-version\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	writeVerify(t, root, "verify:\n\t@test \"$$(node --version)\" = v22.17.1\n")
-	// This declaration exists only in the main worktree and is ignored by Git;
-	// the COMMIT candidate's detached checkout must not discover it.
-	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("99\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join(t.TempDir(), "bin")
-	writeExecutable(t, bin, "node", "#!/bin/sh\necho v22.17.1\n")
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
-	t.Setenv("NVM_DIR", t.TempDir())
+// 呼叫者環境就是 verify 的環境：Candidate 帶著無法滿足的 runtime 宣告檔
+// （.node-version 99、.go-version 99.0.0）也不會被解析、不會被拒絕，
+// Makefile 看得到呼叫者設定的環境變數與 PATH 上的工具，Evidence 不記 runtime。
+func TestVerifyUsesTheCallersEnvironmentAndIgnoresRuntimeDeclarations(t *testing.T) {
+	for _, snapshot := range []bool{false, true} {
+		name := "commit"
+		if snapshot {
+			name = "snapshot"
+		}
+		t.Run(name, func(t *testing.T) {
+			root, binary := fixture(t)
+			mustRun(t, binary, root, "init")
+			mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
+			mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+			mustRun(t, binary, root, "start", "WI-001")
+			writeVerify(t, root, passingVerify) // baseline commit: a snapshot needs a HEAD to be based on
+			for file, contents := range map[string]string{".node-version": "99\n", ".go-version": "99.0.0\n"} {
+				if err := os.WriteFile(filepath.Join(root, file), []byte(contents), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			recipe := "verify:\n\t@test \"$$FP_CALLER_MARK\" = from-caller\n\t@test \"$$(fp-caller-tool)\" = caller-tool\n"
+			if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte(recipe), 0644); err != nil {
+				t.Fatal(err)
+			}
+			arguments := []string{"verify", "WI-001"}
+			if snapshot {
+				arguments = append(arguments, "--snapshot")
+			} else {
+				commitAll(t, root, "declare unsatisfiable runtimes")
+			}
+			bin := filepath.Join(t.TempDir(), "bin")
+			writeExecutable(t, bin, "fp-caller-tool", "#!/bin/sh\necho caller-tool\n")
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("FP_CALLER_MARK", "from-caller")
 
-	output, err := command(binary, root, "verify", "WI-001")
-	if err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	if strings.Contains(output, "Runtime:") {
-		t.Fatalf("commit verification discovered main-only runtime declaration: %q", output)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Evidence) != 1 || state.Evidence[0].Runtime != nil {
-		t.Fatalf("commit evidence = %#v, want legacy no-declaration runtime", state.Evidence)
+			output, err := command(binary, root, arguments...)
+			if err != nil || !strings.Contains(output, "PASS") {
+				t.Fatalf("verify = %q, %v", output, err)
+			}
+			if strings.Contains(output, "Runtime:") {
+				t.Fatalf("verify reported a runtime: %q", output)
+			}
+			state, err := storage.Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(state.Evidence) != 1 || state.Evidence[0].Result != work.Pass || state.Evidence[0].Runtime != nil {
+				t.Fatalf("evidence = %#v, want one PASS without runtime metadata", state.Evidence)
+			}
+		})
 	}
 }
 
-func TestVerifyResolvesCandidateRuntimeAndRecordsActualVersion(t *testing.T) {
+// 同一 Goal 兩件 VERIFIED 後 stale 的工作，驗證第三件只為第三件留 Evidence：
+// 另外兩件的最新 Evidence 與狀態都不動。
+func TestVerifyRecordsEvidenceOnlyForTheWorkItemItWasAskedAbout(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "start", "WI-001")
-
-	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("24\n"), 0644); err != nil {
-		t.Fatal(err)
+	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal")
+	for _, story := range []string{"a", "b", "c"} {
+		mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/"+story+".md")
 	}
-	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@test \"$$(node --version)\" = v24.8.0\n"), 0644); err != nil {
-		t.Fatal(err)
+	writeVerify(t, root, passingVerify)
+	for _, id := range []string{"WI-001", "WI-002"} {
+		mustRun(t, binary, root, "start", id)
+		mustRun(t, binary, root, "verify", id)
 	}
-	commitAll(t, root, "declare runtime contract")
-	wrong := filepath.Join(t.TempDir(), "bin")
-	writeExecutable(t, wrong, "node", "#!/bin/sh\necho v22.17.1\n")
-	nvm := t.TempDir()
-	writeExecutable(t, filepath.Join(nvm, "versions", "node", "v24.8.0", "bin"), "node", "#!/bin/sh\necho v24.8.0\n")
-	t.Setenv("PATH", wrong+string(os.PathListSeparator)+"/usr/bin:/bin")
-	t.Setenv("NVM_DIR", nvm)
-
-	output, err := command(binary, root, "verify", "WI-001")
-	if err != nil || !strings.Contains(output, "Runtime: node 24.8.0\n") || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	state, err := storage.Load(root)
+	mustRun(t, binary, root, "start", "WI-003")
+	before, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Evidence) != 1 || state.Evidence[0].Runtime["node"] != "24.8.0" {
-		t.Fatalf("evidence = %#v, want resolved Node runtime", state.Evidence)
+	if len(before.Evidence) != 2 {
+		t.Fatalf("evidence before = %#v, want two seeded PASS", before.Evidence)
 	}
-}
-
-func TestRuntimePreconditionFailureCreatesNoFailureEvidence(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "start", "WI-001")
-	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("99\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "Makefile"), []byte("verify:\n\t@node --version\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	commitAll(t, root, "require unavailable runtime")
-	bin := filepath.Join(t.TempDir(), "bin")
-	writeExecutable(t, bin, "node", "#!/bin/sh\necho v22.17.1\n")
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
-	t.Setenv("NVM_DIR", t.TempDir())
+	commitAll(t, root, "move the candidate")
 
-	output, err := command(binary, root, "verify", "WI-001")
-	if err == nil || !strings.Contains(output, "verification environment unavailable") || !strings.Contains(output, "Node 99 required") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	state, err := storage.Load(root)
+	mustRun(t, binary, root, "verify", "WI-003")
+	after, err := storage.Load(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Evidence) != 0 || state.WorkItems[0].Status != work.Running || state.WorkItems[0].CurrentRun != nil {
-		t.Fatalf("runtime refusal changed state: %#v", state)
+	if len(after.Evidence) != 3 || after.Evidence[2].WorkItemID != "WI-003" {
+		t.Fatalf("evidence after = %#v, want exactly one new record, for WI-003", after.Evidence)
 	}
-	if entries, err := os.ReadDir(filepath.Join(root, ".forgepilot", "worktrees")); err == nil && len(entries) != 0 {
-		t.Fatalf("runtime refusal left worktrees: %v", entries)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".forgepilot", "logs")); !os.IsNotExist(err) {
-		t.Fatalf("runtime refusal created logs before a run: %v", err)
-	}
-}
-
-func TestSnapshotRuntimeIsResolvedInsideItsDetachedCheckout(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "start", "WI-001")
-	writeVerify(t, root, "verify:\n\t@test \"$$(node --version)\" = v24.8.0\n")
-	if err := os.WriteFile(filepath.Join(root, ".node-version"), []byte("24\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	wrong := filepath.Join(t.TempDir(), "bin")
-	writeExecutable(t, wrong, "node", "#!/bin/sh\necho v22.17.1\n")
-	nvm := t.TempDir()
-	writeExecutable(t, filepath.Join(nvm, "versions", "node", "v24.8.0", "bin"), "node", "#!/bin/sh\necho v24.8.0\n")
-	t.Setenv("PATH", wrong+string(os.PathListSeparator)+"/usr/bin:/bin")
-	t.Setenv("NVM_DIR", nvm)
-
-	output, err := command(binary, root, "verify", "WI-001", "--snapshot")
-	if err != nil || !strings.Contains(output, "Candidate: SNAPSHOT") || !strings.Contains(output, "Runtime: node 24.8.0") || !strings.Contains(output, "PASS") {
-		t.Fatalf("snapshot verify = %q, %v", output, err)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Evidence) != 1 || state.Evidence[0].CandidateKind != work.SnapshotCandidate || state.Evidence[0].Runtime["node"] != "24.8.0" {
-		t.Fatalf("snapshot evidence = %#v", state.Evidence)
+	for _, id := range []string{"WI-001", "WI-002"} {
+		latest, ok := after.LatestVerification(id)
+		original, _ := before.LatestVerification(id)
+		if !ok || latest.ID != original.ID || latest.Revision != original.Revision {
+			t.Fatalf("%s latest verification = %#v, want it untouched (%#v)", id, latest, original)
+		}
 	}
 }
 

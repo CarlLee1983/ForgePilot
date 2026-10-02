@@ -119,11 +119,6 @@ func cancelledDuring(t *testing.T, fixture verifyFixture, marker string) (Verify
 type stageFixture struct {
 	// makefile is the checkout's canonical check.
 	makefile string
-	// declaration, when set, is a .tool-versions the runtime preflight must
-	// satisfy — which is what makes that stage run at all.
-	declaration string
-	// shim, when set, is a fake runtime executable put first on PATH.
-	shim bool
 	// isStage recognises the managed command the stage under test starts, so the
 	// confirmation fails for that one and for nothing else. Two subtests that
 	// share a fixture and differ only in name prove nothing, which is how this
@@ -166,26 +161,6 @@ func failStage(t *testing.T, stage stageFixture) func() {
 	return restore
 }
 
-// installShim puts a fake runtime first on PATH. It answers --version by
-// announcing that the probe has started and then blocking, which is what lets a
-// cancellation land inside the runtime preflight specifically.
-func installShim(t *testing.T, marker string) {
-	t.Helper()
-	directory := t.TempDir()
-	writeFixtureFile(t, filepath.Join(directory, "node"),
-		fmt.Sprintf("#!/bin/sh\n: > %s\nsleep 300\n", marker))
-	if err := os.Chmod(filepath.Join(directory, "node"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	// The managers are pointed at empty directories so the only candidate left
-	// is the one on PATH: this test is about a stage, not about whatever node
-	// installations this machine happens to have.
-	for _, variable := range []string{"NVM_DIR", "MISE_DATA_DIR", "ASDF_DATA_DIR"} {
-		t.Setenv(variable, t.TempDir())
-	}
-	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
 func TestACancellationDoesNotSwallowAnUnconfirmedCleanup(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
@@ -205,37 +180,11 @@ func TestACancellationDoesNotSwallowAnUnconfirmedCleanup(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:     "the runtime preflight",
-			wantKind: UnresolvedRuntimePreflight,
-			stage: func(marker string) stageFixture {
-				return stageFixture{
-					// Nothing blocks in the makefile: the probe the declaration forces is
-					// the only thing that does, so a cancellation can only land there.
-					makefile: "verify:\n\t@true\n",
-					// A version no real runtime can satisfy, so the probe reaches the
-					// shim rather than matching something already installed.
-					declaration: "node 0.0.0-forgepilot-test\n",
-					shim:        true,
-					isStage: func(argv []string) bool {
-						return len(argv) > 0 && filepath.Base(argv[0]) == "node"
-					},
-				}
-			},
-		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			marker := filepath.Join(t.TempDir(), "stage-started")
 			stage := testCase.stage(marker)
-			if stage.shim {
-				installShim(t, marker)
-			}
 			fixture := newVerifyFixture(t, stage.makefile)
-			if stage.declaration != "" {
-				writeFixtureFile(t, filepath.Join(fixture.root, ".tool-versions"), stage.declaration)
-				runGit(t, fixture.root, "add", "-A")
-				runGit(t, fixture.root, "commit", "-m", "declare a runtime")
-			}
 			restore := failStage(t, stage)
 			defer restore()
 

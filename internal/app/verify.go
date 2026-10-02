@@ -18,9 +18,8 @@ import (
 )
 
 // Refusal marks a verification that was declined before any run began: an open
-// Gate, a stopped Goal, a dirty worktree, an unsatisfiable Runtime Contract, a
-// revision with no canonical check. No Evidence exists for it and none should:
-// a refusal is not an engineering failure, and anything that turned one into a
+// Gate, a stopped Goal, a dirty worktree, a revision with no canonical check.
+// No Evidence exists for it and none should: a refusal is not an engineering failure, and anything that turned one into a
 // FAIL would be inventing a result the repository never produced.
 type Refusal struct{ Err error }
 
@@ -62,8 +61,6 @@ type VerifyOptions struct {
 	Now      func() time.Time
 }
 
-type FanoutSkip = work.FanoutSkip
-
 func (options VerifyOptions) now() time.Time {
 	if options.Now != nil {
 		return options.Now().UTC()
@@ -77,16 +74,12 @@ func (options VerifyOptions) now() time.Time {
 // abandoned run this call closed out on the way in.
 type VerifyResult struct {
 	Reclaimed         *work.Evidence
-	ReclaimedSet      []work.Evidence
 	Evidence          work.Evidence
-	EvidenceSet       []work.Evidence
 	HasEvidence       bool
 	VerificationRunID string
-	Skipped           []FanoutSkip
 	Status            work.Status
 	Candidate         work.Candidate
 	LogPath           string
-	RuntimeSummary    string
 	// RefreshWarning records that Evidence was preserved but dependency
 	// readiness could not be refreshed from repository facts afterwards.
 	RefreshWarning error
@@ -123,7 +116,6 @@ type Unresolved struct {
 // The stages that can leave a group behind. They are named rather than inferred
 // so a recovery record says which external process was running.
 const (
-	UnresolvedRuntimePreflight   = "RUNTIME_PREFLIGHT"
 	UnresolvedCanonicalPreflight = "CANONICAL_PREFLIGHT"
 	UnresolvedCanonicalCheck     = "CANONICAL_CHECK"
 	UnresolvedGit                = "GIT"
@@ -224,9 +216,6 @@ func runVerification(ctx context.Context, root, id string, output io.Writer, opt
 		return result, err
 	}
 	result.Reclaimed = reclaimed
-	if reclaimed != nil {
-		result.ReclaimedSet = []work.Evidence{*reclaimed}
-	}
 	// Reclaiming runs external Git. A removal that could not confirm what it
 	// stopped is the same refusal here as anywhere else below: nothing new may
 	// start, and the fact travels to the caller rather than into a warning.
@@ -303,47 +292,12 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		// and it is also what a recovery record points at.
 		return result, result.gitStage(ctx, UnresolvedGit, worktree, "while making its checkout", err, false)
 	}
-	runtime, err := repository.ResolveRuntimeInContext(ctx, worktree)
-	if err != nil {
-		// The unconfirmed group is asked about before the cancellation is. Both
-		// can be true at once, and the ordering used to be the other way round, so
-		// a stop that coincided with a group nobody could confirm empty reported
-		// only the stop — and the group vanished from the record.
+	if err := repository.EnsureCanonicalCheckInContext(ctx, worktree); err != nil {
 		if unsettledPart(err) == nil {
-			// Nothing of ours is still running in there, so the checkout can go —
-			// unless removing it turns out to leave something behind, which is a
-			// fact of its own and not a tidy-up detail to drop on the floor.
-			// Only the unconfirmed part is carried back. An ordinary removal
-			// failure is deliberately dropped here: recording it would give the
-			// caller a pending with no group id, and ADR-0022 has no way to resolve
-			// one of those short of a person editing the record.
-			result.note(UnresolvedGit, worktree, unsettledPart(repository.RemoveWorktree(cleanup.context(), root, worktree)))
-		}
-		// A cancelled resolution is not the repository failing to declare a usable
-		// runtime, so it must not be reported as a refusal: that would record a
-		// condition outside the code where there is only a stop signal. Nor is a
-		// group nobody could confirm empty, which is why that is asked first.
-		return result, result.gitStage(ctx, UnresolvedRuntimePreflight, worktree, "while resolving its runtime", err, true)
-	}
-	defer func() {
-		// Held back for the same reason the worktree below is: the shim directory
-		// is first on the PATH of the check that was running, so removing it while
-		// that process may still be alive pulls the runtime out from under it.
-		// Deferred functions run last-in-first-out, so without this the worktree
-		// guard would decline to delete the checkout and this would then delete
-		// the runtime inside it.
-		if result.Cleanup != nil {
-			fmt.Fprintf(output, "warning: the resolved runtime environment was left in place: its processes could not be confirmed stopped\n")
-			return
-		}
-		if closeErr := runtime.Close(); closeErr != nil {
-			fmt.Fprintf(output, "warning: could not remove resolved runtime environment: %v\n", closeErr)
-		}
-	}()
-	if err := repository.EnsureCanonicalCheckInContext(ctx, worktree, runtime); err != nil {
-		if unsettledPart(err) == nil {
-			// Only the unconfirmed part, for the reason given above the same call
-			// in the runtime-preflight branch.
+			// Only the unconfirmed part: an ordinary removal failure is dropped
+			// here, because recording it would give the caller a pending with no
+			// group id, and ADR-0022 has no way to resolve one of those short of
+			// a person editing the record.
 			result.note(UnresolvedGit, worktree, unsettledPart(repository.RemoveWorktree(cleanup.context(), root, worktree)))
 		}
 		return result, result.gitStage(ctx, UnresolvedCanonicalPreflight, worktree, "during its preflight", err, true)
@@ -391,14 +345,8 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		_ = log.Close()
 	}()
 	result.LogPath = logFile
-	result.RuntimeSummary = runtime.Summary()
 	if options.Snapshot {
 		if _, err := fmt.Fprintf(output, "Candidate: SNAPSHOT\nRevision: %s\nBase: %s\n", candidate.Revision, candidate.BaseRevision); err != nil {
-			return result, err
-		}
-	}
-	if summary := runtime.Summary(); summary != "" {
-		if _, err := fmt.Fprintf(output, "Runtime: %s\n", summary); err != nil {
 			return result, err
 		}
 	}
@@ -406,8 +354,7 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		return result, err
 	}
 
-	plan, err := beginRun(id, root, candidate, worktree, logFile, runtime.Versions(), verificationRunID, startedAt)
-	if err != nil {
+	if err := beginRun(id, root, candidate, worktree, logFile, verificationRunID, startedAt); err != nil {
 		return result, err
 	}
 	keepLog = true
@@ -418,7 +365,7 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 	if err != nil {
 		return result, err
 	}
-	exitCode, cleanupErr, runErr := runCanonicalCheck(ctx, worktree, runtime, log, options.Timeout)
+	exitCode, cleanupErr, runErr := runCanonicalCheck(ctx, worktree, log, options.Timeout)
 	result.note(UnresolvedCanonicalCheck, worktree, cleanupErr)
 	// A state that no longer loads is the loudest version of the same signal:
 	// it parsed on the way in, so whatever happened to it happened here.
@@ -443,7 +390,6 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 			return result, reclaimErr
 		}
 		result.Interrupted, result.Evidence, result.HasEvidence = true, interrupted, true
-		result.EvidenceSet = []work.Evidence{interrupted}
 		result.Status = statusOf(root, id)
 		if _, err := fmt.Fprintf(output, "%s %s at %s\n%s %s\n", interrupted.ID, interrupted.Result, interrupted.Revision, id, result.Status); err != nil {
 			return result, err
@@ -455,8 +401,6 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 	}
 
 	var evidence work.Evidence
-	var evidenceSet []work.Evidence
-	var skipped []work.FanoutSkip
 	var status work.Status
 	var factsErr error
 	updateErr := storage.Update(root, func(state *work.State) error {
@@ -466,22 +410,10 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		var recordErr error
 		repositoryState, err := CandidateFacts(ctx, state, root)
 		factsErr = err
-		if exitCode == 0 {
-			if err != nil {
-				evidenceSet, skipped, recordErr = state.RecordVerificationFanoutPass(plan, repository.CanonicalCommand, nil, options.now())
-			} else {
-				evidenceSet, skipped, recordErr = state.RecordVerificationFanoutPass(plan, repository.CanonicalCommand, &repositoryState, options.now())
-			}
-			if recordErr == nil {
-				evidence = evidenceSet[0]
-			}
-		} else if err != nil {
+		if err != nil {
 			evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, options.now())
 		} else {
 			evidence, recordErr = state.RecordVerificationWithRepository(id, candidate.Revision, repository.CanonicalCommand, exitCode, repositoryState, options.now())
-		}
-		if exitCode != 0 && recordErr == nil {
-			evidenceSet = []work.Evidence{evidence}
 		}
 		if recordErr == nil {
 			status = state.WorkItemStatus(id)
@@ -509,7 +441,7 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		// so the checkout is kept rather than tidied away.
 		return result, updateErr
 	}
-	result.Evidence, result.EvidenceSet, result.Skipped, result.HasEvidence, result.Status = evidence, evidenceSet, skipped, true, status
+	result.Evidence, result.HasEvidence, result.Status = evidence, true, status
 	// Failing to refresh dependency readiness is a warning: the Evidence stands
 	// and a rerun repairs it. Failing to confirm a process group started while
 	// reading those facts is not — the next step must not begin, whatever the
@@ -519,16 +451,6 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 	// where it lives now. See docs/adr/0012-verification-log-outside-state.md.
 	if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\n", evidence.ID, evidence.Result, evidence.Revision, id, status); err != nil {
 		return result, err
-	}
-	for _, peer := range evidenceSet[1:] {
-		if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s (shared %s)\n", peer.ID, peer.Result, peer.Revision, peer.WorkItemID, statusOf(root, peer.WorkItemID), verificationRunID); err != nil {
-			return result, err
-		}
-	}
-	for _, skip := range skipped {
-		if _, err = fmt.Fprintf(output, "%s skipped from %s: %s\n", skip.WorkItemID, verificationRunID, skip.Reason); err != nil {
-			return result, err
-		}
 	}
 	if factsErr != nil {
 		_, err = fmt.Fprintf(output, "warning: dependency readiness was not refreshed: %v; Evidence was preserved; repair repository access and rerun %s\n", factsErr, VerificationRetryCommand(id, candidate))
@@ -640,7 +562,7 @@ func statusOf(root, id string) work.Status {
 // than only its outermost process, and the group is settled on every path — a
 // check that exits 0 having forked a watcher has not finished owning the
 // worktree. See docs/adr/0020-worker-ownership-is-fail-closed.md.
-func runCanonicalCheck(ctx context.Context, directory string, runtime repository.RuntimeEnvironment, log io.Writer, timeout time.Duration) (int, error, error) {
+func runCanonicalCheck(ctx context.Context, directory string, log io.Writer, timeout time.Duration) (int, error, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -650,7 +572,7 @@ func runCanonicalCheck(ctx context.Context, directory string, runtime repository
 		checkCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	run, err := repository.RunCanonicalCheckInContext(checkCtx, directory, runtime, log)
+	run, err := repository.RunCanonicalCheckInContext(checkCtx, directory, log)
 	if run.Completed {
 		// "It reached its own end" is not the same as "it produced a result": a
 		// wait that failed for its own reasons — ECHILD, an I/O failure — leaves
@@ -734,14 +656,10 @@ func reclaimRun(id, root string, now time.Time, expectedVerdict string) (work.Ev
 // beginRun marks a new Verification Run in flight. Any abandoned run has already
 // been closed out by reclaimOrphan, so a Work Item is never left with neither an
 // outcome for its old run nor a record of its new one.
-func beginRun(id, root string, candidate work.Candidate, worktree, logFile string, runtime map[string]string, verificationRunID string, startedAt time.Time) (work.FanoutPlan, error) {
-	var plan work.FanoutPlan
-	err := storage.Update(root, func(state *work.State) error {
-		var err error
-		plan, err = state.BeginVerificationFanout(id, candidate, worktree, logFile, runtime, verificationRunID, startedAt)
-		return err
+func beginRun(id, root string, candidate work.Candidate, worktree, logFile, verificationRunID string, startedAt time.Time) error {
+	return storage.Update(root, func(state *work.State) error {
+		return state.BeginCandidateVerificationWithRunID(id, candidate, worktree, logFile, verificationRunID, startedAt)
 	})
-	return plan, err
 }
 
 // WorktreePath names the isolated checkout one Verification Run uses.
@@ -786,9 +704,8 @@ func (result *VerifyResult) gitStage(ctx context.Context, kind, location, during
 	// Classified from this stage's own error, never from the accumulated
 	// result.Cleanup. A tidy-up that ran between the failure and here can have
 	// added an unconfirmed group of its own, and reading that as "this stage was
-	// unconfirmed" turned an honest refusal — an unsatisfiable Runtime Contract,
-	// a dirty worktree — into a bare operational error. Whether the caller may
-	// continue is a separate question it asks result.Cleanup itself.
+	// unconfirmed" turned an honest refusal — a dirty worktree — into a bare operational error.
+	// Whether the caller may continue is a separate question it asks result.Cleanup itself.
 	unsettled := unsettledPart(err)
 	result.note(kind, location, unsettled)
 	if unsettled != nil {

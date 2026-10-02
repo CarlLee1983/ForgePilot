@@ -6,7 +6,7 @@
 
 管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5、P0／P1 與 Goal-level Review Policy 全部實作完成；roadmap 沒有下一個 milestone，後續工作來自 dogfood，開在 issue tracker 上。
 
-**定位正在收斂**：[ADR-0040](docs/adr/0040-forgepilot-is-a-passive-dag-ledger.md) 把 ForgePilot 定為被動的 DAG 帳本。Runner、supervised execution 與 Story readiness review 已移除；自管分發、runtime resolution 等能力待移除。動任何程式碼前先讀它；下面提到待移除能力的條目描述的是收斂前的程式碼，與 ADR-0040 衝突時以 ADR-0040 為準。
+**定位正在收斂**：[ADR-0040](docs/adr/0040-forgepilot-is-a-passive-dag-ledger.md) 把 ForgePilot 定為被動的 DAG 帳本。Runner、supervised execution、Story readiness review、runtime resolution 與 verification fan-out 已移除；自管分發等能力待移除。動任何程式碼前先讀它；下面提到待移除能力的條目描述的是收斂前的程式碼，與 ADR-0040 衝突時以 ADR-0040 為準。
 
 ## 讀的順序
 
@@ -24,7 +24,6 @@
 
 - **Work Item 上沒有 revision 欄位，也沒有 PR 欄位。** 兩者都只存在於 Evidence。看到 Evidence 上有一個沒有任何規則讀取的 `pr`，那是刻意的——ADR-0003、ADR-0011
 - **Candidate 不存在 Work Item 上。** `COMMIT`／`SNAPSHOT` identity 只隨 `current_run` 與 Evidence 存在；snapshot ref 在 `refs/forgepilot/snapshots/`，不建立 branch、tag 或 WIP commit——ADR-0014
-- **Runtime 不從 main worktree 或 caller shell 猜。** Runtime Contract 在 Candidate checkout 解析；actual versions 先固定於 `current_run` 再隨 Verification Evidence 保存。沒有 declaration 才沿用目前 PATH——ADR-0015
 - **Evidence 上沒有指向 verification 輸出的欄位。** 輸出以 run 為鍵存在 `.forgepilot/logs/` 底下，`current_run` 才有 `LogPath`——ADR-0012
 - **沒有完成指令。** 沒有 `done`、沒有 `complete <work-id>`、沒有測試專用的 approve。DONE 只能是 `review approve` 在條件滿足時的結果——ADR-0008
 - **DONE 沒有 reopen。** 要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄——ADR-0006

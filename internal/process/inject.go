@@ -27,7 +27,7 @@ var injectedCleanupFailure atomic.Pointer[func(int, []string, time.Duration) err
 //
 // The command being settled is passed as well as its group id, because a
 // verification settles several managed processes in turn — a snapshot's Git
-// calls, a runtime probe, `make -n verify`, the check itself, then the removal
+// calls, `make -n verify`, the check itself, then the removal
 // of the checkout — and a test that cannot say which of them it means is a test
 // that asserts about whichever one happened to run first. It is empty whenever
 // the stop did not come through process.Start: a recovery settling a group it
