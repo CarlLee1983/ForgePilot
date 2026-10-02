@@ -34,12 +34,6 @@ func refuse(err error) error {
 	return &Refusal{Err: err}
 }
 
-// IsRefusal reports whether a verification was declined before it started.
-func IsRefusal(err error) bool {
-	var refusal *Refusal
-	return errors.As(err, &refusal)
-}
-
 // ErrVerificationTimedOut reports a canonical check stopped by its deadline. The
 // run produced no result, so it closes out as INTERRUPTED — never as a FAIL.
 var ErrVerificationTimedOut = errors.New("canonical check exceeded its timeout")

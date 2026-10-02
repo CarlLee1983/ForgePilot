@@ -34,7 +34,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   init                              create .forgepilot state in the current repository
   migrate                           upgrade state written by an older binary
   goal create --id <id> --title <t> [--review-policy <work-item|goal>] [--json]
-                                    GOAL automatically completes after all checks pass
+                                    a GOAL-policy Goal completes with goal complete once every check is current
   goal <block|unblock|complete|cancel> <goal-id>
   work add --goal <id> --story <path> [--depends-on <work-id>] [--external-ref <ref>] [--json]
   work list --goal <id> --json     list one Goal's Work Items for machine use
@@ -200,7 +200,7 @@ func changeGoal(args []string, root string, output io.Writer, action string, tar
 		return errors.New("--reason is required")
 	}
 	if target == work.GoalCompleted {
-		if err := storage.Update(root, func(state *work.State) error { return state.CompleteGoal(id, now()) }); err != nil {
+		if err := app.CompleteGoal(context.Background(), root, id, now); err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(output, "Goal %s %s\n", id, target)
@@ -332,7 +332,7 @@ func next(args []string, root string, output io.Writer) error {
 	case work.NextActionNone:
 		_, err = fmt.Fprintln(output, "No actionable work.")
 	case work.NextActionCompleteGoal:
-		_, err = fmt.Fprintf(output, "Goal %s is ready for automatic completion.\nAction: runner will complete the Goal transactionally\nReason: %s\n", action.Goal.ID, action.Reason)
+		_, err = fmt.Fprintf(output, "Goal %s is ready for automatic completion.\nAction: forgepilot goal complete %s\nReason: %s\n", action.Goal.ID, action.Goal.ID, action.Reason)
 	case work.NextActionGoalCompleted:
 		_, err = fmt.Fprintf(output, "Goal %s is already completed.\n", action.Goal.ID)
 	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
@@ -404,7 +404,7 @@ func nextActionText(state *work.State, action work.NextAction) string {
 		// at a time; the Work Item it is about is already on the Next: line.
 		return fmt.Sprintf("forgepilot reconcile --goal %s", action.Item.GoalID)
 	case work.NextActionCompleteGoal:
-		return "runner completes the Goal transactionally"
+		return fmt.Sprintf("forgepilot goal complete %s", action.Goal.ID)
 	default:
 		return ""
 	}
@@ -475,7 +475,7 @@ func status(args []string, root string, output io.Writer) error {
 			if item.CurrentRun != nil && !storage.VerificationRunning(root, item.ID) {
 				// verify reclaims an abandoned run before anything can refuse the
 				// command, so this instruction works even when the work is blocked.
-				note = " (runner is gone; run forgepilot verify to recover)"
+				note = " (verifier is gone; run forgepilot verify to recover)"
 			}
 			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
 				verificationSummary(&state, item.ID, revision, digest), reviewSummary(&state, item.ID, goal.ReviewPolicy)); err != nil {

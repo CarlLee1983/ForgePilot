@@ -113,7 +113,7 @@ func TestConcurrentAnchorIsRefusedBeforeRunArtifacts(t *testing.T) {
 	if err := <-lockResult; err != nil {
 		t.Fatal(err)
 	}
-	if !IsRefusal(verifyErr) {
+	if !isRefusal(verifyErr) {
 		t.Fatalf("Verify error = %v, want refusal", verifyErr)
 	}
 	if result.HasEvidence || result.VerificationRunID != "" {

@@ -376,39 +376,6 @@ func OpenExclusiveLog(path string) (*os.File, error) {
 	return file, nil
 }
 
-// FindVerificationLog returns the sole log whose filename begins with the
-// complete Verification Run ID token. The hyphen boundary prevents VR-100 from
-// matching VR-1000. It intentionally has no legacy Work Item/revision policy:
-// callers must select that legacy lookup explicitly.
-func FindVerificationLog(root, verificationRunID string) (string, error) {
-	if verificationRunID == "" || verificationRunID != filepath.Base(verificationRunID) || verificationRunID == "." || verificationRunID == ".." {
-		return "", fmt.Errorf("invalid verification run ID %q", verificationRunID)
-	}
-	directory := filepath.Join(root, ".forgepilot", "logs")
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("%w: %s", ErrVerificationLogNotFound, verificationRunID)
-		}
-		return "", fmt.Errorf("read verification logs: %w", err)
-	}
-	prefix := verificationRunID + "-"
-	match := ""
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
-			continue
-		}
-		if match != "" {
-			return "", fmt.Errorf("%w: %s", ErrVerificationLogAmbiguous, verificationRunID)
-		}
-		match = entry.Name()
-	}
-	if match == "" {
-		return "", fmt.Errorf("%w: %s", ErrVerificationLogNotFound, verificationRunID)
-	}
-	return filepath.Join(directory, match), nil
-}
-
 func mergedEnvironment(overrides []string) []string {
 	if len(overrides) == 0 {
 		return nil

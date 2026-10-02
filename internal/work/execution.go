@@ -215,6 +215,9 @@ type GoalExecutionWitness struct {
 // AdoptInitialExecution attaches the first fully mapped plan and its bounded,
 // zero-use authorization ledger to a Goal. It deliberately does not change
 // Goal or Work Item lifecycle. The state takes ownership of every nested slice.
+//
+// No production code calls this any more; it is kept only so tests can build a
+// digest-valid Goal.Execution fixture until schema 19 removes the data model.
 func (s *State) AdoptInitialExecution(execution GoalExecution) error {
 	goal := s.goal(execution.GoalID)
 	if goal == nil {

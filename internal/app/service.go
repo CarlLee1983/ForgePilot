@@ -53,3 +53,30 @@ func ReconcileGoal(ctx context.Context, root, goalID string, now Now) ([]work.Re
 	})
 	return changes, err
 }
+
+// CompleteGoal completes one Goal in a single locked transaction. A GOAL-policy
+// Goal completes through current verification: the Candidate facts are resolved
+// inside the transaction, with the same Goal-scoped resolution `next` uses, so
+// the precondition and the transition share one criterion. Any other Goal
+// completes through the plain rule that every Work Item is DONE.
+func CompleteGoal(ctx context.Context, root, goalID string, now Now) error {
+	return storage.Update(root, func(state *work.State) error {
+		goal, ok := state.GoalByID(goalID)
+		if !ok {
+			return fmt.Errorf("unknown goal %q", goalID)
+		}
+		if goal.ReviewPolicy != work.ReviewPerGoal {
+			return state.CompleteGoal(goalID, now.at())
+		}
+		facts, err := GoalCandidateFacts(ctx, state, goalID, root)
+		if err != nil {
+			return fmt.Errorf("resolve current Candidate before completing Goal: %w", err)
+		}
+		summary, err := state.GoalSummary(goalID, facts)
+		if err != nil {
+			return err
+		}
+		_, err = state.CompleteVerifiedGoal(goalID, facts, summary.VerificationEvidenceIDs, now.at())
+		return err
+	})
+}

@@ -40,16 +40,6 @@ func (s *State) ActionableNext(repository RepositoryState) NextAction {
 	return s.actionableNext("", repository)
 }
 
-// ActionableNextForGoal answers the same question within one Goal. Scoping
-// happens before the priority rules, never after: taking the global answer and
-// discarding it when it belongs to another Goal would let an unrelated Goal
-// manufacture a stall here. Only the candidate set narrows — dependency and
-// freshness rules still read the whole State, so a prerequisite is judged by
-// what it actually is. See docs/adr/0019-runner-executes-forgepilot-decides.md.
-func (s *State) ActionableNextForGoal(goalID string, repository RepositoryState) NextAction {
-	return s.actionableNext(goalID, repository)
-}
-
 func (s *State) actionableNext(goalID string, repository RepositoryState) NextAction {
 	items := s.itemsByCreationInGoal(goalID)
 

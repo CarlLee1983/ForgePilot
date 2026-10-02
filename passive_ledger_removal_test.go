@@ -1,6 +1,9 @@
 package forgepilot_test
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -62,12 +65,35 @@ func TestStateWithGoalExecutionDataStaysReadable(t *testing.T) {
 	if err != nil || !strings.Contains(output, "Next: WI-001") {
 		t.Fatalf("next = %v\n%s", err, output)
 	}
-	// A write through the CLI must round-trip the data it no longer understands.
+	// Writes through the CLI must round-trip, byte for byte, the data it no
+	// longer understands.
+	before := executionJSON(t, root)
 	mustRun(t, binary, root, "start", "WI-001")
-	state, err := storage.Load(root)
-	if err != nil || state.Goals[0].Execution == nil {
-		t.Fatalf("a write through the CLI dropped the execution data: %v", err)
+	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Which way?", "--option", "left", "--option", "right")
+	if after := executionJSON(t, root); after != before {
+		t.Fatalf("a CLI write changed goals[0].execution:\nbefore %s\nafter  %s", before, after)
 	}
+}
+
+// executionJSON returns goals[0].execution exactly as state.json stores it.
+func executionJSON(t *testing.T, root string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Goals []struct {
+			Execution json.RawMessage `json:"execution"`
+		} `json:"goals"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Goals) != 1 || len(document.Goals[0].Execution) == 0 || string(document.Goals[0].Execution) == "null" {
+		t.Fatalf("state.json has no goals[0].execution: %s", raw)
+	}
+	return string(document.Goals[0].Execution)
 }
 
 func TestRemovedCommandsAreUnknownAndAbsentFromHelp(t *testing.T) {
