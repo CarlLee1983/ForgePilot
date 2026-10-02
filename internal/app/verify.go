@@ -59,12 +59,6 @@ var ErrVerificationInterrupted = errors.New("canonical check was interrupted")
 // governance state moved underneath it proves nothing about anything.
 var ErrStateWrittenDuringCheck = errors.New("the canonical check changed .forgepilot/state.json")
 
-// ErrExecutionBindingDrift reports that a Runner-bound plan or authorization
-// changed at the verification boundary. It is separate from the verdict guard:
-// a verification may have honestly produced Candidate Evidence before this
-// later governance change was observed.
-var ErrExecutionBindingDrift = errors.New("the execution plan or authorization changed during verification")
-
 // VerifyOptions carries what one verification needs beyond the Work Item.
 // Timeout of zero means no deadline, which is the CLI's existing behaviour:
 // ADR-0004 decided a Verification Run has no built-in time limit.
@@ -72,13 +66,6 @@ type VerifyOptions struct {
 	Snapshot bool
 	Timeout  time.Duration
 	Now      func() time.Time
-	// ExecutionGoalID and ExecutionAuthorizationDigest are an optional Runner
-	// boundary guard. Standalone verification leaves them empty and retains its
-	// existing contract; a Runner supplies both so a revision is rejected before
-	// a check starts and reported after an already-started check's Evidence is
-	// committed.
-	ExecutionGoalID              string
-	ExecutionAuthorizationDigest string
 }
 
 type FanoutSkip = work.FanoutSkip
@@ -125,8 +112,8 @@ type VerifyResult struct {
 
 // Unresolved is one managed process group a verification could not confirm
 // stopped. It is the typed boundary between the layer that observes the fact
-// and the layer that persists it: internal/app never learns what a run record
-// looks like, and internal/runner never re-derives the fact from a message.
+// and the layer that reports it: the CLI reads these values rather than
+// re-deriving the fact from a message.
 type Unresolved struct {
 	// Kind names the stage that started the group.
 	Kind string
@@ -279,12 +266,6 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 	if err := state.CanBeginVerification(id); err != nil {
 		return result, refuse(err)
 	}
-	// A Runner-bound verification must recheck its plan and authorization before
-	// any Candidate capture, checkout, or runtime preflight can begin. The later
-	// check immediately before beginRun closes the preparation window as well.
-	if err := verifyExecutionBinding(root, options); err != nil {
-		return result, err
-	}
 	verificationRunID := state.NextVerificationRun()
 	startedAt := options.now()
 	candidate := work.Candidate{Kind: work.CommitCandidate}
@@ -340,7 +321,7 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 			// fact of its own and not a tidy-up detail to drop on the floor.
 			// Only the unconfirmed part is carried back. An ordinary removal
 			// failure is deliberately dropped here: recording it would give the
-			// Runner a pending with no group id, and ADR-0022 has no way to resolve
+			// caller a pending with no group id, and ADR-0022 has no way to resolve
 			// one of those short of a person editing the record.
 			result.note(UnresolvedGit, worktree, unsettledPart(repository.RemoveWorktree(cleanup.context(), root, worktree)))
 		}
@@ -428,9 +409,6 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		}
 	}
 	if _, err := fmt.Fprintf(output, "Log: %s\n", logFile); err != nil {
-		return result, err
-	}
-	if err := verifyExecutionBinding(root, options); err != nil {
 		return result, err
 	}
 
@@ -521,10 +499,8 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 	// workspace are two different facts, and only one of them is about storage:
 	// the group was observed while the callback read repository facts, so it
 	// exists whether or not the write that followed landed. Returning the
-	// transaction error first is how it used to disappear — the Runner then saw
-	// a result with no Cleanup, cleared the pending it had recorded before the
-	// verification started, and the next process found a workspace that looked
-	// clear. Recorded exactly once, here, at the same location CandidateFacts
+	// transaction error first is how it used to disappear — the caller then saw
+	// a result with no Cleanup and the workspace looked clear. Recorded exactly once, here, at the same location CandidateFacts
 	// actually ran in. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
 	if unsettled := unsettledPart(factsErr); unsettled != nil {
 		result.note(UnresolvedGit, root, unsettled)
@@ -540,9 +516,6 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		return result, updateErr
 	}
 	result.Evidence, result.EvidenceSet, result.Skipped, result.HasEvidence, result.Status = evidence, evidenceSet, skipped, true, status
-	if err := verifyExecutionBinding(root, options); err != nil {
-		return result, err
-	}
 	// Failing to refresh dependency readiness is a warning: the Evidence stands
 	// and a rerun repairs it. Failing to confirm a process group started while
 	// reading those facts is not — the next step must not begin, whatever the
@@ -567,19 +540,6 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		_, err = fmt.Fprintf(output, "warning: dependency readiness was not refreshed: %v; Evidence was preserved; repair repository access and rerun %s\n", factsErr, VerificationRetryCommand(id, candidate))
 	}
 	return result, err
-}
-
-func verifyExecutionBinding(root string, options VerifyOptions) error {
-	if options.ExecutionGoalID == "" && options.ExecutionAuthorizationDigest == "" {
-		return nil
-	}
-	if options.ExecutionGoalID == "" || options.ExecutionAuthorizationDigest == "" {
-		return fmt.Errorf("%w: incomplete Runner execution binding", ErrExecutionBindingDrift)
-	}
-	if err := ValidateCurrentExecutionBindings(root, options.ExecutionGoalID, options.ExecutionAuthorizationDigest); err != nil {
-		return fmt.Errorf("%w: %v", ErrExecutionBindingDrift, err)
-	}
-	return nil
 }
 
 // VerificationRetryCommand names the command that would rerun this exact
@@ -741,17 +701,6 @@ func reclaimOrphan(cleanup *cleanupWindow, result *VerifyResult, id, root string
 	// state holds where that run actually ran, which survives changes to the
 	// naming scheme or the layout.
 	if abandoned != "" {
-		// Known boundary, and deliberately unchanged. An orphan is reached with
-		// this Work Item's verification lock held, so no live runner can exist —
-		// but a Runner that was SIGKILLed mid-check can have left a process group
-		// in this very checkout, and that group is recorded in a run record, which
-		// internal/app may not read: the Runner is the layer that owns execution
-		// history. The Runner therefore refuses to reach here at all while an
-		// unresolved pending execution exists (see settleWorkspace), so the
-		// exposure is a standalone `forgepilot verify` run by hand while a Runner's
-		// pending cleanup is outstanding. Closing that would mean making the
-		// standalone command consult run records and refuse, which is a change to
-		// its contract that ADR-0004 and ticket 07 both rule out.
 		// The cleanup window opens here rather than at the top of the command: an
 		// orphan is the only thing above that needs it, and drawing the allowance
 		// when there is no orphan spends the whole of it on the verification that
