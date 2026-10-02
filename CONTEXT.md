@@ -11,7 +11,7 @@ ForgePilot 是被動的 DAG 帳本：工單拆分完成後，讓外部 Agent 依
 **Goal**：需要跨多次工程工作推進、由一份 Goal Plan 建立的目標；全部 Work Item 成為 DONE 時自動完成。
 _Avoid_：Story、Work Item
 
-**Goal Plan**：工單拆分後交給 ForgePilot 匯入的計畫檔，宣告一個 Goal、其節點、每個節點參照的 Story 與節點間依賴。ForgePilot 只保證它構成合法 DAG、Story 路徑存在；拆得對不對是上游與人的責任。再次匯入只能新增節點。
+**Goal Plan**：工單拆分後交給 ForgePilot 匯入的計畫檔，宣告一個 Goal、其節點、每個節點參照的 Story 與節點間依賴。ForgePilot 只保證它構成合法 DAG、Story 路徑存在且位於 `specs/stories/` 底下；拆得對不對是上游與人的責任。再次匯入只能新增節點。
 _Avoid_：Goal Plan Manifest、需求覆蓋證明、可隨意改寫的工作清單
 
 **Work Item**：Goal Plan 中的一個節點，以節點 ID 識別，參照一份 PraxisBound Story，具有自己的狀態與依賴。

@@ -74,14 +74,14 @@ Evidence 沒有 PR 欄位，Work Item 沒有 revision 欄位：revision 只存�
 
 每個 `.forgepilot/` 管理一個 repository，可以包含多個 Goal；不建立跨 repository 的全域佇列。`init` 在 repository root 建立 state；後續命令從目前目錄向上尋找最近的 `.forgepilot/`，找不到時要求先 init。Goal 的 repository 必須與該 state root 一致。
 
-Story reference 是 repository-relative path，必須存在於 repository 內，可指向 PraxisBound 使用的檔案或目錄；不猜測其 business schema。路徑正規化與 symlink 解析後仍須在 repository 內，拒絕逃出的 reference。
+Story reference 是 repository-relative path，必須存在且位於 repository 的 `specs/stories/` 底下（該目錄必須存在），可指向檔案或目錄；不猜測其 business schema。路徑正規化與 symlink 解析後仍須落在 `specs/stories/` 內，拒絕絕對路徑、`..` 穿越與逃出的 reference（`internal/repository/repository.go` 的 `ValidateStory`）。
 
 ## Goal Plan 與 DAG
 
 `goal import <plan-path>` 讀一份 JSON（標準函式庫解析、拒絕未知欄位），格式見 [development-plan.md](development-plan.md#goal-plan-格式)。規則：
 
 - 節點 ID 即 Work Item ID，在 workspace 內唯一；Goal ID 與節點 ID 同一字元規則，且因為 Work Item ID 會被嵌進 snapshot ref，必須是合法的 Git ref component。
-- 依賴只能指向同一 Goal 的節點。拒絕環、未知、自我與重複依賴、重複節點、無節點的計畫，以及不存在、路徑穿越或 symlink 逃逸的 Story。任何一項失敗整份不寫入，錯誤指出節點與欄位。
+- 依賴只能指向同一 Goal 的節點。拒絕環、未知、自我與重複依賴、重複節點、無節點的計畫，以及不存在、不在 `specs/stories/` 底下、路徑穿越或 symlink 逃逸的 Story。任何一項失敗整份不寫入，錯誤指出節點與欄位。
 - 節點順序是多件工作同時 READY 時的推薦 tie-break；跨 Goal 的順序是 Goal 匯入的順序。
 - 重新匯入同一 Goal 只能新增節點：Goal 屬性必須相同；既有節點必須全部列出，其 `story` 與 `depends_on`（依賴以集合比較，重排不算改動）必須不變，且不重新檢查 Story 是否仍存在——已完成而後來被搬走的 Story 不該凍結整個 Goal；新節點可依賴新舊節點（含已 DONE 者）；完全相同是無變化的成功；終態 Goal 拒絕；整份原子寫入。
 - 工作的存在與依賴在建立後不可修改或刪除，因此新增節點不能產生環；載入 state 仍驗證完整資料一致性。

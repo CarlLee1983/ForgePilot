@@ -625,8 +625,6 @@
   </style>
 </head>
 <body>
-<div role="note" class="adr0040-notice" style="margin:0;padding:12px 20px;background:#fff4d6;color:#4a3600;border-bottom:2px solid #d99a00;font:500 14px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center;position:relative;z-index:1000;">本頁描述 ADR-0040 收斂前的產品，部分指令已移除；現行指令見 <a href="../README.md" style="color:#7a4b00;text-decoration:underline;">README</a> 與 <a href="development-plan.md#cli-契約" style="color:#7a4b00;text-decoration:underline;">docs/development-plan.md 的 CLI 契約</a>。</div>
-
   <!-- 頂部控制列 -->
   <header class="deck-bar">
     <div class="brand-meta">
@@ -634,7 +632,7 @@
         <div class="status-beacon"></div>
         FORGEPILOT PROTOCOL
       </a>
-      <div class="brand-version">DETERMINISTIC STATE ENGINE · M1–M5 CERTIFIED</div>
+      <div class="brand-version">PASSIVE DAG LEDGER · ADR-0040</div>
     </div>
 
     <div class="deck-controls">
@@ -644,7 +642,7 @@
         <a href="#slide-2">分層</a>
         <a href="#slide-3">儲存</a>
         <a href="#slide-4">狀態機</a>
-        <a href="#slide-5">五重防線</a>
+        <a href="#slide-5">完成條件</a>
         <a href="#slide-6">候選隔離</a>
         <a href="#slide-7">邊界</a>
       </nav>
@@ -661,9 +659,9 @@
   <!-- SLIDE 0: 封面與核心定義 -->
   <section class="slide-container" id="slide-0">
     <div class="slide-index-tag">FORGEPILOT TECHNICAL SPECIFICATION · KEYNOTE DECK</div>
-    <h1 class="deck-title">ForgePilot：工程控制平面<br>與確定性狀態引擎</h1>
+    <h1 class="deck-title">ForgePilot：被動的 DAG 帳本<br>與確定性狀態引擎</h1>
     <p class="deck-summary">
-      它不寫業務程式碼、不用外部資料庫、不跑 Daemon，也不依賴網路。它是一套只用 Go 標準庫構建的本機法官，專門管理工程工作的可執行性、進度佇列與決策證據，讓「做完了」這句話真正具備物理與法律約束力。
+      它不寫業務程式碼、不用外部資料庫、不跑 Daemon，也不依賴網路。它是一套只用 Go 標準庫構建的本機帳本：外部 Agent 自己跑迴圈，ForgePilot 只判定下一個合法動作、保存綁定確切 Candidate 的驗證證據與決策證據，讓「做完了」這句話真正具備物理與法律約束力。
     </p>
 
     <div class="axiom-banner">
@@ -689,7 +687,7 @@
       <div class="feature-card">
         <span class="card-badge purple">NO "DONE" COMMAND</span>
         <h3>無完成指令</h3>
-        <p>沒有 <code>forgepilot done</code> 指令。DONE 只能是五道物理條件在同一次交易內同時成立時的客觀必然結果。</p>
+        <p>沒有 <code>forgepilot done</code> 指令。DONE 只能是 <code>verify</code> PASS（Goal 要求 Approval 時為 <code>review approve</code>）在同一次交易內通過條件檢查的客觀結果。</p>
       </div>
     </div>
   </section>
@@ -717,7 +715,7 @@
       </div>
 
       <div class="engine-side good-side">
-        <div class="side-header good">ForgePilot 確定性控制平面（Ground Truth）</div>
+        <div class="side-header good">ForgePilot 確定性帳本（Ground Truth）</div>
         <h3>本機檔案系統鎖 + 狀態機驅動</h3>
         <p>純值狀態機與受 POSIX 鎖保護的物理磁碟快照。任何動作都必須有不可篡改的證據（Evidence）為憑。</p>
         <ul>
@@ -734,7 +732,7 @@
   <!-- SLIDE 2: 四層架構與單向流動 -->
   <section class="slide-container" id="slide-2">
     <div class="slide-index-tag">LAYER BOUNDARIES · COHESIVE PACKAGES</div>
-    <h2 class="slide-title">四層模組分層與責任單向性</h2>
+    <h2 class="slide-title">模組分層與責任單向性</h2>
     <p class="deck-summary">
       Go 標準庫實作。所有外部 I/O、Subprocess 與檔案系統操作被隔離在外圍，純狀態機位於核心，保證 100% 確定性可測。
     </p>
@@ -746,7 +744,7 @@
         <p><strong>責任：</strong>終端參數解析、Flag 驗證、人類可讀排版與 Exit Code 映射。</p>
         <p style="margin-top: 0.5rem; font-size: 0.88rem; color: var(--text-faint);">
           ✘ 絕不自行判定狀態流轉是否合法。<br>
-          ✔ 僅作為控制膠水，排程調度 Storage、Repository 與 Work。
+          ✔ 僅作為控制膠水，調度 <code>internal/app</code>（<code>verify</code>、<code>goal import</code> 的唯一流程）、Storage、Repository 與 Work。
         </p>
       </div>
 
@@ -766,7 +764,7 @@
         <p><strong>責任：</strong>專案中<strong>唯一允許呼叫 Git 的模組</strong>。</p>
         <p style="margin-top: 0.5rem; font-size: 0.88rem; color: var(--text-faint);">
           ✔ 負責私有 Index 快照擷取 (Candidate Snapshot)。<br>
-          ✔ 建立臨時隔離的 detached worktree、解析 Candidate Runtime 要求。
+          ✔ 建立臨時隔離的 detached worktree、啟動 canonical <code>make verify</code>（程序群組控制交給 <code>internal/process</code>）。
         </p>
       </div>
 
@@ -810,7 +808,7 @@
         <span class="c-comment">// [2] 載入並反序列化當前完整快照</span>
         state, _ := load(directory)
 
-        <span class="c-comment">// [3] 執行純記憶體領域邏輯 (狀態推進、產生 Evidence、連鎖解鎖)</span>
+        <span class="c-comment">// [3] 執行純記憶體領域邏輯 (狀態推進、產生 Evidence、Goal 自動完成)</span>
         <span class="c-keyword">if</span> err := operation(&state); err != nil { <span class="c-keyword">return</span> err }
 
         <span class="c-comment">// [4] 全域一致性防護檢查 (拒絕 cycle、重複依賴、無效關聯)</span>
@@ -857,14 +855,14 @@
       <div class="flow-step">
         <div class="flow-step-num">STAGE 01</div>
         <h4>PENDING</h4>
-        <p>工作已建立，但前置依賴尚未全部達成 DONE。佇列靜態等待。</p>
+        <p>工作已建立，但前置依賴尚未全部達成 DONE。讀取時計算，不保存。</p>
         <span class="flow-badge">條件：等待依賴推進</span>
       </div>
 
       <div class="flow-step">
         <div class="flow-step-num">STAGE 02</div>
         <h4>READY</h4>
-        <p>所有前置依賴全部達成 DONE，且無未解 Gate。可被 <code>next</code> 查詢認領。</p>
+        <p>所有前置依賴全部達成 DONE，且無未解 Gate。成為 <code>next</code> 的推薦對象；同一 workspace 同時最多一件 RUNNING 或 VERIFYING。</p>
         <span class="flow-badge">動作：forgepilot start</span>
       </div>
 
@@ -884,8 +882,8 @@
 
       <div class="flow-step">
         <div class="flow-step-num">STAGE 05</div>
-        <h4>REVIEW ➔ DONE</h4>
-        <p>測試通過，等待人工審查。審查核准且條件全足時瞬間進入 DONE 終態。</p>
+        <h4>DONE（或 REVIEW）</h4>
+        <p>PASS 即 DONE，同一次交易解鎖下游。Goal 要求 Approval 時先進 REVIEW，approve 且條件全足才進入 DONE 終態。</p>
         <span class="flow-badge">終態：連鎖解鎖下游</span>
       </div>
     </div>
@@ -910,7 +908,7 @@
     <div class="slide-index-tag">COMPLETION RIGOR · ZERO SHORTCUTS</div>
     <h2 class="slide-title">完成是條件的結果，不是一個指令</h2>
     <p class="deck-summary">
-      產品中沒有 <code>done</code>，沒有 <code>complete &lt;id&gt;</code>，也沒有測試專用的跳步開關。唯有五道條件全部滿足，DONE 才會由系統自動推論達成。
+      產品中沒有 <code>done</code>，沒有 <code>complete &lt;id&gt;</code>，也沒有測試專用的跳步開關。唯有確切 Candidate 上的 PASS、無未解 Gate、Goal 仍 ACTIVE（要求 Approval 時再加人工核准）全部滿足，DONE 才會由系統自動推論達成。
     </p>
 
     <div class="code-terminal">
@@ -920,54 +918,49 @@
           <div class="term-dot"></div>
           <div class="term-dot"></div>
         </div>
-        <span>internal/work/completion.go · CompletionBlockers Evaluation</span>
+        <span>internal/work/evidence.go · CompletionBlock Evaluation</span>
       </div>
-      <pre class="code-body"><code><span class="c-keyword">func</span> (s *State) <span class="c-func">CompletionBlockers</span>(id <span class="c-type">string</span>) []<span class="c-type">string</span> {
-    <span class="c-comment">// [條件 1] 最新人類審查必須存在且為 APPROVED</span>
-    review, reviewed := s.LatestReview(id)
-    <span class="c-keyword">if</span> !reviewed || review.Result != Approved { blockers = <span class="c-func">append</span>(blockers, ...) }
+      <pre class="code-body"><code><span class="c-comment">// PASS 路徑與 review approve 路徑共用這一個判準，兩條路不會各走各的</span>
+<span class="c-keyword">func</span> (s *State) <span class="c-func">CompletionBlock</span>(id <span class="c-type">string</span>) <span class="c-type">error</span> {
+    item := s.<span class="c-func">item</span>(id)
 
-    <span class="c-comment">// [條件 2] 最新驗證必須存在且為 PASS</span>
-    verification, verified := s.LatestVerification(id)
-    <span class="c-keyword">if</span> !verified || verification.Result != Pass { blockers = <span class="c-func">append</span>(blockers, ...) }
-
-    <span class="c-comment">// [條件 3] 雙向版本 SHA 必須 100% 精確相等 (同一 Commit 上既測過也被審過)</span>
-    <span class="c-keyword">if</span> reviewed && verified && verification.Revision != review.Revision {
-        blockers = <span class="c-func">append</span>(blockers, <span class="c-str">"the latest PASS is at revision %s but approval is at %s"</span>)
+    <span class="c-comment">// [條件 1] 所屬目標必須為 ACTIVE</span>
+    <span class="c-keyword">if</span> goal := s.<span class="c-func">goal</span>(item.GoalID); goal == <span class="c-keyword">nil</span> || goal.Status != GoalActive {
+        <span class="c-keyword">return</span> fmt.<span class="c-func">Errorf</span>(<span class="c-str">"work item %q does not belong to an active goal"</span>, id)
     }
 
-    <span class="c-comment">// [條件 4] 工作名下不能有任何未解 Gate</span>
-    <span class="c-keyword">if</span> count := s.OpenGateCount(id); count > 0 { blockers = <span class="c-func">append</span>(blockers, ...) }
+    <span class="c-comment">// [條件 2] 工作名下不能有任何未解 Gate</span>
+    <span class="c-keyword">return</span> s.<span class="c-func">gateBlock</span>(id)
+}
 
-    <span class="c-comment">// [條件 5] 所屬目標必須為 ACTIVE</span>
-    <span class="c-keyword">if</span> goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive { ... }
-
-    <span class="c-keyword">return</span> blockers <span class="c-comment">// 唯有為空切片時，系統才放行進入 DONE</span>
-}</code></pre>
+<span class="c-comment">// 前提：最新 Verification 為 PASS，且綁定的就是目前的 Candidate。
+// 無 Approval Requirement：PASS 當下檢查通過 ─▶ DONE。
+// 有 Approval Requirement：PASS ─▶ REVIEW；approve 時再檢查一次，
+// Candidate 已 stale 則拒絕並要求重新 verify。</span></code></pre>
     </div>
 
     <div class="grid-3">
       <div class="feature-card">
-        <span class="card-badge emerald">CASCADE READY</span>
+        <span class="card-badge emerald">SAME TRANSACTION</span>
         <h3>同交易連鎖解鎖</h3>
-        <p>當某件工作完成時，在同一次交易內自動遍歷 DAG 執行 <code>s.RefreshReady()</code>，所有下游依賴滿足的工作立即翻轉為 READY，佇列自動推進。</p>
+        <p>當某件工作完成時，同一次交易內，下游的 READY 因為讀取時由「依賴是否全部 DONE」算出而立即成立；最後一件 DONE 時 Goal 在同一筆交易轉為 COMPLETED。</p>
       </div>
       <div class="feature-card">
-        <span class="card-badge amber">EXACT-HEAD PR (M4)</span>
-        <h3>PR 精確 HEAD 整合</h3>
-        <p>Human Review 支援掛載 PR Reference（<code>owner/repo#123</code>），一旦 PR 產生新的 Commit，舊的 Review 立即過期失效，必須重審。</p>
+        <span class="card-badge amber">STALE · EXACT CANDIDATE</span>
+        <h3>精確 Candidate 綁定</h3>
+        <p>REVIEW 工作的 PASS 所綁的 Candidate 若已不符合目前 workspace（HEAD 變了或 snapshot digest 變了），approve 被拒，必須重新 verify。DONE 的工作不判 stale。</p>
       </div>
       <div class="feature-card">
         <span class="card-badge purple">NO SILENCE</span>
         <h3>狀態不能沉默 (ADR-0008)</h3>
-        <p>因為沒有手動 complete 指令，<code>status</code> 指令絕不能對未完成的原因保持沉默，必須具體印出到底差哪一道條件（例如差審查或 SHA 不合）。</p>
+        <p>因為沒有手動 complete 指令，<code>status</code> 指令絕不能對未完成的原因保持沉默，必須具體印出這件工作為何不能前進（依賴、Gate、等待 approval、佔位、Goal 已結束）。</p>
       </div>
     </div>
   </section>
 
   <!-- SLIDE 6: 候選隔離與確定性運行時 -->
   <section class="slide-container" id="slide-6">
-    <div class="slide-index-tag">CANDIDATE ISOLATION · DETERMINISTIC RUNTIME</div>
+    <div class="slide-index-tag">CANDIDATE ISOLATION · CLEAN CHECKOUT</div>
     <h2 class="slide-title">Candidate 快照隔離與確定性驗證</h2>
     <p class="deck-summary">
       ForgePilot 絕不在當前工作區直接執行驗證。工作區的雜檔、未提交變更與 shell PATH 污染，是測試不可信的罪魁禍首。
@@ -987,7 +980,7 @@
       <div class="feature-card">
         <span class="card-badge emerald">ISOLATED WORKTREE</span>
         <h3>獨立 Detached 工作樹</h3>
-        <p>在 <code>.forgepilot/worktrees/run-*</code> 建立獨立的 detached worktree。驗證完全在乾淨副本中執行，測試結束後自動清理回收。</p>
+        <p>在 <code>.forgepilot/worktrees/&lt;work-id&gt;-&lt;short-sha&gt;</code> 建立獨立的 detached worktree。驗證完全在乾淨副本中執行，測試結束後自動清理回收。</p>
         <p style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-faint);">
           ✔ 驗證輸出串流即時寫入 <code>.forgepilot/logs/</code>。<br>
           ✔ 即使終端被 Ctrl+C 中斷，也有孤兒回收機制。
@@ -995,18 +988,18 @@
       </div>
 
       <div class="feature-card">
-        <span class="card-badge amber">P1-004 RUNTIME RESOLUTION</span>
-        <h3>確定性工具鏈解析</h3>
-        <p>主動從 Candidate 內的 <code>.node-version</code>、<code>go.mod</code> 探索 Runtime 契約，並於本機選取相符的二進制工具鏈。</p>
+        <span class="card-badge amber">TOOLCHAIN BY THE REPO</span>
+        <h3>toolchain 由專案自己固定</h3>
+        <p>ForgePilot 不解析 <code>.node-version</code>、<code>go.mod</code> 這類 Runtime 宣告，也不管理工具鏈版本；檢查繼承呼叫者的環境，版本由受管理專案的 <code>make verify</code> 自行固定。</p>
         <p style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-faint);">
-          ✔ 絕不安裝或竄改使用者全域環境。<br>
-          ✔ 杜絕因不同終端 PATH 預設版本不同導致的測試偏差。
+          ✔ <code>make verify</code> 必須能在全新 checkout 上執行。<br>
+          ✔ 一次 <code>verify</code> 只為觸發它的那件工作留下 Evidence。
         </p>
       </div>
     </div>
 
     <div class="axiom-banner">
-      <p>「不可變的程式碼身分（Candidate SHA）＋確定性的運行時版本（Resolved Runtime），才能產生不可篡改的工程證據（Evidence）。」</p>
+      <p>「不可變的程式碼身分（Candidate SHA）＋隔離的乾淨 checkout，才能產生不可篡改的工程證據（Evidence）。」</p>
     </div>
   </section>
 
@@ -1015,7 +1008,7 @@
     <div class="slide-index-tag">AUTHORITY BOUNDARIES · DISCIPLINED SCOPE</div>
     <h2 class="slide-title">責任邊界：它做到哪，堅決不做什麼？</h2>
     <p class="deck-summary">
-      ForgePilot 的力量來自於其嚴苛的克制。以下是經由 14 份 ADR 所確立的鋼鐵邊界。
+      ForgePilot 的力量來自於其嚴苛的克制。以下是經由 ADR 所確立的鋼鐵邊界。
     </p>
 
     <div class="table-container">
@@ -1030,7 +1023,7 @@
         <tbody>
           <tr>
             <td><strong>任務與狀態</strong></td>
-            <td>維護依賴拓撲 DAG，判定任務何時可開工 (READY) 與完成 (DONE)。</td>
+            <td>由 Goal Plan 匯入依賴拓撲 DAG，判定任務何時可開工 (READY) 與完成 (DONE)，並給出唯一的 <code>next</code>。</td>
             <td><strong>DONE 絕不允許 Reopen (ADR-0006)</strong>。要重做必須新開 Work Item 留存脈絡。</td>
           </tr>
           <tr>
@@ -1044,9 +1037,9 @@
             <td><strong>不做半套認證 (ADR-0005)</strong>。本機 CLI 的身分驗證是假安全，不如誠實記錄。</td>
           </tr>
           <tr>
-            <td><strong>網路與外部整合</strong></td>
-            <td>PR Reference (<code>owner/repo#123</code>) 作為審查身分識別。</td>
-            <td><strong>零網路請求 (ADR-0010)</strong>。不呼叫 GitHub API、不查證 PR 是否存在，純離線運作。</td>
+            <td><strong>網路與程序邊界</strong></td>
+            <td>完全離線；除 Git 與 <code>make verify</code> 外不啟動任何程序。</td>
+            <td><strong>零網路請求 (ADR-0010)</strong>。不呼叫 GitHub API，沒有 PR 欄位，也不啟動 Agent。</td>
           </tr>
           <tr>
             <td><strong>程式碼與交付</strong></td>
@@ -1070,8 +1063,8 @@
     const fsBtn = document.getElementById('fsToggleBtn');
 
     function updateHud() {
-      const pad = (n) => String(n + 1).padStart(2, '0');
-      hudCounter.textContent = `${pad(currentSlide)} / ${pad(slides.length)}`;
+      const pad = (n) => String(n).padStart(2, '0');
+      hudCounter.textContent = `${pad(currentSlide + 1)} / ${pad(slides.length)}`;
       
       // 更新導覽列高亮
       const navLinks = document.querySelectorAll('.deck-nav a');

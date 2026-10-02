@@ -586,55 +586,6 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
   flex-grow: 1;
 }
 
-/* Graph 架構圖 */
-.graph-visual-card {
-  background: var(--color-surface);
-  border: var(--rule) solid var(--color-rule-strong);
-  border-radius: var(--radius-surface);
-  padding: var(--space-xl);
-  box-shadow: 0 4px 20px var(--color-shadow);
-  margin-block-end: var(--space-2xl);
-}
-.graph-visual-card__top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  margin-block-end: var(--space-lg);
-  padding-block-end: var(--space-sm);
-  border-block-end: var(--rule) solid var(--color-rule);
-}
-.graph-visual-card__title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-display);
-  font-size: var(--text-md);
-  font-weight: 600;
-  color: var(--color-ink);
-}
-.graph-visual-card__meta {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--color-accent);
-}
-
-/* 圖像展示 */
-.graph-image-slot {
-  border: var(--rule) solid var(--color-accent-border);
-  border-radius: var(--radius-surface);
-  background: var(--color-paper-deep);
-  position: relative;
-  overflow: hidden;
-}
-.graph-image-slot img {
-  width: 100%;
-  height: auto;
-  display: block;
-  border-radius: calc(var(--radius-surface) - var(--rule));
-}
-
 /* 實踐三原則 */
 .graph-principles-grid {
   display: grid;
@@ -817,8 +768,6 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
 </style>
 </head>
 <body>
-<div role="note" class="adr0040-notice" style="margin:0;padding:12px 20px;background:#fff4d6;color:#4a3600;border-bottom:2px solid #d99a00;font:500 14px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center;position:relative;z-index:1000;">本頁描述 ADR-0040 收斂前的產品，部分指令已移除；現行指令見 <a href="../README.md" style="color:#7a4b00;text-decoration:underline;">README</a> 與 <a href="development-plan.md#cli-契約" style="color:#7a4b00;text-decoration:underline;">docs/development-plan.md 的 CLI 契約</a>。</div>
-
 <!-- 精緻北歐水波晨光 (純 CSS 微動態) -->
 <div class="ambient-scene" aria-hidden="true">
   <div class="ambient-glow-top"></div>
@@ -869,7 +818,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <div>
         <div class="hero-tag">
           <span class="hero-tag-dot"></span>
-          <span>Engineering Control Plane</span>
+          <span>Passive DAG Ledger</span>
         </div>
         <h1 class="hero__word" id="hero-title">完成，<span class="mark-accent">不是</span>宣告。</h1>
 
@@ -893,7 +842,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
         <figcaption class="trace-stage__caption" id="trace-caption">
           <div class="trace-stage__title">
             <svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-hash"/></svg>
-            <strong>WORK TRACE</strong><span>· WI-002</span>
+            <strong>WORK TRACE</strong><span>· schema</span>
           </div>
           <span class="trace-badge">RUNNING · CANDIDATE BOUND</span>
         </figcaption>
@@ -909,25 +858,24 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           </li>
           <li class="trace-node is-done">
             <span class="trace-node__state">02 · CANDIDATE</span>
-            <span class="trace-node__fact">96f3e0b2</span>
+            <span class="trace-node__fact">3cd6ebe6</span>
           </li>
           <li class="trace-node is-active">
             <span class="trace-node__state">03 · VERIFY</span>
             <span class="trace-node__fact">sandbox verify</span>
           </li>
           <li class="trace-node">
-            <span class="trace-node__state">04 · DECIDE</span>
-            <span class="trace-node__fact">Human Gate</span>
+            <span class="trace-node__state">04 · DONE</span>
+            <span class="trace-node__fact">PASS = DONE</span>
           </li>
         </ol>
 
         <div class="trace-terminal">
-          <div><span class="t-cmd">forgepilot review approve WI-002</span></div>
-          <div class="t-stop">Not complete: latest PASS is at revision 26be05c9 but approval is at 96f3e0b2</div>
-          <div style="margin-top:6px;"><span class="t-cmd">forgepilot verify WI-002</span></div>
-          <div class="t-pass">EV-009 PASS at 96f3e0b2 (sandbox make verify)</div>
-          <div style="margin-top:6px;"><span class="t-cmd">forgepilot review approve WI-002</span></div>
-          <div class="t-pass">EV-010 APPROVED · WI-002 DONE</div>
+          <div><span class="t-cmd">forgepilot verify schema</span></div>
+          <div class="t-stop">worktree is not clean; commit or stash the following before verifying: ?? a.txt</div>
+          <div style="margin-top:6px;"><span class="t-cmd">forgepilot verify schema --snapshot</span></div>
+          <div class="t-pass">EV-001 PASS at 3cd6ebe6 (snapshot make verify)</div>
+          <div class="t-pass">schema DONE · sync-job READY</div>
         </div>
       </figure>
     </div>
@@ -950,10 +898,10 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
         </p>
         <div class="deepdive__callout">
           <strong>ForgePilot 將這三個角色強制解耦。</strong><br>
-          哪一件工作現在可以做，由依賴佇列客觀決定；代碼由 Agent 撰寫；但算不算完成，只能由隔離環境的真實 PASS 紀錄、以及人類在確切 Candidate 上的核准決定。Agent 的完成宣稱與 exit code 永遠不是通行證。
+          哪一件工作現在可以做，由依賴與 <code>next</code> 客觀決定；代碼由 Agent 撰寫；但算不算完成，只能由隔離環境對確切 Candidate 的真實 PASS 紀錄決定（Goal 要求 Approval 時再加上人類的核准）。Agent 的完成宣稱永遠不是通行證。
         </div>
         <p>
-          ForgePilot 的核心治理命令與 state 不依賴網路、也不架設遠端資料庫；Runner 所啟動的本機 coding CLI 則可能依其自身設定連線。一切治理事實以具備程序鎖保護的狀態檔落地保存。不留模糊空間，沒有任何僥倖。
+          ForgePilot 完全離線：不發出網路請求，也不架設遠端資料庫；除 Git 與你的 <code>make verify</code> 外不啟動任何程序，也不啟動 Agent。一切治理事實以具備程序鎖保護的狀態檔落地保存。不留模糊空間，沒有任何僥倖。
         </p>
       </div>
     </div>
@@ -974,7 +922,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
             <svg class="flow-node__icon" aria-hidden="true"><use href="#i-flag"/></svg>
             <span class="flow-node__name">Work Item · 目標佇列</span>
           </div>
-          <span class="flow-node__fact">無依賴衝突，唯一輪到的下一件</span>
+          <span class="flow-node__fact">next 給出唯一輪到的下一件</span>
         </div>
         <div class="flow-node">
           <div class="flow-node__left">
@@ -993,9 +941,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
         <div class="flow-node">
           <div class="flow-node__left">
             <svg class="flow-node__icon" aria-hidden="true"><use href="#i-ask"/></svg>
-            <span class="flow-node__name">Human Review & Gate</span>
+            <span class="flow-node__name">Gate · 人的決定</span>
           </div>
-          <span class="flow-node__fact">人工簽核與決策落地，解鎖下游</span>
+          <span class="flow-node__fact">未解除 Gate 擋住推進；PASS 即完成並解鎖下游</span>
         </div>
       </div>
     </div>
@@ -1007,7 +955,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-graph"/></svg> Real-world Graph Engineering</span>
       <h2 id="graph-title">從 ADR、Spec、Story 到 Work Item DAG 的驅動閉環</h2>
       <p>
-        這不是理論推導，而是我們在多輪 Dogfood 開發中<strong>真實驗證並落地</strong>的工程機制。前置規格由 PraxisBound 完整定稿，ForgePilot 接手將其構建為嚴密的可執行依賴圖（DAG），透過隔離驗證、Evidence 與明確 Human Review 邊界維持可追溯的推進順序。
+        這不是理論推導，而是我們在多輪 Dogfood 開發中<strong>真實驗證並落地</strong>的工程機制。前置規格由 PraxisBound 完整定稿，ForgePilot 以一份 Goal Plan 匯入為嚴密的可執行依賴圖（DAG），外部 Agent 依 <code>next</code> 推進，透過隔離驗證、Evidence 與明確的 Gate 邊界維持可追溯的推進順序。
       </p>
     </div>
 
@@ -1042,36 +990,20 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
         </div>
         <h3 class="pipeline-step__title">Work Item DAG 拓撲編排</h3>
         <p class="pipeline-step__desc">
-          ForgePilot 接手以 <code>work add --depends-on</code> 構建嚴密的有向無環圖。前置未滿足者為 PENDING，解鎖後推進為 READY，排除所有循環與死鎖。
+          <code>goal import</code> 讀入 Goal Plan，一次建立 Goal 與整張嚴密的有向無環圖。有環、未知依賴或不存在的 Story 路徑整份拒絕；前置未滿足者讀取時為 PENDING，解鎖後為 READY。
         </p>
       </article>
 
       <article class="pipeline-step">
         <div class="pipeline-step__head">
           <span class="pipeline-step__tag">STAGE 04</span>
-          <span class="pipeline-step__badge">ForgePilot Runner</span>
+          <span class="pipeline-step__badge">Agent + ForgePilot</span>
         </div>
-        <h3 class="pipeline-step__title">單點實作、驗證與核准邊界</h3>
+        <h3 class="pipeline-step__title">單點實作、驗證與完成</h3>
         <p class="pipeline-step__desc">
-          Agent 只做指定 focused checks；ForgePilot 對 immutable Candidate 執行 canonical verification。預設 WORK_ITEM policy 須經 Human Review 才解鎖下游；GOAL policy 以 VERIFIED 推進依賴，並在整個 Goal 通過驗證後自動完成。
+          Agent 實作並呼叫 <code>verify</code>；ForgePilot 對 immutable Candidate 執行 canonical verification，PASS 即 DONE 並於同一次交易解鎖下游，最後一件 DONE 時 Goal 自動完成。Goal 以 <code>require_approval</code> 匯入時，PASS 先進 REVIEW，人 <code>review approve</code> 後才 DONE。
         </p>
       </article>
-    </div>
-
-    <!-- Graph Engineering 架構視覺 -->
-    <div class="graph-visual-card">
-      <div class="graph-visual-card__top">
-        <div class="graph-visual-card__title">
-          <svg style="width:18px;height:18px;color:var(--color-accent);" aria-hidden="true"><use href="#i-image"/></svg>
-          <span>GRAPH ENGINEERING ARCHITECTURE VISUAL</span>
-        </div>
-        <span class="graph-visual-card__meta">PRECISION PIPELINE & DAG TOPOLOGY</span>
-      </div>
-
-      <div class="graph-image-slot">
-        <img src="images/graph-engineering.png" alt="Graph Engineering 流程：ADR、Spec 與 Story 規格匯入 Work Item 依賴圖，經隔離驗證取得 PASS Evidence，再經 Human Review 後解鎖下游工作。">
-      </div>
-      <p style="margin:var(--space-sm) 0 0; color:var(--color-muted); font-size:var(--text-sm);">圖示為預設 WORK_ITEM policy：PASS 不會直接解鎖下游；Human <code>review approve</code> 使 Work Item 成為 DONE。GOAL policy 則以 VERIFIED 推進依賴，並在整個 Goal 的 current verification 條件成立後自動完成。</p>
     </div>
 
     <!-- 實踐核心三大原則 -->
@@ -1079,21 +1011,21 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <div class="graph-principle">
         <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-loop"/></svg> 單點實作與隔離驗證</h4>
         <p>
-          每個節點被認領後，由 Agent 在全新 Session 中專注實作該 Story 的 AC，並只執行交接指定的 focused checks。完成後由 ForgePilot 在 Candidate 的隔離 checkout 執行 canonical <code>make verify</code>，才取得客觀 PASS Evidence。
+          每個節點被認領後，由 Agent 專注實作該 Story 的 AC。完成後呼叫 <code>verify</code>，由 ForgePilot 在 Candidate 的隔離 checkout 執行 canonical <code>make verify</code>，才取得客觀 PASS Evidence。同一時間只有一件工作佔著位置。
         </p>
       </div>
 
       <div class="graph-principle">
-        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-seal"/></svg> 預算邊界與一次收斂</h4>
+        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-seal"/></svg> 失敗修復與人的停損點</h4>
         <p>
-          驗證失敗才在明確的 Attempt 預算內進入 Repair 迴圈。預設 WORK_ITEM policy 的 PASS 先等 Human Review，只有 DONE 才推進下游；GOAL policy 的 VERIFIED 可推進依賴，全部 current verification 通過且沒有 OPEN Gate 時自動完成 Goal。一旦超出預算或遇到架構決策立即停下，絕不無界浪費資源。
+          驗證失敗時工作留在 RUNNING，<code>next</code> 轉為 <code>REPAIR</code>，讀 log 修好再驗證。PASS 即 DONE，下游同一次交易解鎖。遇到架構決策或規格歧義，Agent 開 Gate 並停下，等人決定，絕不自己選一個繼續。
         </p>
       </div>
 
       <div class="graph-principle">
         <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-flag"/></svg> 全域拓撲確定性驅動</h4>
         <p>
-          Agent 永遠不需要猜測「下一步做什麼」。ForgePilot 根據 Graph 拓撲與狀態機即時給出唯一合法的 <code>next</code> 行動，有條不紊地驅動任務鏈，直到所有目標達成。
+          Agent 永遠不需要猜測「下一步做什麼」。ForgePilot 根據 Graph 拓撲與狀態機即時給出唯一合法的 <code>next</code> 行動，外部 Agent 照著跑迴圈，直到所有節點完成、Goal 自動結束。
         </p>
       </div>
     </div>
@@ -1175,10 +1107,10 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
   <section class="start shell" aria-labelledby="start-title">
     <div class="start__layout">
       <div>
-        <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-flag"/></svg> Deterministic Onboarding</span>
+        <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-flag"/></svg> Quickstart</span>
         <h2 class="start__title" id="start-title">把事實交給下一個 session。</h2>
-        <p class="start__copy">正式導入從一個固定的 Source Revision 開始。Agent 先檢查並展示影響，取得授權後才建置並寫入受管理 Repository。</p>
-        <a class="button button--primary" href="release/onboarding.md">閱讀 onboarding 程序 <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+        <p class="start__copy">用 <code>go install</code> 安裝，在受管理的 repository 執行 <code>init</code>，再用 <code>goal import</code> 匯入一份 Goal Plan；之後外部 Agent 依 <code>next</code> 一件件做完。</p>
+        <a class="button button--primary" href="learn/handbook.html">閱讀使用手冊 <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
       </div>
 
       <div class="start-terminal">
@@ -1190,8 +1122,12 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
 <span style="color:var(--color-faint);">$</span> forgepilot init
 <span class="t-pass">Initialized ForgePilot in /your/project</span>
 
-<span style="color:var(--color-faint);">$</span> forgepilot status
-<span class="t-pass">Next action is explicit.</span></code></pre>
+<span style="color:var(--color-faint);">$</span> forgepilot goal import plans/billing-sync.json
+<span class="t-pass">Goal billing-sync imported: 2 nodes</span>
+
+<span style="color:var(--color-faint);">$</span> forgepilot next
+<span class="t-pass">Next: schema</span>
+<span class="t-pass">Action: forgepilot start schema</span></code></pre>
       </div>
     </div>
   </section>

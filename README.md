@@ -88,7 +88,7 @@ Goal 與整張依賴 DAG 由一份 Goal Plan（JSON）一次建立；節點 ID �
 }
 ```
 
-ID 以英數開頭，其後可含英數、`.`、`_`、`-`，至多 64 字元，且不含 `..`、不以 `.` 或 `.lock` 結尾；節點 ID 在整個 state 內唯一。計畫中任何一項驗證失敗（環、未知／自我／重複依賴、重複節點、不存在或逃逸的 Story 路徑、未知 JSON 欄位）整份都不寫入，錯誤訊息指出節點與欄位。節點順序是多件工作同時 READY 時 `next` 的推薦順序。完整的指令與計畫格式契約見 [docs/development-plan.md 的 CLI 契約](docs/development-plan.md#cli-契約)。
+ID 以英數開頭，其後可含英數、`.`、`_`、`-`，至多 64 字元，且不含 `..`、不以 `.` 或 `.lock` 結尾；節點 ID 在整個 state 內唯一。`story` 必須存在且位於 repository 的 `specs/stories/` 底下。計畫中任何一項驗證失敗（環、未知／自我／重複依賴、重複節點、不存在或不在 `specs/stories/` 底下的 Story 路徑、未知 JSON 欄位）整份都不寫入，錯誤訊息指出節點與欄位。節點順序是多件工作同時 READY 時 `next` 的推薦順序。完整的指令與計畫格式契約見 [docs/development-plan.md 的 CLI 契約](docs/development-plan.md#cli-契約)。
 
 需要補單時修改計畫檔再匯入同一個 Goal：只接受新增節點（可依賴既有節點），計畫必須列出每個既有節點，其 `story`、`depends_on` 與 Goal 的屬性必須與原本相同；完全相同的計畫是無變化的成功，COMPLETED 或 CANCELLED 的 Goal 一律拒絕。若新加入節點的 Story 尚未提交，`goal import` 會在成功輸出後提示：用 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再做 commit-mode verification。
 
