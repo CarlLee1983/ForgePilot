@@ -684,8 +684,8 @@ candidate; run forgepilot verify audit-log</span>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-book"/></svg>
-        <h3>PraxisBound</h3>
-        <p>定義工程契約。Story 的格式、acceptance criteria、coding standards、什麼樣才算驗證過，都寫在它那邊。它是規範，不是執行者。</p>
+        <h3>Warrant</h3>
+        <p>定義工程契約。Story 的格式（Goal、Out of Scope、Acceptance Criteria）、Story 要經人核准、完成要由 repo 自己的驗證命令證明，都寫在它那邊。它是規範，不是執行者。</p>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-bot"/></svg>
@@ -700,13 +700,13 @@ candidate; run forgepilot verify audit-log</span>
     </div>
 
     <div class="body-text" style="margin-top:40px">
-      <p><strong>前置規範與 Graph 形成。</strong> 這套流程在我們的實務中稱為 <em>Graph Engineering</em>：上游由 PraxisBound 完成嚴格的 <code>ADR → Spec → Story</code> 拆分，確定架構決定與 Acceptance Criteria。隨後 ForgePilot 接入：拆好的工單寫成一份 Goal Plan（JSON，節點 ID 即 Work Item ID、每個節點指向一份 Story 並宣告 <code>depends_on</code>），<code>goal import</code> 一次建立 Goal 與整張有向無環圖（DAG）。計畫有環、依賴未知或 Story 路徑不存在，整份都不寫入；依賴未滿足的工作讀取時就是 <code>PENDING</code>，消除任何猜測與順序混亂。</p>
+      <p><strong>前置規範與 Graph 形成。</strong> 這套流程在我們的實務中稱為 <em>Graph Engineering</em>：上游完成嚴格的 <code>ADR → Spec → Story</code> 拆分，以 ADR 確定架構決定，以經人核准的 Warrant Story 確定 Acceptance Criteria。隨後 ForgePilot 接入：拆好的工單寫成一份 Goal Plan（JSON，節點 ID 即 Work Item ID、每個節點指向一份 Story 並宣告 <code>depends_on</code>），<code>goal import</code> 一次建立 Goal 與整張有向無環圖（DAG）。計畫有環、依賴未知或 Story 路徑不存在，整份都不寫入；依賴未滿足的工作讀取時就是 <code>PENDING</code>，消除任何猜測與順序混亂。</p>
 
       <p><strong>agent 問下一件。</strong> 它跑 <code>next</code>，拿到的是依賴已經清乾淨、確實輪到的那一件，然後 <code>start</code> 認領。它不自己挑，也挑不到還卡著依賴的工作；同一時間只有一件工作能佔著位置。</p>
 
       <p><strong>寫程式，選擇 Candidate。</strong> 有兩條合法路徑：先 commit，再用 <code>verify</code> 驗證乾淨工作樹的 HEAD；或用 <code>verify &lt;work-id&gt; --snapshot</code> 把目前 working tree 固定成 immutable snapshot 後驗證。前者的工作樹只要還有未提交內容（含未追蹤檔案）就會拒絕，而且不寫 Evidence；那是無法驗證，不是驗證失敗。</p>
 
-      <p><strong>隔離驗證，PASS 即完成。</strong> Agent 實作後呼叫 <code>verify</code>：commit mode 在隔離 worktree 驗證 HEAD；snapshot mode 先把 working tree 固定成 immutable snapshot，再在隔離 checkout 執行 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 PraxisBound 的工程契約與 repo 決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS、FAIL 或 INTERRUPTED 連同 Candidate revision 記成 Evidence。預設的 Goal 在 PASS 的那一刻工作就是 DONE；FAIL 則留在 RUNNING，<code>next</code> 轉為 <code>REPAIR</code>，讀 log、修好再驗證。</p>
+      <p><strong>隔離驗證，PASS 即完成。</strong> Agent 實作後呼叫 <code>verify</code>：commit mode 在隔離 worktree 驗證 HEAD；snapshot mode 先把 working tree 固定成 immutable snapshot，再在隔離 checkout 執行 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 repo 自己決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS、FAIL 或 INTERRUPTED 連同 Candidate revision 記成 Evidence。預設的 Goal 在 PASS 的那一刻工作就是 DONE；FAIL 則留在 RUNNING，<code>next</code> 轉為 <code>REPAIR</code>，讀 log、修好再驗證。</p>
 
       <p><strong>需要人的時候才有人。</strong> 如果 Goal 要求 Approval，PASS 先進 REVIEW，你 <code>review approve</code>，工作才在那一刻進 DONE；Candidate 在這之間變了就會被拒絕，要重新驗證。不要求 Approval 的 Goal 沒有這一步，沒有任何指令能替工作直接寫入 DONE。</p>
 
@@ -827,7 +827,7 @@ candidate; run forgepilot verify audit-log</span>
       <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md">詞彙</a>
       <a href="https://github.com/CarlLee1983/ForgePilot">GitHub</a>
     </div>
-    <p>ForgePilot 是 AI 輔助軟體工程的被動 DAG 帳本，保存工作狀態、人工決策與驗證證據，讓工程工作能跨 agent 與 session 延續。它不取代 PraxisBound，也不啟動或取代你的 coding agent。</p>
+    <p>ForgePilot 是 AI 輔助軟體工程的被動 DAG 帳本，保存工作狀態、人工決策與驗證證據，讓工程工作能跨 agent 與 session 延續。它不取代 Warrant，也不啟動或取代你的 coding agent。</p>
     <p>文件與實際行為不符時以程式碼為準。每一條流程在 <code>integration_test.go</code> 都有一個以獨立 process 對真實 git repository 執行的測試。</p>
   </div>
 </footer>

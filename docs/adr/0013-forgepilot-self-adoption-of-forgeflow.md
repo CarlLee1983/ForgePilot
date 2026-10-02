@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0041
+---
+
 # ForgePilot 借用 PraxisBound（原 ForgeFlowV2）的 Story 格式，不交出 repository 的治理所有權
 
 ForgePilot 的定義是「story 由 PraxisBound 管理」，但 ForgePilot 自身的 `work add --story`

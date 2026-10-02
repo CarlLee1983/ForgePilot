@@ -14,15 +14,15 @@
 |---|---|
 | Human | Goal 拆分與 approval、架構／範圍／安全判斷、production operation、merge／release authorization |
 | ForgePilot | Goal、DAG、工作狀態、Gate、Evidence、Candidate identity、next-action 判定 |
-| PraxisBound | Story schema、acceptance criteria、工程流程、coding standards、測試與驗證契約、人工審查原則 |
-| Repository | 程式碼、tests、formatters、linters、type／architecture checks、canonical `make verify`，以及它自己固定的 toolchain |
+| Warrant | Story 格式（Goal、Out of Scope、Acceptance Criteria）、Story 的人工核准、以 repository 驗證命令證明完成的契約、不得改動驗收標準的原則 |
+| Repository | 程式碼、coding standards、tests、formatters、linters、type／architecture checks、canonical `make verify`，以及它自己固定的 toolchain |
 | Agent | 驅動迴圈：依 `next` 取得動作，讀 Story、實作、修復、呼叫 `verify`；需要人判斷時開 Gate |
 
-Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不讀程式碼後自行判斷正確性，也不替代 PraxisBound 的工程 lifecycle。
+Work Item 只保存 `story_ref`，不複製 Story requirements。ForgePilot 不讀程式碼後自行判斷正確性，也不替代 Warrant 的 Story 核准與完成契約。
 
 ### Graph Engineering：規格拆分至 DAG 驅動閉環
 
-1. **上游規格體系（PraxisBound）**：ADR 固化架構取捨，Spec 界定模組邊界與契約，再拆成各自帶 acceptance criteria 與驗證指令的 Story。
+1. **上游規格（ADR、Spec 與 Warrant Story）**：ADR 固化架構取捨，Spec 界定模組邊界與契約，再拆成各自經人核准、帶 Acceptance Criteria 的 Warrant Story。
 2. **下游 DAG 帳本（ForgePilot）**：
    - **Goal Plan 匯入**：`goal import <plan>` 一次建立 Goal 與所有節點，節點 ID 即 Work Item ID；再次匯入只接受新增節點。ForgePilot 只驗證合法 DAG 與 Story 路徑存在，拆得對不對是上游與人的責任。
    - **拓撲推進**：readiness 讀取時計算，`next` 給出唯一建議動作，同一 workspace 同時最多一件 RUNNING 或 VERIFYING。

@@ -22,4 +22,4 @@ ForgePilot 是被動的 DAG 帳本（[ADR-0040](../adr/0040-forgepilot-is-a-pass
 ## Out of scope
 
 - 重新設計產品或新增功能——這是使用課，不是開發課；後續工作來自 dogfood，開在 GitHub Issues
-- 教 Go、Git 或 PraxisBound 的 Story schema
+- 教 Go、Git 或 Warrant 的 Story 格式

@@ -288,7 +288,7 @@
 
 <div class="callout">
   <span class="label">ForgePilot 的位置</span>
-  <p>它不啟動 Agent、不產生 Story、不拆單、不用 LLM 判斷 PASS、不決定架構、不 merge 也不 release。迴圈由外部 Agent 跑；工程要求由 PraxisBound 定義，正確性由 repository 自己的 <code>make verify</code> 判斷，該由人決定的事由人決定。ForgePilot 只負責判定下一個合法動作、把事實記下來，並擋住不該推進的工作。</p>
+  <p>它不啟動 Agent、不產生 Story、不拆單、不用 LLM 判斷 PASS、不決定架構、不 merge 也不 release。迴圈由外部 Agent 跑；工程要求由經人核准的 Warrant Story 定義，正確性由 repository 自己的 <code>make verify</code> 判斷，該由人決定的事由人決定。ForgePilot 只負責判定下一個合法動作、把事實記下來，並擋住不該推進的工作。</p>
 </div>
 
 <h2>核心概念</h2>
@@ -305,7 +305,7 @@
   </div>
   <div class="term">
     <div class="name">Work Item</div>
-    <p class="body">Goal Plan 中的一個節點，以節點 ID 識別，參照一個 PraxisBound Story，有自己的狀態與依賴。它只保存 <code>story_ref</code>，不複製 Story 的需求。PENDING／READY 是讀取時依依賴計算的，不保存。</p>
+    <p class="body">Goal Plan 中的一個節點，以節點 ID 識別，參照一份 Warrant Story，有自己的狀態與依賴。它只保存 <code>story_ref</code>，不複製 Story 的需求。PENDING／READY 是讀取時依依賴計算的，不保存。</p>
     <p class="avoid"><b>不是</b>另一種獨立的 Task 物件，也不是 Story 的副本。</p>
   </div>
   <div class="term">
