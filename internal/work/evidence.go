@@ -438,18 +438,13 @@ func (s *State) BeginVerification(id, revision, worktreePath, logPath string, no
 // check starts. Later Evidence is derived from this Run value rather than from
 // live repository state.
 func (s *State) BeginCandidateVerification(id string, candidate Candidate, worktreePath, logPath string, now time.Time) error {
-	return s.BeginCandidateVerificationWithRuntime(id, candidate, worktreePath, logPath, nil, now)
+	return s.BeginCandidateVerificationWithRunID(id, candidate, worktreePath, logPath, s.NextVerificationRun(), now)
 }
 
-// BeginCandidateVerificationWithRuntime fixes the immutable Candidate and the
-// runtime metadata observed when the canonical check starts. The map is copied
-// so a caller cannot mutate persisted run metadata after this transition.
-func (s *State) BeginCandidateVerificationWithRuntime(id string, candidate Candidate, worktreePath, logPath string, runtime map[string]string, now time.Time) error {
-	return s.BeginCandidateVerificationWithRuntimeAndRunID(id, candidate, worktreePath, logPath, runtime, s.NextVerificationRun(), now)
-}
-
-// BeginCandidateVerificationWithRuntimeAndRunID atomically consumes expectedRunID.
-func (s *State) BeginCandidateVerificationWithRuntimeAndRunID(id string, candidate Candidate, worktreePath, logPath string, runtime map[string]string, expectedRunID string, now time.Time) error {
+// BeginCandidateVerificationWithRunID atomically consumes expectedRunID. The new
+// Run carries no runtime metadata: ForgePilot no longer resolves one, and the
+// field stays on the persisted shape only so older state keeps loading.
+func (s *State) BeginCandidateVerificationWithRunID(id string, candidate Candidate, worktreePath, logPath string, expectedRunID string, now time.Time) error {
 	if expectedRunID != s.NextVerificationRun() {
 		return errors.New("verification run ID changed; retry")
 	}
@@ -462,13 +457,10 @@ func (s *State) BeginCandidateVerificationWithRuntimeAndRunID(id string, candida
 	if err := candidate.validate(); err != nil {
 		return fmt.Errorf("a verification run requires a valid candidate: %w", err)
 	}
-	if err := validateRuntime(runtime); err != nil {
-		return fmt.Errorf("a verification run has invalid runtime: %w", err)
-	}
 	item := s.item(id)
 	item.Status = Verifying
 	item.CurrentRun = &Run{VerificationRunID: expectedRunID, Revision: candidate.Revision, CandidateKind: candidate.Kind, BaseRevision: candidate.BaseRevision,
-		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, Runtime: copyRuntime(runtime), StartedAt: now}
+		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, StartedAt: now}
 	item.UpdatedAt = now
 	s.NextVerificationRunID++
 	s.refreshDependents(id, nil, now)

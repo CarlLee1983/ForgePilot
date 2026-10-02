@@ -318,16 +318,17 @@ func TestLogPathSurvivesTheRunAndVanishesWithIt(t *testing.T) {
 	}
 }
 
-func TestVerificationRuntimeIsCopiedToFinishedAndInterruptedEvidence(t *testing.T) {
+func TestLegacyRunRuntimeIsCopiedToFinishedAndInterruptedEvidence(t *testing.T) {
 	state, now := verifiableState(t)
-	runtime := map[string]string{"go": "1.25.5", "node": "24.8.0"}
-	if err := state.BeginCandidateVerificationWithRuntime("WI-001", Candidate{Kind: CommitCandidate, Revision: "abc123"}, "/tmp/wt", "", runtime, now); err != nil {
+	// New runs carry no runtime metadata; an orphan left by an older ForgePilot
+	// can, and its Evidence must still preserve what it recorded.
+	if err := state.BeginCandidateVerification("WI-001", Candidate{Kind: CommitCandidate, Revision: "abc123"}, "/tmp/wt", "", now); err != nil {
 		t.Fatal(err)
 	}
-	runtime["go"] = "mutated-after-begin"
-	if got := state.WorkItems[0].CurrentRun.Runtime["go"]; got != "1.25.5" {
-		t.Fatalf("current run runtime = %q, want defensive copy", got)
+	if state.WorkItems[0].CurrentRun.Runtime != nil {
+		t.Fatalf("a new run carries runtime %v, want none", state.WorkItems[0].CurrentRun.Runtime)
 	}
+	state.WorkItems[0].CurrentRun.Runtime = map[string]string{"go": "1.25.5", "node": "24.8.0"}
 	run := state.WorkItems[0].CurrentRun
 	pass, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now)
 	if err != nil {
@@ -338,10 +339,11 @@ func TestVerificationRuntimeIsCopiedToFinishedAndInterruptedEvidence(t *testing.
 		t.Fatalf("PASS runtime = %q, want copied run metadata", got)
 	}
 
-	if err := state.BeginCandidateVerificationWithRuntime("WI-001", Candidate{Kind: CommitCandidate, Revision: "def456"}, "/tmp/wt", "", map[string]string{"go": "1.25.5"}, now); err != nil {
+	if err := state.BeginCandidateVerification("WI-001", Candidate{Kind: CommitCandidate, Revision: "def456"}, "/tmp/wt", "", now); err != nil {
 		t.Fatal(err)
 	}
 	run = state.WorkItems[0].CurrentRun
+	run.Runtime = map[string]string{"go": "1.25.5"}
 	interrupted, _, _, found, err := state.ReclaimRun("WI-001", "make verify", now)
 	if err != nil || !found {
 		t.Fatalf("ReclaimRun = %#v, %v, %v", interrupted, found, err)

@@ -204,7 +204,7 @@ func legacyExecutionDigestForTest(t *testing.T, domain string, value any) string
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
-func TestRuntimeMetadataIsDefensivelyCopiedBeforeSaving(t *testing.T) {
+func TestRuntimeMetadataOnAnInFlightRunSurvivesSaveAndLoad(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
 		t.Fatal(err)
@@ -217,7 +217,6 @@ func TestRuntimeMetadataIsDefensivelyCopiedBeforeSaving(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
-	runtime := map[string]string{"go": "1.25.5"}
 	if err := Update(root, func(state *work.State) error {
 		if err := state.AddGoal("g", "Goal", "", canonicalRoot, now); err != nil {
 			return err
@@ -229,10 +228,12 @@ func TestRuntimeMetadataIsDefensivelyCopiedBeforeSaving(t *testing.T) {
 		if err := state.Start(item.ID, now); err != nil {
 			return err
 		}
-		if err := state.BeginCandidateVerificationWithRuntime(item.ID, work.Candidate{Kind: work.CommitCandidate, Revision: "abc123"}, "/tmp/wt", "", runtime, now); err != nil {
+		if err := state.BeginCandidateVerification(item.ID, work.Candidate{Kind: work.CommitCandidate, Revision: "abc123"}, "/tmp/wt", "", now); err != nil {
 			return err
 		}
-		runtime["go"] = "mutated-before-save"
+		// A run begun by an older ForgePilot carries resolved runtime metadata.
+		// New runs no longer write it, but the persisted shape must still hold it.
+		state.WorkItems[0].CurrentRun.Runtime = map[string]string{"go": "1.25.5"}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -242,7 +243,7 @@ func TestRuntimeMetadataIsDefensivelyCopiedBeforeSaving(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := state.WorkItems[0].CurrentRun.Runtime["go"]; got != "1.25.5" {
-		t.Fatalf("saved runtime = %q, want defensive copy", got)
+		t.Fatalf("saved runtime = %q, want the metadata the run carried", got)
 	}
 }
 

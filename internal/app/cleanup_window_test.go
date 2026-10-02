@@ -184,8 +184,8 @@ func leaveAbandonedRun(t *testing.T, fixture verifyFixture) string {
 	}
 	now := time.Now().UTC()
 	if err := storage.Update(fixture.root, func(state *work.State) error {
-		return state.BeginCandidateVerificationWithRuntime(fixture.id,
-			work.Candidate{Kind: work.CommitCandidate, Revision: revision}, worktree, "", nil, now)
+		return state.BeginCandidateVerification(fixture.id,
+			work.Candidate{Kind: work.CommitCandidate, Revision: revision}, worktree, "", now)
 	}); err != nil {
 		t.Fatal(err)
 	}

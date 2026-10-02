@@ -104,7 +104,7 @@ type budgetKey struct{}
 // WithBudget attaches a cleanup allowance to ctx, so every managed process
 // started under it draws on that one allowance instead of opening a fresh one.
 // This is what keeps a cleanup path made of several commands — remove a
-// worktree, prune, close a runtime — to a single stated total rather than a
+// worktree, prune — to a single stated total rather than a
 // full grace per command.
 func WithBudget(ctx context.Context, budget *Budget) context.Context {
 	return context.WithValue(ctx, budgetKey{}, budget)

@@ -9,7 +9,7 @@ import (
 // A refusal must stay recognisable after being wrapped, and an ordinary
 // operational failure must never be mistaken for one. The whole point of the
 // distinction is that a refusal names a condition outside the code — a Gate, a
-// stopped Goal, an unsatisfiable Runtime Contract — while an operational
+// stopped Goal — while an operational
 // failure is ForgePilot's own problem. Treating either as a verification result
 // would invent a FAIL the repository never produced.
 func TestRefusalSurvivesWrappingAndDoesNotSwallowOtherFailures(t *testing.T) {

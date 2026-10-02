@@ -26,7 +26,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 ## 目前狀態
 
-**M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next、P1-004 Deterministic Runtime Resolution與 Goal-level Review Policy 已實作。**
+**M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next 與 Goal-level Review Policy 已實作。**
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
@@ -121,7 +121,7 @@ Agent 可以選擇驗證已提交 revision：
 forgepilot verify WI-001
 ```
 
-ForgePilot 會確認工作樹乾淨、解析目前的 HEAD，在 `.forgepilot/worktrees/` 底下建立該 commit 的 detached worktree，於其中解析 `mise.toml`、`.tool-versions`、language-specific version files 與支援的 ecosystem manifests，再用本機已安裝且符合宣告的 runtime 執行你的專案所定義的 `make verify`，然後保存 Evidence。通過時，`WORK_ITEM` policy 讓 `WI-001` 進入 REVIEW，`GOAL` policy 則進入 VERIFIED；失敗一律退回 RUNNING 讓 Agent 繼續修。repository 沒有支援的 runtime declaration 時維持原本 PATH；有宣告但找不到符合版本時直接拒絕，不記成 Verification FAIL。
+ForgePilot 會確認工作樹乾淨、解析目前的 HEAD，在 `.forgepilot/worktrees/` 底下建立該 commit 的 detached worktree，`verify` 以呼叫者環境執行你的專案所定義的 `make verify`，toolchain 由該檢查自行固定，ForgePilot 不解析 runtime 宣告，然後保存 Evidence。通過時，`WORK_ITEM` policy 讓 `WI-001` 進入 REVIEW，`GOAL` policy 則進入 VERIFIED；失敗一律退回 RUNNING 讓 Agent 繼續修。一次 verify 只為觸發它的那件工作留下 Evidence。
 
 因為 commit-mode 驗證跑在隔離的 checkout，**你的 `make verify` 必須能在全新 checkout 上執行**——需要 `.env`、本機已安裝依賴或既有 build cache 的專案會失敗。這與 CI 的要求相同。不帶 flag 的 `verify` 在工作樹不乾淨（含未追蹤檔案）時會拒絕執行，因為 commit 無法描述未提交的內容；要驗證那些內容則使用下方的 snapshot mode。
 

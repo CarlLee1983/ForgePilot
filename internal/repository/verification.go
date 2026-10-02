@@ -253,12 +253,16 @@ func Head(ctx context.Context, root string) (string, error) {
 // that is present but gitignored would make the main worktree look verifiable
 // while the committed revision has no canonical check at all.
 //
+// The check inherits the caller's environment: ForgePilot does not resolve a
+// toolchain for it (ADR-0040); the managed repository's own `make verify` pins
+// whatever it needs.
+//
 // `make -n verify` is a real external process — it reads the makefile the
 // project wrote and can do whatever that makefile does — so it is bounded by the
 // same stop signal and deadline as the check it precedes. A preflight that
 // cannot be interrupted is a blind spot in the middle of a cancellation path,
 // not a cheap probe.
-func EnsureCanonicalCheckInContext(ctx context.Context, checkout string, runtime RuntimeEnvironment) error {
+func EnsureCanonicalCheckInContext(ctx context.Context, checkout string) error {
 	found := false
 	for _, name := range []string{"GNUmakefile", "makefile", "Makefile"} {
 		if _, err := os.Stat(filepath.Join(checkout, name)); err == nil {
@@ -271,7 +275,6 @@ func EnsureCanonicalCheckInContext(ctx context.Context, checkout string, runtime
 	}
 	command := exec.Command("make", "-n", "verify")
 	command.Dir = checkout
-	command.Env = mergedEnvironment(runtime.environment)
 	var collected strings.Builder
 	run, err := process.Start(ctx, command, &collected)
 	if err != nil {
@@ -398,7 +401,7 @@ func mergedEnvironment(overrides []string) []string {
 // git runs one Git command under the caller's context, through the same managed
 // process path as every other external process ForgePilot starts. Before this it
 // used exec.Command and CombinedOutput with no context at all, so a cancellation
-// reached the Runner's `make verify` and its runtime probes but stopped dead at
+// reached `make verify` but stopped dead at
 // the repository boundary: a post-checkout hook or a clean/smudge filter that
 // blocks held a Ctrl-C for as long as it liked, and the `ctx.Err()` checks
 // placed before each call are start gates, which say nothing to a process that
@@ -451,10 +454,9 @@ func git(ctx context.Context, root string, environment []string, arguments ...st
 // forked a watcher has not stopped owning this worktree, and leaving that
 // watcher running would hand it to the next step.
 // See docs/adr/0020-worker-ownership-is-fail-closed.md.
-func RunCanonicalCheckInContext(ctx context.Context, directory string, runtime RuntimeEnvironment, log io.Writer) (process.Run, error) {
+func RunCanonicalCheckInContext(ctx context.Context, directory string, log io.Writer) (process.Run, error) {
 	command := exec.Command("make", "verify")
 	command.Dir = directory
-	command.Env = mergedEnvironment(runtime.environment)
 	run, err := process.Start(ctx, command, log)
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return run, fmt.Errorf("run `%s`: %w", CanonicalCommand, err)

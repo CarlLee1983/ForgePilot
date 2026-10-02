@@ -1,8 +1,14 @@
 package app
 
 import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
+	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
@@ -60,5 +66,55 @@ func TestVerificationRetryCommandPreservesCandidateMode(t *testing.T) {
 		BaseRevision: "1111111111111111111111111111111111111111", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	if got := VerificationRetryCommand("WI-001", snapshot); got != "forgepilot verify WI-001 --snapshot" {
 		t.Fatalf("snapshot retry = %q", got)
+	}
+}
+
+// A verification that finds the repository's canonical lock held is refused
+// before it creates a log, a checkout or a run, and before it executes the check.
+func TestConcurrentVerificationIsRefusedBeforeRunArtifacts(t *testing.T) {
+	counter := filepath.Join(t.TempDir(), "canonical-runs")
+	fixture := newVerifyFixture(t, "verify:\n\t@printf 'run\\n' >> "+counter+"\n")
+	statePath := filepath.Join(fixture.root, ".forgepilot", "state.json")
+	beforeState, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	lockResult := make(chan error, 1)
+	go func() {
+		lockResult <- storage.WithCanonicalVerificationLock(fixture.root, func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+	result, verifyErr := Verify(context.Background(), fixture.root, fixture.id, io.Discard, VerifyOptions{})
+	close(release)
+	if err := <-lockResult; err != nil {
+		t.Fatal(err)
+	}
+	if !isRefusal(verifyErr) {
+		t.Fatalf("Verify error = %v, want refusal", verifyErr)
+	}
+	if result.HasEvidence || result.VerificationRunID != "" {
+		t.Fatalf("refused result = %#v, want no new run", result)
+	}
+	afterState, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterState, beforeState) {
+		t.Fatal("repository-lock refusal changed state")
+	}
+	for _, artifacts := range []string{"logs", "worktrees"} {
+		if entries, err := os.ReadDir(filepath.Join(fixture.root, ".forgepilot", artifacts)); err == nil && len(entries) != 0 {
+			t.Fatalf("refusal left %s: %v", artifacts, entries)
+		}
+	}
+	if _, err := os.Stat(counter); !os.IsNotExist(err) {
+		t.Fatalf("canonical check ran or counter stat failed: %v", err)
 	}
 }
