@@ -23,7 +23,7 @@ func TestVerificationVerdictFingerprintIncludesTheWholeLatestVerificationEvidenc
 			Revision: "1111111111111111111111111111111111111111", CandidateKind: work.SnapshotCandidate,
 			BaseRevision:    "2222222222222222222222222222222222222222",
 			CandidateDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Command:         "make verify", Result: work.Pass, Runtime: map[string]string{"go": "1.25.5"},
+			Command:         "make verify", Result: work.Pass,
 		}},
 	}
 	before, err := verificationVerdictFingerprint(state, "WI-001")

@@ -3,14 +3,26 @@ package work
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 )
 
-const SchemaVersion = 18
+const SchemaVersion = 19
+
+// CheckSchemaVersion refuses any state version this binary does not read. Schema
+// 19 is a clean break with no upgrade path: older state is exported to Goal
+// Plans by tools/export-plan and re-imported, so the refusal says that rather
+// than suggesting an in-place upgrade. Callers check this before decoding the
+// state strictly, because an older state's fields are unknown to this shape.
+func CheckSchemaVersion(version int) error {
+	switch {
+	case version < SchemaVersion:
+		return fmt.Errorf("state uses schema version %d, which is no longer supported: schema %d replaced the earlier model without an upgrade path. Export its unfinished work to Goal Plans with `go run ./tools/export-plan --state <state.json> --out <dir>` from a ForgePilot source checkout, move the old .forgepilot aside, run `forgepilot init`, then `forgepilot goal import` each plan", version, SchemaVersion)
+	case version > SchemaVersion:
+		return fmt.Errorf("state uses schema version %d, which is newer than this binary supports (%d)", version, SchemaVersion)
+	}
+	return nil
+}
 
 type GoalStatus string
 
@@ -40,16 +52,6 @@ const (
 	CompletionVerified CompletionPolicy = "VERIFIED"
 )
 
-// LegacyGoalCompletion records the narrow compatibility fact asserted by a
-// schema-v11 HUMAN final-review Goal. It is intentionally separate from
-// GoalCompletionEvidence, which proves current Candidate verification.
-type LegacyGoalCompletion struct {
-	SourceSchemaVersion int              `json:"source_schema_version"`
-	CompletionPolicy    CompletionPolicy `json:"completion_policy"`
-}
-
-const LegacyHumanCompletionSourceSchemaVersion = 11
-
 type Status string
 
 const (
@@ -67,15 +69,13 @@ const (
 )
 
 type Goal struct {
-	ID               string                `json:"id"`
-	Title            string                `json:"title"`
-	Description      string                `json:"description"`
-	Repository       string                `json:"repository"`
-	Status           GoalStatus            `json:"status"`
-	ReviewPolicy     ReviewPolicy          `json:"review_policy"`
-	CompletionPolicy CompletionPolicy      `json:"completion_policy"`
-	LegacyCompletion *LegacyGoalCompletion `json:"legacy_completion,omitempty"`
-	Execution        *GoalExecution        `json:"execution,omitempty"`
+	ID               string           `json:"id"`
+	Title            string           `json:"title"`
+	Description      string           `json:"description"`
+	Repository       string           `json:"repository"`
+	Status           GoalStatus       `json:"status"`
+	ReviewPolicy     ReviewPolicy     `json:"review_policy"`
+	CompletionPolicy CompletionPolicy `json:"completion_policy"`
 	// Reason explains a Goal that was blocked or cancelled. Neither is worth
 	// recording without one: the status alone says a Goal stopped, not why.
 	Reason    string    `json:"reason"`
@@ -84,15 +84,14 @@ type Goal struct {
 }
 
 type Item struct {
-	ID          string    `json:"id"`
-	GoalID      string    `json:"goal_id"`
-	StoryRef    string    `json:"story_ref"`
-	ExternalRef string    `json:"external_ref"`
-	Status      Status    `json:"status"`
-	DependsOn   []string  `json:"depends_on"`
-	CurrentRun  *Run      `json:"current_run"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID         string    `json:"id"`
+	GoalID     string    `json:"goal_id"`
+	StoryRef   string    `json:"story_ref"`
+	Status     Status    `json:"status"`
+	DependsOn  []string  `json:"depends_on"`
+	CurrentRun *Run      `json:"current_run"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Run records a Verification Run that is currently in flight. It is cleared once
@@ -110,9 +109,8 @@ type Run struct {
 	// path re-derived from today's naming scheme. It is written when the run
 	// begins and vanishes with the rest of the Run once the run produces
 	// Evidence. See docs/adr/0012-verification-log-outside-state.md.
-	LogPath   string            `json:"log_path"`
-	Runtime   map[string]string `json:"runtime,omitempty"`
-	StartedAt time.Time         `json:"started_at"`
+	LogPath   string    `json:"log_path"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 func (run Run) Candidate() Candidate {
@@ -121,7 +119,6 @@ func (run Run) Candidate() Candidate {
 
 type State struct {
 	SchemaVersion                int                      `json:"schema_version"`
-	NextWorkID                   int                      `json:"next_work_id"`
 	NextEvidenceID               int                      `json:"next_evidence_id"`
 	NextGateID                   int                      `json:"next_gate_id"`
 	NextVerificationRunID        int                      `json:"next_verification_run_id"`
@@ -134,38 +131,7 @@ type State struct {
 }
 
 func NewState() State {
-	return State{SchemaVersion: SchemaVersion, NextWorkID: 1, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1}
-}
-
-func (s *State) AddGoal(id, title, description, repository string, now time.Time) error {
-	return s.AddGoalWithReviewPolicy(id, title, description, repository, ReviewPerWorkItem, now)
-}
-
-func (s *State) AddGoalWithReviewPolicy(id, title, description, repository string, policy ReviewPolicy, now time.Time) error {
-	return s.AddGoalWithPolicies(id, title, description, repository, policy, completionPolicyForReviewPolicy(policy), now)
-}
-
-// AddGoalWithPolicies creates a Goal with the completion policy implied by its
-// review policy. The explicit parameter keeps persisted/API callers honest, but
-// does not permit a HUMAN final-review boundary on a GOAL-policy Goal.
-func (s *State) AddGoalWithPolicies(id, title, description, repository string, policy ReviewPolicy, completion CompletionPolicy, now time.Time) error {
-	if id == "" || title == "" {
-		return errors.New("goal id and title are required")
-	}
-	if !validReviewPolicy(policy) {
-		return fmt.Errorf("invalid review policy %q", policy)
-	}
-	if !validCompletionPolicy(completion) {
-		return fmt.Errorf("invalid completion policy %q", completion)
-	}
-	if completion != completionPolicyForReviewPolicy(policy) {
-		return fmt.Errorf("%s review policy requires %s completion policy", policy, completionPolicyForReviewPolicy(policy))
-	}
-	if s.goal(id) != nil {
-		return fmt.Errorf("goal %q already exists", id)
-	}
-	s.Goals = append(s.Goals, Goal{ID: id, Title: title, Description: description, Repository: repository, Status: GoalActive, ReviewPolicy: policy, CompletionPolicy: completion, CreatedAt: now, UpdatedAt: now})
-	return nil
+	return State{SchemaVersion: SchemaVersion, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1}
 }
 
 func validReviewPolicy(policy ReviewPolicy) bool {
@@ -185,90 +151,9 @@ func completionPolicyForReviewPolicy(policy ReviewPolicy) CompletionPolicy {
 
 func usesGoalReview(policy ReviewPolicy) bool { return policy == ReviewPerGoal }
 
-func (s *State) AddWork(goalID, story string, dependencies []string, now time.Time) (Item, error) {
-	item, _, err := s.addWork(goalID, story, dependencies, "", nil, now)
-	return item, err
-}
-
-// AddWorkWithRepository applies current repository facts when deciding whether
-// VERIFIED dependencies make the new Work Item READY.
-func (s *State) AddWorkWithRepository(goalID, story string, dependencies []string, repository RepositoryState, now time.Time) (Item, error) {
-	item, _, err := s.addWork(goalID, story, dependencies, "", &repository, now)
-	return item, err
-}
-
-// AddWorkWithRepositoryAndExternalRef creates a Work Item with a Goal-scoped
-// idempotency key. Repeating the same request returns the original Item without
-// changing state; reusing a key for a different request is refused.
-func (s *State) AddWorkWithRepositoryAndExternalRef(goalID, story string, dependencies []string, externalRef string, repository RepositoryState, now time.Time) (Item, bool, error) {
-	if !validExternalRef(externalRef) {
-		return Item{}, false, errors.New("external reference must be valid UTF-8 without control characters, blank values, or surrounding whitespace")
-	}
-	return s.addWork(goalID, story, dependencies, externalRef, &repository, now)
-}
-
-func (s *State) addWork(goalID, story string, dependencies []string, externalRef string, repository *RepositoryState, now time.Time) (Item, bool, error) {
-	goal := s.goal(goalID)
-	if goal == nil {
-		return Item{}, false, fmt.Errorf("unknown goal %q", goalID)
-	}
-	if externalRef != "" {
-		if !validExternalRef(externalRef) {
-			return Item{}, false, errors.New("external reference must not be blank or have surrounding whitespace")
-		}
-		if existing := s.itemByExternalRef(goalID, externalRef); existing != nil {
-			if existing.StoryRef != story || !sameStrings(existing.DependsOn, dependencies) {
-				return Item{}, false, fmt.Errorf("external reference %q already belongs to work item %q with different story or dependencies", externalRef, existing.ID)
-			}
-			return *existing, false, nil
-		}
-	}
-	if goal.Status != GoalActive {
-		return Item{}, false, fmt.Errorf("goal %q is not active", goalID)
-	}
-	seen := map[string]bool{}
-	for _, dependency := range dependencies {
-		if seen[dependency] {
-			return Item{}, false, fmt.Errorf("duplicate dependency %q", dependency)
-		}
-		seen[dependency] = true
-		item := s.item(dependency)
-		if item == nil {
-			return Item{}, false, fmt.Errorf("unknown dependency %q", dependency)
-		}
-		if item.GoalID != goalID {
-			return Item{}, false, fmt.Errorf("dependency %q belongs to another goal", dependency)
-		}
-	}
-	if s.NextWorkID < 1 {
-		s.NextWorkID = 1
-	}
-	id := fmt.Sprintf("WI-%03d", s.NextWorkID)
-	s.NextWorkID++
-	status := Ready
-	if !s.dependenciesSatisfiedAt(dependencies, repository) {
-		status = Pending
-	}
-	created := Item{ID: id, GoalID: goalID, StoryRef: story, ExternalRef: externalRef, Status: status, DependsOn: append([]string(nil), dependencies...), CreatedAt: now, UpdatedAt: now}
-	s.WorkItems = append(s.WorkItems, created)
-	return created, true, nil
-}
-
-func validExternalRef(reference string) bool {
-	if strings.TrimSpace(reference) != reference || reference == "" || !utf8.ValidString(reference) {
-		return false
-	}
-	for _, rune := range reference {
-		if unicode.IsControl(rune) {
-			return false
-		}
-	}
-	return true
-}
-
 // sameStrings treats dependencies as a set: their persisted order is useful for
-// presentation, but reordering repeated --depends-on flags does not change the
-// Work Item request an idempotency key names.
+// presentation, but reordering a node's depends_on list does not change the DAG
+// a re-imported plan describes.
 func sameStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -404,14 +289,8 @@ func (s *State) start(id string, repository *RepositoryState, now time.Time) err
 }
 
 func (s State) Validate() error {
-	if s.SchemaVersion < SchemaVersion {
-		return fmt.Errorf("state uses schema version %d; run forgepilot migrate to upgrade it to %d", s.SchemaVersion, SchemaVersion)
-	}
-	if s.SchemaVersion > SchemaVersion {
-		return fmt.Errorf("state uses schema version %d, which is newer than this binary supports (%d)", s.SchemaVersion, SchemaVersion)
-	}
-	if s.NextWorkID < 1 {
-		return errors.New("next_work_id must be positive")
+	if err := CheckSchemaVersion(s.SchemaVersion); err != nil {
+		return err
 	}
 	if s.NextEvidenceID < 1 {
 		return errors.New("next_evidence_id must be positive")
@@ -427,7 +306,7 @@ func (s State) Validate() error {
 	}
 	goals := map[string]Goal{}
 	for _, goal := range s.Goals {
-		if goal.ID == "" || goal.Title == "" || goal.Repository == "" {
+		if !ValidPlanID(goal.ID) || goal.Title == "" || goal.Repository == "" {
 			return fmt.Errorf("invalid goal %q", goal.ID)
 		}
 		if !validReviewPolicy(goal.ReviewPolicy) {
@@ -438,14 +317,6 @@ func (s State) Validate() error {
 		}
 		if goal.CompletionPolicy != completionPolicyForReviewPolicy(goal.ReviewPolicy) {
 			return fmt.Errorf("goal %q uses %s review policy with incompatible %s completion policy", goal.ID, goal.ReviewPolicy, goal.CompletionPolicy)
-		}
-		if legacy := goal.LegacyCompletion; legacy != nil {
-			if goal.Status != GoalCompleted || goal.ReviewPolicy != ReviewPerGoal || goal.CompletionPolicy != CompletionVerified {
-				return fmt.Errorf("Goal %q has legacy completion provenance outside a completed GOAL/VERIFIED lifecycle", goal.ID)
-			}
-			if legacy.SourceSchemaVersion != LegacyHumanCompletionSourceSchemaVersion || legacy.CompletionPolicy != CompletionHuman {
-				return fmt.Errorf("Goal %q has invalid legacy completion provenance", goal.ID)
-			}
 		}
 		switch goal.Status {
 		case GoalActive, GoalCompleted:
@@ -465,31 +336,12 @@ func (s State) Validate() error {
 		goals[goal.ID] = goal
 	}
 	items := map[string]Item{}
-	externalRefs := map[string]map[string]string{}
-	maxID := 0
 	for _, item := range s.WorkItems {
-		if item.ID == "" || item.GoalID == "" || item.StoryRef == "" {
+		if !ValidPlanID(item.ID) || item.GoalID == "" || item.StoryRef == "" {
 			return fmt.Errorf("invalid work item %q", item.ID)
-		}
-		if _, ok := parseWorkID(item.ID); !ok {
-			return fmt.Errorf("invalid work item ID %q", item.ID)
 		}
 		if _, ok := goals[item.GoalID]; !ok {
 			return fmt.Errorf("work item %q has unknown goal", item.ID)
-		}
-		if item.ExternalRef != "" {
-			if !validExternalRef(item.ExternalRef) {
-				return fmt.Errorf("work item %q has invalid external reference", item.ID)
-			}
-			refs := externalRefs[item.GoalID]
-			if refs == nil {
-				refs = map[string]string{}
-				externalRefs[item.GoalID] = refs
-			}
-			if other, exists := refs[item.ExternalRef]; exists {
-				return fmt.Errorf("work items %q and %q share external reference %q in goal %q", other, item.ID, item.ExternalRef, item.GoalID)
-			}
-			refs[item.ExternalRef] = item.ID
 		}
 		goal := goals[item.GoalID]
 		if usesGoalReview(goal.ReviewPolicy) && (item.Status == Review || item.Status == Done) {
@@ -511,26 +363,17 @@ func (s State) Validate() error {
 			return fmt.Errorf("work item %q is %s but carries a current run", item.ID, item.Status)
 		}
 		if item.CurrentRun != nil {
-			if _, _, ok := parseVerificationRunID(item.CurrentRun.VerificationRunID); !ok {
+			if _, ok := parseVerificationRunID(item.CurrentRun.VerificationRunID); !ok {
 				return fmt.Errorf("work item %q has invalid verification run ID %q", item.ID, item.CurrentRun.VerificationRunID)
 			}
 			if err := item.CurrentRun.Candidate().validate(); err != nil {
 				return fmt.Errorf("work item %q has an invalid current run candidate: %w", item.ID, err)
-			}
-			if err := validateRuntime(item.CurrentRun.Runtime); err != nil {
-				return fmt.Errorf("work item %q has invalid current run runtime: %w", item.ID, err)
 			}
 		}
 		if _, exists := items[item.ID]; exists {
 			return fmt.Errorf("duplicate work item %q", item.ID)
 		}
 		items[item.ID] = item
-		if n := workNumber(item.ID); n > maxID {
-			maxID = n
-		}
-	}
-	if s.NextWorkID <= maxID {
-		return errors.New("next_work_id would reuse an ID")
 	}
 	for _, item := range s.WorkItems {
 		seen := map[string]bool{}
@@ -590,7 +433,7 @@ func (s State) Validate() error {
 			continue
 		}
 		if goal.CompletionPolicy == CompletionVerified {
-			if _, ok := s.GoalCompletionEvidenceFor(goal.ID); !ok && goal.LegacyCompletion == nil {
+			if _, ok := s.GoalCompletionEvidenceFor(goal.ID); !ok {
 				return fmt.Errorf("completed Goal %q uses VERIFIED completion without completion provenance", goal.ID)
 			}
 			continue
@@ -622,14 +465,6 @@ func (s State) Validate() error {
 			return err
 		}
 	}
-	for _, goal := range s.Goals {
-		if goal.Execution == nil {
-			continue
-		}
-		if err := validateGoalExecution(*goal.Execution, goal, items); err != nil {
-			return fmt.Errorf("goal %q has an invalid execution aggregate: %w", goal.ID, err)
-		}
-	}
 	return nil
 }
 
@@ -650,15 +485,6 @@ func (s *State) item(id string) *Item {
 	return nil
 }
 
-func (s *State) itemByExternalRef(goalID, externalRef string) *Item {
-	for i := range s.WorkItems {
-		if s.WorkItems[i].GoalID == goalID && s.WorkItems[i].ExternalRef == externalRef {
-			return &s.WorkItems[i]
-		}
-	}
-	return nil
-}
-
 // GoalByID returns one Goal without exposing State's storage representation to
 // a caller that only needs a read-only query result.
 func (s *State) GoalByID(id string) (Goal, bool) {
@@ -669,11 +495,6 @@ func (s *State) GoalByID(id string) (Goal, bool) {
 	return *goal, true
 }
 
-// HasWorkItemByExternalRef reports whether a Goal-scoped external reference is
-// already durable. It intentionally exposes no mutable Item internals.
-func (s *State) HasWorkItemByExternalRef(goalID, externalRef string) bool {
-	return s.itemByExternalRef(goalID, externalRef) != nil
-}
 func (s *State) dependenciesSatisfiedAt(ids []string, repository *RepositoryState) bool {
 	for _, id := range ids {
 		item := s.item(id)
@@ -713,13 +534,4 @@ func (s *State) satisfiesDependency(item Item) bool {
 	goal := s.goal(item.GoalID)
 	return goal != nil && goal.Status == GoalActive && usesGoalReview(goal.ReviewPolicy) &&
 		item.Status == Verified && s.OpenGateCount(item.ID) == 0
-}
-func workNumber(id string) int { n, _ := parseWorkID(id); return n }
-
-func parseWorkID(id string) (int, bool) {
-	if !strings.HasPrefix(id, "WI-") {
-		return 0, false
-	}
-	n, err := strconv.Atoi(strings.TrimPrefix(id, "WI-"))
-	return n, err == nil && n > 0 && fmt.Sprintf("WI-%03d", n) == id
 }

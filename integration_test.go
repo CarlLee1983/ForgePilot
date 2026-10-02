@@ -1,11 +1,9 @@
 package forgepilot_test
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -15,185 +13,6 @@ import (
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
-func TestCLIWorkflowAndFailures(t *testing.T) {
-	root, binary := fixture(t)
-	run := func(want string, arguments ...string) {
-		t.Helper()
-		output, err := command(binary, root, arguments...)
-		if err != nil {
-			t.Fatalf("%v: %v\n%s", arguments, err, output)
-		}
-		if !strings.Contains(output, want) {
-			t.Fatalf("%v output %q does not contain %q", arguments, output, want)
-		}
-	}
-	fail := func(arguments ...string) {
-		t.Helper()
-		if output, err := command(binary, root, arguments...); err == nil {
-			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
-		}
-	}
-	failWith := func(want string, arguments ...string) {
-		t.Helper()
-		output, err := command(binary, root, arguments...)
-		if err == nil {
-			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
-		}
-		if !strings.Contains(output, want) {
-			t.Fatalf("%v output %q does not contain %q", arguments, output, want)
-		}
-	}
-	run("Initialized", "init")
-	run("Initialized", "init")
-	run("Next: none", "status")
-	run("Goal queue created", "goal", "create", "--id", "queue", "--title", "Queue")
-	run("WI-001 READY", "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	run("WI-002 PENDING", "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
-	run("Next: WI-001", "next")
-	run("WI-001 RUNNING", "start", "WI-001")
-	run("WI-003 READY", "work", "add", "--goal", "queue", "--story", "specs/stories/c.md")
-	run("WI-003 RUNNING", "start", "WI-003")
-	run("WI-001 RUNNING", "status")
-	run("WI-003 RUNNING", "status")
-	run("WI-002 PENDING", "status")
-	run("Action: resume implementation", "next")
-	fail("goal", "create", "--id", "queue", "--title", "Again")
-	failWith("story reference must be located under specs/stories", "work", "add", "--goal", "queue", "--story", "specs/stories/missing.md")
-	fail("work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-404")
-	fail("start", "WI-001")
-	state, err := storage.Load(root)
-	if err != nil || len(state.WorkItems) != 3 {
-		t.Fatalf("state = %#v, err=%v", state, err)
-	}
-	if len(state.Goals) != 1 || state.Goals[0].ReviewPolicy != work.ReviewPerWorkItem {
-		t.Fatalf("default Goal review policy = %#v", state.Goals)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".forgepilot", "state.json"), []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	fail("status")
-}
-
-func TestJSONOutputCreatesIdempotentWorkAndListsItByGoal(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-
-	goalOutput, err := command(binary, root, "goal", "create", "--id", "batch", "--title", "Batch", "--review-policy", "goal", "--json")
-	if err != nil {
-		t.Fatalf("goal create --json: %v\n%s", err, goalOutput)
-	}
-	var createdGoal struct {
-		FormatVersion string `json:"format_version"`
-		Goal          struct {
-			ID               string `json:"id"`
-			Title            string `json:"title"`
-			Status           string `json:"status"`
-			ReviewPolicy     string `json:"review_policy"`
-			CompletionPolicy string `json:"completion_policy"`
-		} `json:"goal"`
-	}
-	if err := json.Unmarshal([]byte(goalOutput), &createdGoal); err != nil {
-		t.Fatalf("goal output is not one JSON document: %v\n%s", err, goalOutput)
-	}
-	if createdGoal.FormatVersion != "forgepilot.cli/v1" || createdGoal.Goal.ID != "batch" || createdGoal.Goal.Title != "Batch" || createdGoal.Goal.Status != "ACTIVE" || createdGoal.Goal.ReviewPolicy != "GOAL" || createdGoal.Goal.CompletionPolicy != "VERIFIED" {
-		t.Fatalf("goal JSON = %#v", createdGoal)
-	}
-
-	externalRef := "--PB-001"
-	arguments := []string{"work", "add", "--goal", "batch", "--story", "specs/stories/a.md", "--external-ref", externalRef, "--json"}
-	firstOutput, err := command(binary, root, arguments...)
-	if err != nil {
-		t.Fatalf("first work add --json: %v\n%s", err, firstOutput)
-	}
-	type workJSON struct {
-		ID          string   `json:"id"`
-		GoalID      string   `json:"goal_id"`
-		StoryRef    string   `json:"story_ref"`
-		ExternalRef *string  `json:"external_ref"`
-		Status      string   `json:"status"`
-		DependsOn   []string `json:"depends_on"`
-	}
-	var first struct {
-		FormatVersion string   `json:"format_version"`
-		Created       bool     `json:"created"`
-		WorkItem      workJSON `json:"work_item"`
-	}
-	if err := json.Unmarshal([]byte(firstOutput), &first); err != nil {
-		t.Fatalf("first work output is not one JSON document: %v\n%s", err, firstOutput)
-	}
-	if first.FormatVersion != "forgepilot.cli/v1" || !first.Created || first.WorkItem.ID != "WI-001" || first.WorkItem.GoalID != "batch" || first.WorkItem.StoryRef != "specs/stories/a.md" || first.WorkItem.ExternalRef == nil || *first.WorkItem.ExternalRef != externalRef || first.WorkItem.Status != "READY" || first.WorkItem.DependsOn == nil || len(first.WorkItem.DependsOn) != 0 {
-		t.Fatalf("first work JSON = %#v", first)
-	}
-
-	retryOutput, err := command(binary, root, arguments...)
-	if err != nil {
-		t.Fatalf("retry work add --json: %v\n%s", err, retryOutput)
-	}
-	var retry struct {
-		FormatVersion string   `json:"format_version"`
-		Created       bool     `json:"created"`
-		WorkItem      workJSON `json:"work_item"`
-	}
-	if err := json.Unmarshal([]byte(retryOutput), &retry); err != nil {
-		t.Fatalf("retry work output is not one JSON document: %v\n%s", err, retryOutput)
-	}
-	if retry.FormatVersion != "forgepilot.cli/v1" || retry.Created || retry.WorkItem.ID != first.WorkItem.ID {
-		t.Fatalf("retry work JSON = %#v", retry)
-	}
-	if output, err := command(binary, root, "work", "add", "--goal", "batch", "--story", "specs/stories/b.md", "--external-ref", externalRef, "--json"); err == nil || !strings.Contains(output, "external reference") {
-		t.Fatalf("conflicting retry = %q, %v", output, err)
-	}
-	if output, err := command(binary, root, "work", "add", "--goal", "batch", "--story", "specs/stories/b.md", "--depends-on", "WI-001", "--external-ref", "PB-002", "--json"); err != nil {
-		t.Fatalf("dependent work add --json: %v\n%s", err, output)
-	}
-	mustRun(t, binary, root, "work", "add", "--goal", "batch", "--story", "specs/stories/c.md")
-
-	statePath := filepath.Join(root, ".forgepilot", "state.json")
-	beforeList, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	listOutput, err := command(binary, root, "work", "list", "--goal", "batch", "--json")
-	if err != nil {
-		t.Fatalf("work list --json: %v\n%s", err, listOutput)
-	}
-	var list struct {
-		FormatVersion string `json:"format_version"`
-		Goal          struct {
-			ID string `json:"id"`
-		} `json:"goal"`
-		WorkItems []workJSON `json:"work_items"`
-	}
-	if err := json.Unmarshal([]byte(listOutput), &list); err != nil {
-		t.Fatalf("work list output is not one JSON document: %v\n%s", err, listOutput)
-	}
-	if list.FormatVersion != "forgepilot.cli/v1" || list.Goal.ID != "batch" || len(list.WorkItems) != 3 || list.WorkItems[0].ID != "WI-001" || list.WorkItems[0].ExternalRef == nil || *list.WorkItems[0].ExternalRef != externalRef || list.WorkItems[1].ID != "WI-002" || list.WorkItems[1].ExternalRef == nil || *list.WorkItems[1].ExternalRef != "PB-002" || !reflect.DeepEqual(list.WorkItems[1].DependsOn, []string{"WI-001"}) || list.WorkItems[2].ID != "WI-003" || list.WorkItems[2].ExternalRef != nil || list.WorkItems[2].DependsOn == nil {
-		t.Fatalf("work list JSON = %#v", list)
-	}
-	afterList, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(afterList) != string(beforeList) {
-		t.Fatal("work list changed state.json")
-	}
-	mustRun(t, binary, root, "goal", "block", "batch", "--reason", "interrupted batch")
-	inactiveRetryOutput, err := command(binary, root, arguments...)
-	if err != nil {
-		t.Fatalf("retry work add after goal became inactive: %v\n%s", err, inactiveRetryOutput)
-	}
-	var inactiveRetry struct {
-		Created  bool     `json:"created"`
-		WorkItem workJSON `json:"work_item"`
-	}
-	if err := json.Unmarshal([]byte(inactiveRetryOutput), &inactiveRetry); err != nil {
-		t.Fatalf("inactive retry output is not one JSON document: %v\n%s", err, inactiveRetryOutput)
-	}
-	if inactiveRetry.Created || inactiveRetry.WorkItem.ID != first.WorkItem.ID {
-		t.Fatalf("inactive retry JSON = %#v", inactiveRetry)
-	}
-}
-
 func TestNextRecommendsAgentWorkWithoutWritingState(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
@@ -201,8 +20,8 @@ func TestNextRecommendsAgentWorkWithoutWritingState(t *testing.T) {
 	if err != nil || !strings.Contains(empty, "No actionable work.") {
 		t.Fatalf("next in empty repository = %q, %v", empty, err)
 	}
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 
 	statePath := filepath.Join(root, ".forgepilot", "state.json")
 	before, err := os.ReadFile(statePath)
@@ -237,7 +56,7 @@ func TestNextRecommendsAgentWorkWithoutWritingState(t *testing.T) {
 	}
 
 	mustRun(t, binary, root, "start", "WI-001")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md")
 	output, err := command(binary, root, "next")
 	if err != nil {
 		t.Fatalf("next with RUNNING and READY = %q, %v", output, err)
@@ -252,8 +71,8 @@ func TestNextRecommendsAgentWorkWithoutWritingState(t *testing.T) {
 func TestNextReportsHumanOnlyBlockers(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "gate", "open", "--work", "WI-001", "--question", "Proceed?", "--option", "yes", "--option", "no")
 
 	output, err := command(binary, root, "next")
@@ -282,8 +101,8 @@ func TestNextReportsHumanOnlyBlockers(t *testing.T) {
 func TestNextRecommendsCommitReverificationWhenEvidenceIsStale(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, passingVerify)
 	mustRun(t, binary, root, "verify", "WI-001")
@@ -312,167 +131,6 @@ func TestNextRecommendsCommitReverificationWhenEvidenceIsStale(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatal("next changed state.json while checking stale commit")
-	}
-}
-
-func TestWorkAddWithoutStoriesDirectoryNamesTheMissingDirectory(t *testing.T) {
-	root, binary := fixtureWithoutStories(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	if err == nil {
-		t.Fatalf("unexpectedly succeeded: %s", output)
-	}
-	if !strings.Contains(output, "specs/stories does not exist") || !strings.Contains(output, "ForgePilot expects PraxisBound Story files") {
-		t.Fatalf("output %q does not name the missing directory", output)
-	}
-	if strings.Contains(output, "lstat") {
-		t.Fatalf("output %q leaks an internal call name", output)
-	}
-}
-
-func TestWorkAddHintsWhenTheStoryIsNotCommitted(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	if err != nil {
-		t.Fatalf("work add: %v: %s", err, output)
-	}
-	want := "WI-001 READY\nStory: specs/stories/a.md\n" +
-		"specs/stories/a.md is not committed yet;\n" +
-		"use `forgepilot verify WI-001 --snapshot` to verify the working tree,\n" +
-		"or commit it before commit-mode verification.\n"
-	if output != want {
-		t.Fatalf("work add output:\nwant:\n%s\ngot:\n%s", want, output)
-	}
-}
-
-func TestWorkAddDoesNotHintWhenTheStoryIsCommittedAndClean(t *testing.T) {
-	root, binary := fixture(t)
-	commitAll(t, root, "seed stories")
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	// An unrelated untracked file must not make the hint misfire: it names the
-	// story `work add` was just given, not the state of the worktree at large.
-	if err := os.WriteFile(filepath.Join(root, "unrelated.txt"), []byte("noise\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	if err != nil {
-		t.Fatalf("work add: %v: %s", err, output)
-	}
-	want := "WI-001 READY\nStory: specs/stories/a.md\n"
-	if output != want {
-		t.Fatalf("committed-story work add output:\nwant:\n%s\ngot:\n%s", want, output)
-	}
-}
-
-func TestWorkAddHintsWhenTheStoryIsCommittedButModified(t *testing.T) {
-	root, binary := fixture(t)
-	commitAll(t, root, "seed stories")
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
-	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "a.md"), []byte("# story\nmore\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	if err != nil {
-		t.Fatalf("work add: %v: %s", err, output)
-	}
-	wantHint := "specs/stories/a.md is not committed yet;\n" +
-		"use `forgepilot verify WI-002 --snapshot` to verify the working tree,\n" +
-		"or commit it before commit-mode verification.\n"
-	if !strings.Contains(output, wantHint) {
-		t.Fatalf("output %q does not contain the snapshot and commit-mode hint %q", output, wantHint)
-	}
-}
-
-func TestConcurrentAddsKeepBothItems(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	var group sync.WaitGroup
-	errors := make(chan error, 2)
-	for _, story := range []string{"specs/stories/a.md", "specs/stories/b.md"} {
-		group.Add(1)
-		go func(story string) {
-			defer group.Done()
-			if output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", story); err != nil {
-				errors <- &commandError{err, output}
-			}
-		}(story)
-	}
-	group.Wait()
-	close(errors)
-	for err := range errors {
-		t.Fatal(err)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.WorkItems) != 2 || state.WorkItems[0].ID == state.WorkItems[1].ID {
-		t.Fatalf("items = %#v", state.WorkItems)
-	}
-}
-
-func TestConcurrentAddsWithSameExternalReferenceCreateOneItem(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-
-	var group sync.WaitGroup
-	outputs := make(chan string, 2)
-	errors := make(chan error, 2)
-	arguments := []string{"work", "add", "--goal", "queue", "--story", "specs/stories/a.md", "--external-ref", "PB-001", "--json"}
-	for range 2 {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			output, err := command(binary, root, arguments...)
-			if err != nil {
-				errors <- &commandError{err, output}
-				return
-			}
-			outputs <- output
-		}()
-	}
-	group.Wait()
-	close(outputs)
-	close(errors)
-	for err := range errors {
-		t.Fatal(err)
-	}
-
-	createdCount := 0
-	for output := range outputs {
-		var result struct {
-			Created  bool `json:"created"`
-			WorkItem struct {
-				ID string `json:"id"`
-			} `json:"work_item"`
-		}
-		if err := json.Unmarshal([]byte(output), &result); err != nil {
-			t.Fatalf("concurrent output is not one JSON document: %v\n%s", err, output)
-		}
-		if result.WorkItem.ID != "WI-001" {
-			t.Fatalf("concurrent work item ID = %q, want WI-001", result.WorkItem.ID)
-		}
-		if result.Created {
-			createdCount++
-		}
-	}
-	if createdCount != 1 {
-		t.Fatalf("created count = %d, want 1", createdCount)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.WorkItems) != 1 || state.NextWorkID != 2 {
-		t.Fatalf("state after concurrent idempotent add = %#v", state)
 	}
 }
 
@@ -555,102 +213,6 @@ func mustRun(t *testing.T, binary, directory string, arguments ...string) {
 	}
 }
 
-// rewindToV1 rewrites a current snapshot into the shape M1 wrote: schema version
-// 1, with every field a later version introduced removed. It works on the
-// decoded document rather than the encoded text so that adding a field to the
-// current schema cannot silently turn this into a no-op.
-func rewindToV1(t *testing.T, path string) {
-	t.Helper()
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var snapshot map[string]any
-	if err := json.Unmarshal(contents, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	v1Fields := map[string]bool{"schema_version": true, "next_work_id": true, "goals": true, "work_items": true}
-	for field := range snapshot {
-		if !v1Fields[field] {
-			delete(snapshot, field)
-		}
-	}
-	snapshot["schema_version"] = 1
-	v1ItemFields := map[string]bool{"id": true, "goal_id": true, "story_ref": true, "status": true,
-		"depends_on": true, "created_at": true, "updated_at": true}
-	items, ok := snapshot["work_items"].([]any)
-	if !ok || len(items) == 0 {
-		t.Fatalf("snapshot has no work items to rewind: %s", contents)
-	}
-	for _, entry := range items {
-		item, ok := entry.(map[string]any)
-		if !ok {
-			t.Fatalf("unexpected work item shape in %s", contents)
-		}
-		for field := range item {
-			if !v1ItemFields[field] {
-				delete(item, field)
-			}
-		}
-	}
-	v1GoalFields := map[string]bool{"id": true, "title": true, "description": true, "repository": true,
-		"status": true, "reason": true, "created_at": true, "updated_at": true}
-	goals, ok := snapshot["goals"].([]any)
-	if !ok || len(goals) == 0 {
-		t.Fatalf("snapshot has no goals to rewind: %s", contents)
-	}
-	for _, entry := range goals {
-		goal, ok := entry.(map[string]any)
-		if !ok {
-			t.Fatalf("unexpected goal shape in %s", contents)
-		}
-		for field := range goal {
-			if !v1GoalFields[field] {
-				delete(goal, field)
-			}
-		}
-	}
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, encoded, 0600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestMigrateCommandUpgradesLegacyState(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-
-	statePath := filepath.Join(root, ".forgepilot", "state.json")
-	rewindToV1(t, statePath)
-
-	output, err := command(binary, root, "status")
-	if err == nil {
-		t.Fatalf("status read a v1 state: %s", output)
-	}
-	if !strings.Contains(output, "migrate") {
-		t.Fatalf("status error %q does not tell the user to migrate", output)
-	}
-
-	if output, err := command(binary, root, "migrate"); err != nil || !strings.Contains(output, "Migrated") {
-		t.Fatalf("migrate = %q, %v", output, err)
-	}
-	if output, err := command(binary, root, "status"); err != nil || !strings.Contains(output, "WI-001") {
-		t.Fatalf("status after migrate = %q, %v", output, err)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".forgepilot", "state.json.v1.bak")); err != nil {
-		t.Fatalf("no backup after migrate: %v", err)
-	}
-	output, err = command(binary, root, "migrate")
-	if err != nil || !strings.Contains(output, "already") {
-		t.Fatalf("second migrate = %q, %v", output, err)
-	}
-}
-
 // passingVerify and failingVerify are canonical checks for the managed project:
 // ForgePilot runs whatever `make verify` the repository defines, so the fixture
 // controls the outcome by controlling that target.
@@ -686,8 +248,8 @@ func commitAll(t *testing.T, root, message string) string {
 func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 
 	// A committed revision that defines no canonical check: that is not a
@@ -780,22 +342,9 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 func TestGoalReviewPolicyRunsAcrossWorkItemsToAutomaticCompletion(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", "bypass"); err == nil || !strings.Contains(output, "work-item or goal") {
-		t.Fatalf("invalid review policy = %q, %v", output, err)
-	}
-	for _, unsupported := range []string{"work_item", "WORK_ITEM", "GOAL"} {
-		if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", unsupported); err == nil || !strings.Contains(output, "work-item or goal") {
-			t.Fatalf("unsupported review policy %q = %q, %v", unsupported, output, err)
-		}
-	}
-	if output, err := command(binary, root, "goal", "create", "--id", "invalid", "--title", "Invalid", "--review-policy", "goal", "--completion-policy", "human"); err == nil || !strings.Contains(output, "unknown flag") {
-		t.Fatalf("removed completion-policy flag = %q, %v", output, err)
-	}
-	if output, err := command(binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal"); err != nil {
-		t.Fatalf("create GOAL-policy Goal = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	createGoal(t, binary, root, "queue", "Queue", false)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md", "WI-001")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, passingVerify)
 	output, err := command(binary, root, "verify", "WI-001")
@@ -872,8 +421,8 @@ func TestGoalReviewPolicyRunsAcrossWorkItemsToAutomaticCompletion(t *testing.T) 
 func TestGoalCompleteRefusesGoalPolicyGoalWhoseVerificationIsStale(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", false)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, passingVerify)
 	mustRun(t, binary, root, "verify", "WI-001")
@@ -896,9 +445,9 @@ func TestGoalCompleteRefusesGoalPolicyGoalWhoseVerificationIsStale(t *testing.T)
 func TestGoalReviewPolicyDoesNotStartWorkBehindAStaleVerifiedDependency(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	createGoal(t, binary, root, "queue", "Queue", false)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md", "WI-001")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, passingVerify)
 	mustRun(t, binary, root, "verify", "WI-001")
@@ -932,8 +481,8 @@ func TestGoalReviewPolicyDoesNotStartWorkBehindAStaleVerifiedDependency(t *testi
 func TestVerifyRunsOutsideTheMainWorktree(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forgepilot/\nprobe.txt\n"), 0644); err != nil {
@@ -965,8 +514,8 @@ func TestVerifyUsesTheCallersEnvironmentAndIgnoresRuntimeDeclarations(t *testing
 		t.Run(name, func(t *testing.T) {
 			root, binary := fixture(t)
 			mustRun(t, binary, root, "init")
-			mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-			mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+			createGoal(t, binary, root, "queue", "Queue", true)
+			addWork(t, binary, root, "queue", "specs/stories/a.md")
 			mustRun(t, binary, root, "start", "WI-001")
 			writeVerify(t, root, passingVerify) // baseline commit: a snapshot needs a HEAD to be based on
 			for file, contents := range map[string]string{".node-version": "99\n", ".go-version": "99.0.0\n"} {
@@ -1000,8 +549,11 @@ func TestVerifyUsesTheCallersEnvironmentAndIgnoresRuntimeDeclarations(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(state.Evidence) != 1 || state.Evidence[0].Result != work.Pass || state.Evidence[0].Runtime != nil {
-				t.Fatalf("evidence = %#v, want one PASS without runtime metadata", state.Evidence)
+			if len(state.Evidence) != 1 || state.Evidence[0].Result != work.Pass {
+				t.Fatalf("evidence = %#v, want one PASS", state.Evidence)
+			}
+			if raw, readErr := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json")); readErr != nil || strings.Contains(string(raw), `"runtime"`) {
+				t.Fatalf("state.json records runtime metadata (read error %v)", readErr)
 			}
 		})
 	}
@@ -1012,9 +564,9 @@ func TestVerifyUsesTheCallersEnvironmentAndIgnoresRuntimeDeclarations(t *testing
 func TestVerifyRecordsEvidenceOnlyForTheWorkItemItWasAskedAbout(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue", "--review-policy", "goal")
+	createGoal(t, binary, root, "queue", "Queue", false)
 	for _, story := range []string{"a", "b", "c"} {
-		mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/"+story+".md")
+		addWork(t, binary, root, "queue", "specs/stories/"+story+".md")
 	}
 	writeVerify(t, root, passingVerify)
 	for _, id := range []string{"WI-001", "WI-002"} {
@@ -1080,8 +632,8 @@ func TestSnapshotVerificationAndReviewUseTheSameWorkingTreeCandidate(t *testing.
 	}
 	base := commitAll(t, root, "snapshot base")
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 
 	// One path carries both staged and unstaged edits; the candidate must contain
@@ -1154,8 +706,8 @@ func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
 	root, binary := fixture(t)
 	writeVerify(t, root, passingVerify)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	mustRun(t, binary, root, "verify", "WI-001", "--snapshot")
 	mustRun(t, binary, root, "review", "request", "WI-001")
@@ -1332,8 +884,8 @@ func startVerification(t *testing.T, binary, root string, arguments ...string) *
 func TestSnapshotVerificationStaysSerializedAndReclaimsInterruptedCandidate(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, "verify:\n\t@echo snapshot started\n\t@sleep 30\n")
 	if err := os.WriteFile(filepath.Join(root, "dirty.txt"), []byte("candidate\n"), 0644); err != nil {
@@ -1384,9 +936,9 @@ func TestSnapshotVerificationStaysSerializedAndReclaimsInterruptedCandidate(t *t
 func TestVerifyIsVisibleSerializedAndRecoversFromInterruption(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	mustRun(t, binary, root, "start", "WI-002")
 	// Long enough that the test controls when the run ends, never the clock.
@@ -1480,8 +1032,8 @@ func TestVerifyIsVisibleSerializedAndRecoversFromInterruption(t *testing.T) {
 func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, passingVerify)
 
@@ -1547,8 +1099,8 @@ func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 func TestWorkItemStatusSummary(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 
 	// The no-argument status is deliberately a separate, stable view. This exact
 	// assertion includes the policy because status must make its review boundary explicit.
@@ -1643,8 +1195,8 @@ func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T
 func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, failingVerify)
 	mustRun(t, binary, root, "verify", "WI-001")
@@ -1657,7 +1209,7 @@ func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
 	}
 
 	writeVerify(t, root, passingVerify)
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md")
 	mustRun(t, binary, root, "start", "WI-002")
 	mustRun(t, binary, root, "verify", "WI-002")
 	mustRun(t, binary, root, "review", "request", "WI-002")
@@ -1696,8 +1248,8 @@ func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
 func TestVerifyRefusesWhenTheRevisionHasNoCanonicalCheck(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forgepilot/\nMakefile\n"), 0644); err != nil {
@@ -1737,8 +1289,8 @@ func TestVerifyRefusesWhenTheRevisionHasNoCanonicalCheck(t *testing.T) {
 func TestRefusedVerifyWritesOnlyTheRunThatEnded(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	slow := writeVerify(t, root, "verify:\n\t@sleep 30\n")
 
@@ -1804,8 +1356,8 @@ func TestRefusedVerifyWritesOnlyTheRunThatEnded(t *testing.T) {
 func TestInterruptedEvidenceHasNoExitCode(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, "verify:\n\t@sleep 30\n")
 
@@ -1839,8 +1391,8 @@ func TestInterruptedEvidenceHasNoExitCode(t *testing.T) {
 func TestInterruptedRunLeavesATruncatedLogThatReclaimReports(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	// Produces output before the kill lands, so the log can be checked for it.
 	writeVerify(t, root, "verify:\n\t@echo working before the cut\n\t@sleep 30\n")
@@ -1900,8 +1452,8 @@ func TestInterruptedRunLeavesATruncatedLogThatReclaimReports(t *testing.T) {
 func TestVerifyRecoversFromLeftoverWorktrees(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	revision := writeVerify(t, root, passingVerify)
 
@@ -1952,8 +1504,8 @@ func logPathFromOutput(t *testing.T, output string) string {
 func TestVerifyStreamsCanonicalOutputToALog(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 
 	writeVerify(t, root, passingVerify)
@@ -2014,8 +1566,8 @@ func TestVerifyStreamsCanonicalOutputToALog(t *testing.T) {
 func TestVerifyLogsAccumulateAcrossRepeatedRuns(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, passingVerify)
 
@@ -2048,8 +1600,8 @@ func TestVerifyLogsAccumulateAcrossRepeatedRuns(t *testing.T) {
 func TestVerifyAbortsWhenTheLogCannotBeCreated(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	writeVerify(t, root, passingVerify)
 
@@ -2077,9 +1629,9 @@ func TestVerifyAbortsWhenTheLogCannotBeCreated(t *testing.T) {
 func TestGateBlocksAdvancementWithoutChangingStatus(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md")
 	writeVerify(t, root, passingVerify)
 
 	// A Gate must offer a real choice, and must attach to work that exists.
@@ -2169,8 +1721,8 @@ func TestGateBlocksAdvancementWithoutChangingStatus(t *testing.T) {
 func TestConcurrentGateOpensKeepBothGates(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 
 	var group sync.WaitGroup
 	failures := make(chan error, 2)
@@ -2204,8 +1756,8 @@ func TestConcurrentGateOpensKeepBothGates(t *testing.T) {
 func TestGateResolveAndCancelAreFinalAndVisible(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
 		"--question", "Which cache?", "--option", "redis", "--option", "in-process")
 	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
@@ -2294,9 +1846,9 @@ func TestGateResolveAndCancelAreFinalAndVisible(t *testing.T) {
 func reviewable(t *testing.T, binary, root string) string {
 	t.Helper()
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md", "WI-001")
 	mustRun(t, binary, root, "start", "WI-001")
 	revision := writeVerify(t, root, passingVerify)
 	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
@@ -2420,8 +1972,7 @@ func TestReviewRecordsAJudgementBesideTheVerification(t *testing.T) {
 func TestApprovalCompletesWorkAndUnlocksTheQueue(t *testing.T) {
 	root, binary := fixture(t)
 	revision := reviewable(t, binary, root)
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/c.md",
-		"--depends-on", "WI-001", "--depends-on", "WI-002")
+	addWork(t, binary, root, "queue", "specs/stories/c.md", "WI-001", "WI-002")
 
 	output, err := command(binary, root, "review", "approve", "WI-001")
 	if err != nil || !strings.Contains(output, "WI-001 DONE") {
@@ -2559,11 +2110,13 @@ func TestGoalLifecycle(t *testing.T) {
 	for _, arguments := range [][]string{
 		{"start", "WI-002"},
 		{"verify", "WI-001"},
-		{"work", "add", "--goal", "queue", "--story", "specs/stories/c.md"},
 	} {
 		if output, err := command(binary, root, arguments...); err == nil {
 			t.Fatalf("%v ran under a blocked goal: %s", arguments, output)
 		}
+	}
+	if output, err := tryAddWork(t, binary, root, "queue", "specs/stories/c.md"); err == nil {
+		t.Fatalf("a plan was imported into a blocked goal: %s", output)
 	}
 	// Approving records the judgement but cannot reach DONE while the goal is
 	// paused, and says so.
@@ -2621,8 +2174,8 @@ func TestGoalLifecycle(t *testing.T) {
 func TestGoalCancelEndsAbandonedWork(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 
 	output, err := command(binary, root, "goal", "cancel", "queue", "--reason", "the customer withdrew the request")
 	if err != nil || !strings.Contains(output, "CANCELLED") {
@@ -2635,7 +2188,7 @@ func TestGoalCancelEndsAbandonedWork(t *testing.T) {
 	if !strings.Contains(output, "the customer withdrew the request") || !strings.Contains(output, "Next: none") {
 		t.Fatalf("status = %s", output)
 	}
-	if output, err := command(binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md"); err == nil {
+	if output, err := tryAddWork(t, binary, root, "queue", "specs/stories/b.md"); err == nil {
 		t.Fatalf("added work to a cancelled goal: %s", output)
 	}
 }
@@ -2645,8 +2198,8 @@ func TestGoalCancelEndsAbandonedWork(t *testing.T) {
 func TestBlockingMidRunStillRecordsTheEvidence(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	revision := writeVerify(t, root, "verify:\n\t@sleep 2\n")
 
@@ -2679,9 +2232,9 @@ func TestBlockingMidRunStillRecordsTheEvidence(t *testing.T) {
 func TestEndToEndQueueAdvances(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/b.md", "--depends-on", "WI-001")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
+	addWork(t, binary, root, "queue", "specs/stories/b.md", "WI-001")
 	writeVerify(t, root, passingVerify)
 
 	if output, err := command(binary, root, "next"); err != nil || !strings.Contains(output, "Next: WI-001") {
@@ -2756,8 +2309,8 @@ func headRevision(root string) (string, error) {
 func TestMissingIdentityNamesTheFlagThatFixesIt(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
 		"--question", "Which cache?", "--option", "redis", "--option", "in-process")
 	if output, err := exec.Command("git", "-C", root, "config", "--unset", "user.email").CombinedOutput(); err != nil {
@@ -2838,8 +2391,8 @@ func TestApprovalHeldByAGateSaysWhatIsLeftAfterItCloses(t *testing.T) {
 func TestOrphanIsReclaimedEvenWhenANewRunIsRefused(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
-	mustRun(t, binary, root, "goal", "create", "--id", "queue", "--title", "Queue")
-	mustRun(t, binary, root, "work", "add", "--goal", "queue", "--story", "specs/stories/a.md")
+	createGoal(t, binary, root, "queue", "Queue", true)
+	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	// Long enough that the test decides when the run ends, never the clock.
 	slow := writeVerify(t, root, "verify:\n\t@sleep 30\n")
@@ -3126,7 +2679,7 @@ func TestHelpDoesNotRequireInitializedState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s in an uninitialized repository: %v: %s", argument, err, output)
 		}
-		for _, want := range []string{"usage: forgepilot", "verify", "gate", "review", "--review-policy"} {
+		for _, want := range []string{"usage: forgepilot", "verify", "gate", "review", "goal import"} {
 			if !strings.Contains(output, want) {
 				t.Fatalf("%s output does not mention %q: %s", argument, want, output)
 			}

@@ -4,7 +4,7 @@
 
 MVP 的 M1–M5、P0-001–P0-003、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已依本文件實作。原始專案需求是產品邊界；標記為「待定」的事項不得視為已決定的功能。
 
-**定位收斂（[ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md)，進行中）：** Runtime resolution 與 Verification fan-out 已移除（持久化欄位保留至 schema 19 斷代）。 ForgePilot 是被動的 DAG 帳本。外部 Agent 驅動迴圈；ForgePilot 判定下一個合法動作、保存 Evidence、在完成的同一交易內解鎖下游。本文件中 Runner、supervised execution、Distribution／Bootstrap、Whole-DAG Story readiness、Goal-level Review Policy、External Work Reference 與各 schema 升版段落描述的是**收斂前仍存在的程式碼**，不是目標設計；實作收斂時逐段刪除或改寫。兩者衝突時以 ADR-0040 為準。
+**定位收斂（[ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md)，進行中）：** Runtime resolution 與 Verification fan-out 已移除。Schema 19 斷代已落地：`goal import` 取代 `goal create` 與 `work add`（Work Item ID 即計畫節點 ID），External Work Reference、`work list`、`migrate`、v1–v18 升版鏈、`Goal.Execution` 資料模型、`LegacyCompletion` 與 Evidence／Run 的 runtime 欄位已刪除，舊 state 改由 `tools/export-plan` 轉出 Goal Plan。ForgePilot 是被動的 DAG 帳本。外部 Agent 驅動迴圈；ForgePilot 判定下一個合法動作、保存 Evidence、在完成的同一交易內解鎖下游。本文件中 Runner、supervised execution、Distribution／Bootstrap、Whole-DAG Story readiness、Goal-level Review Policy 與各 schema 升版段落描述的是**收斂前的程式碼**（其中 External Work Reference 與 schema 升版鏈已不存在），不是目標設計；實作收斂時逐段刪除或改寫。兩者衝突時以 ADR-0040 為準。
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；Milestone 與驗收只在 [development-plan.md](development-plan.md) 維護。
 

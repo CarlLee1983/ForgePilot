@@ -47,7 +47,7 @@ func (s *State) GoalSummary(id string, repository RepositoryState) (GoalSummary,
 		summary.Completion = GoalDoneCompletion
 		if completion, ok := s.GoalCompletionEvidenceFor(id); ok {
 			summary.VerificationEvidenceIDs = append([]string(nil), completion.VerificationEvidenceIDs...)
-		} else if goal.LegacyCompletion == nil {
+		} else {
 			summary.VerificationEvidenceIDs = s.goalVerificationEvidenceIDs(id)
 		}
 		return summary, nil

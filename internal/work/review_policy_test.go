@@ -63,7 +63,6 @@ func TestGoalReviewPolicyDefaultsAndValidates(t *testing.T) {
 			invalid := state
 			invalid.Goals = append([]Goal(nil), state.Goals...)
 			invalid.WorkItems = []Item{{ID: "WI-001", GoalID: "goal", StoryRef: "specs/stories/one", Status: impossible.status}}
-			invalid.NextWorkID = 2
 			if err := invalid.Validate(); err == nil {
 				t.Fatalf("validated GOAL-policy work in %s", impossible.status)
 			}
@@ -80,7 +79,6 @@ func TestGoalReviewPolicyDefaultsAndValidates(t *testing.T) {
 	withReviewEvidence := state
 	withReviewEvidence.Goals = append([]Goal(nil), state.Goals...)
 	withReviewEvidence.WorkItems = []Item{{ID: "WI-001", GoalID: "goal", StoryRef: "specs/stories/one", Status: Verified}}
-	withReviewEvidence.NextWorkID = 2
 	withReviewEvidence.Evidence = []Evidence{{
 		ID: "EV-001", Type: ReviewEvidence, Repository: "/repo", WorkItemID: "WI-001", StoryRef: "specs/stories/one",
 		Revision: "1111111111111111111111111111111111111111", CandidateKind: CommitCandidate,
