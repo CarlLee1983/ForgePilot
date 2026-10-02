@@ -7,35 +7,6 @@ import (
 	"testing"
 )
 
-// An import decides only what the plan's own Goal needs. Another Goal holding
-// REVIEW work whose candidate cannot be resolved right now (here: HEAD points at
-// an unborn branch) must not stop an unrelated Goal from being imported.
-func TestGoalImportResolvesCandidateFactsOnlyForItsOwnGoal(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	writeVerify(t, root, passingVerify)
-	mustRun(t, binary, root, "goal", "import", writePlanText(t, planText("old", true, "a specs/stories/a.md")))
-	mustRun(t, binary, root, "start", "a")
-	mustRun(t, binary, root, "verify", "a")
-	mustRun(t, binary, root, "review", "request", "a")
-
-	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/unborn\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// The unrelated Goal imports.
-	if output, err := command(binary, root, "goal", "import", writePlanText(t, planText("new", false, "n specs/stories/b.md"))); err != nil {
-		t.Fatalf("importing an unrelated Goal while another Goal's candidate is unresolvable: %v: %s", err, output)
-	}
-	// Control: the Goal that does own the REVIEW work does need the fact, so the
-	// same condition refuses an import into it. Without this the test above would
-	// pass whether or not facts were scoped.
-	output, err := command(binary, root, "goal", "import", writePlanText(t, planText("old", true, "a specs/stories/a.md", "x specs/stories/c.md")))
-	if err == nil || !strings.Contains(output, "resolve current Candidate") {
-		t.Fatalf("import into the Goal with unresolvable REVIEW work = %q, %v; want the candidate refusal", output, err)
-	}
-}
-
 // Binary-level basics that an earlier workflow test covered and the migration to
 // goal import would otherwise have dropped: init is repeatable, a RUNNING work
 // item cannot be started again, and a damaged state file makes status fail

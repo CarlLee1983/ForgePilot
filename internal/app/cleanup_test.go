@@ -62,7 +62,7 @@ func newVerifyFixture(t *testing.T, makefile string) verifyFixture {
 			Goal:  work.PlanGoal{ID: "g", Title: "Goal", RequireApproval: true},
 			Nodes: []work.PlanNode{{ID: "a", Story: "specs/stories/a.md"}},
 		}
-		if _, err := state.ImportGoalPlan(plan, root, work.RepositoryState{}, now); err != nil {
+		if _, err := state.ImportGoalPlan(plan, root, now); err != nil {
 			return err
 		}
 		id = "a"

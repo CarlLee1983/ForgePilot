@@ -13,7 +13,6 @@ const (
 	NextActionReverify        NextActionKind = "REVERIFY"
 	NextActionStart           NextActionKind = "START"
 	NextActionReconcile       NextActionKind = "RECONCILE"
-	NextActionCompleteGoal    NextActionKind = "COMPLETE_GOAL"
 	NextActionGoalCompleted   NextActionKind = "GOAL_ALREADY_COMPLETED"
 	NextActionWaitHumanReview NextActionKind = "WAIT_HUMAN_REVIEW"
 	NextActionWaitGate        NextActionKind = "WAIT_GATE"
@@ -21,21 +20,21 @@ const (
 )
 
 // NextAction is the read-only answer to what an agent can legally do next.
-// Goal is populated for Goal-level completion or an already-completed Goal.
-// Item is empty for those actions and when Kind is NextActionNone.
+// Goal is populated for an already-completed Goal. Item is empty for that action
+// and when Kind is NextActionNone.
 type NextAction struct {
-	Item        Item
-	Goal        Goal
-	Kind        NextActionKind
-	Reason      string
-	EvidenceIDs []string
+	Item   Item
+	Goal   Goal
+	Kind   NextActionKind
+	Reason string
 }
 
 // ActionableNext selects one legal agent action without changing State. Running
-// and stale WORK_ITEM-policy review work take priority so a new agent session
-// does not abandon work already underway; work that can legally advance comes
-// next, sharing Next's ordering; GOAL-policy re-verification of history comes
-// last, because it is owed at the Goal boundary rather than owed right now.
+// and stale REVIEW work take priority so a new agent session does not abandon
+// work already underway; work that can legally advance comes next, sharing
+// Next's ordering. When nothing is left to do and every Goal has ended, the most
+// recently completed Goal is reported as completed, so an agent finishing the
+// last Work Item learns that the whole Goal is done.
 func (s *State) ActionableNext(repository RepositoryState) NextAction {
 	return s.actionableNext("", repository)
 }
@@ -53,26 +52,19 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 		return NextAction{Item: item, Kind: NextActionResume, Reason: "work is already in progress"}
 	}
 
-	// A stale REVIEW under WORK_ITEM policy keeps its priority: that Work Item is
-	// the thing a person is already waiting on, and nothing it gates can move
-	// until its Evidence names the current Candidate again.
+	// A stale REVIEW keeps its priority: that Work Item is the thing a person is
+	// already waiting on, and approval is refused until its Evidence names the
+	// current Candidate again.
 	for _, item := range items {
 		if item.Status == Review && s.staleReverifiable(item, repository) {
 			return NextAction{Item: item, Kind: NextActionReverify, Reason: "verified candidate is stale"}
 		}
 	}
 
-	// Work that can legally move forward is chosen before any history is
-	// re-verified. Under GOAL policy every new Candidate makes earlier VERIFIED
-	// work stale, so putting those re-verifications first would re-check the whole
-	// queue between consecutive Work Items. Deferring them relaxes nothing: the
-	// Goal completion boundary below still demands a current PASS for every Work
-	// Item, so each deferred re-verification is owed, not forgiven.
-	//
 	// START and RECONCILE share one creation-ordered pass rather than two loops,
 	// so which of them is recommended never depends on loop order.
 	for _, item := range items {
-		if (item.Status != Ready && item.Status != Pending) || !s.advanceable(item, &repository) {
+		if (item.Status != Ready && item.Status != Pending) || !s.advanceable(item) {
 			continue
 		}
 		if item.Status == Ready {
@@ -80,12 +72,6 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 		}
 		return NextAction{Item: item, Kind: NextActionReconcile,
 			Reason: "dependencies are satisfied but persisted readiness is still PENDING"}
-	}
-
-	for _, item := range items {
-		if item.Status == Verified && s.staleReverifiable(item, repository) {
-			return NextAction{Item: item, Kind: NextActionReverify, Reason: "verified candidate is stale"}
-		}
 	}
 
 	// No agent action is legal. Surface the oldest concrete human decision that
@@ -96,11 +82,6 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 			continue
 		}
 		goal := s.goal(item.GoalID)
-		if goal != nil && goal.Status == GoalCompleted {
-			// GOAL completion leaves its Work Items VERIFIED. They are immutable
-			// history, not a wait that should mask actionable work in another Goal.
-			continue
-		}
 		if goal != nil && goal.Status != GoalActive {
 			return NextAction{Item: item, Kind: NextActionWaitGoal, Reason: "goal " + goal.ID + " is " + string(goal.Status)}
 		}
@@ -117,26 +98,38 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 		}
 	}
 
-	for _, goal := range s.Goals {
-		if goalID != "" && goal.ID != goalID {
-			continue
-		}
-		summary, err := s.GoalSummary(goal.ID, repository)
-		if err != nil {
-			continue
-		}
-		switch summary.Completion {
-		case GoalReadyToComplete:
-			return NextAction{Goal: goal, Kind: NextActionCompleteGoal, EvidenceIDs: summary.VerificationEvidenceIDs, Reason: "all Work Items have fresh PASS Evidence and no open Gates"}
-		}
+	if goal, ok := s.completedGoalToReport(goalID); ok {
+		return NextAction{Goal: goal, Kind: NextActionGoalCompleted, Reason: "every Work Item is DONE"}
 	}
-
 	return NextAction{Kind: NextActionNone}
 }
 
-// staleReverifiable is the one test behind both re-verification passes. REVIEW
-// and VERIFIED differ in when they are offered, not in what qualifies them, and
-// one predicate keeps that difference visible as scheduling alone.
+// completedGoalToReport picks the Goal `next` announces as finished. A Goal is
+// announced only once no Goal in scope is still ACTIVE: while another Goal is in
+// progress, an old completed one is history, not news. Among completed Goals the
+// most recently updated wins, which is the one whose last item was just DONE.
+func (s *State) completedGoalToReport(goalID string) (Goal, bool) {
+	var latest *Goal
+	for i := range s.Goals {
+		goal := &s.Goals[i]
+		if goalID != "" && goal.ID != goalID {
+			continue
+		}
+		if goal.Status == GoalActive {
+			return Goal{}, false
+		}
+		if goal.Status == GoalCompleted && (latest == nil || !goal.UpdatedAt.Before(latest.UpdatedAt)) {
+			latest = goal
+		}
+	}
+	if latest == nil {
+		return Goal{}, false
+	}
+	return *latest, true
+}
+
+// staleReverifiable reports REVIEW work whose passing Evidence no longer names
+// the current Candidate and which may legally be verified again.
 func (s *State) staleReverifiable(item Item, repository RepositoryState) bool {
 	return s.Verifiable(item.ID) == nil &&
 		s.CandidateStale(item.ID, repository.Revision, repository.SnapshotDigest)

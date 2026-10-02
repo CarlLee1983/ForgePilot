@@ -33,7 +33,7 @@ func importGoal(args []string, cwd, root string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	result, err := app.ImportGoalPlan(context.Background(), root, plan, now)
+	result, err := app.ImportGoalPlan(root, plan, now)
 	if err != nil {
 		return err
 	}

@@ -7,71 +7,22 @@ import (
 	"time"
 )
 
-// BlockGoal stops a whole Goal when its direction turns out to be wrong. It is a
-// pause, not a discard: work that was RUNNING or in REVIEW keeps the status it
-// had, so unblocking restores nothing because nothing was taken away.
-//
-// What an inactive Goal stops is starting new work, verifying, and reaching
-// DONE. It does not stop recording something that already happened: a
-// Verification Run underway when the Goal is blocked still records its Evidence.
-func (s *State) BlockGoal(id, reason string, now time.Time) error {
-	goal, err := s.goalInStatus(id, "block", GoalActive)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(reason) == "" {
-		return errors.New("blocking a goal requires a reason")
-	}
-	goal.Status, goal.Reason, goal.UpdatedAt = GoalBlocked, reason, now
-	return nil
-}
-
-// UnblockGoal returns a paused Goal to ACTIVE, clearing the reason it was paused
-// for: that reason described a state the Goal is no longer in.
-func (s *State) UnblockGoal(id string, now time.Time) error {
-	return s.unblockGoal(id, nil, now)
-}
-
-func (s *State) UnblockGoalWithRepository(id string, repository RepositoryState, now time.Time) error {
-	return s.unblockGoal(id, &repository, now)
-}
-
-func (s *State) unblockGoal(id string, repository *RepositoryState, now time.Time) error {
-	goal, err := s.goalInStatus(id, "unblock", GoalBlocked)
-	if err != nil {
-		return err
-	}
-	goal.Status, goal.Reason, goal.UpdatedAt = GoalActive, "", now
-	s.refreshGoal(id, repository, now)
-	return nil
-}
-
-// CompleteGoal declares a WORK_ITEM-policy Goal finished once every Work Item
-// is DONE. GOAL-policy completion needs current repository facts, so callers
-// must use CompleteVerifiedGoal instead of bypassing Candidate freshness.
-func (s *State) CompleteGoal(id string, now time.Time) error {
-	goal, err := s.goalInStatus(id, "complete", GoalActive)
-	if err != nil {
-		return err
-	}
-	if goal.ReviewPolicy == ReviewPerGoal {
-		return fmt.Errorf("goal %q uses GOAL review policy and completes through current verification", id)
-	}
-	for _, item := range s.WorkItems {
-		if item.GoalID == id && item.Status != Done {
-			return fmt.Errorf("goal %q still has unfinished work: %s is %s", id, item.ID, item.Status)
-		}
-	}
-	goal.Status, goal.UpdatedAt = GoalCompleted, now
-	return nil
-}
-
 // CancelGoal ends a Goal that is no longer going to be done, so that abandoned
-// work has a terminus instead of sitting in ACTIVE forever.
+// work has a terminus instead of sitting in ACTIVE forever. A Goal has no other
+// way to stop: it completes by itself when its last Work Item is DONE
+// (completeGoalIfFinished), and blocking is a Gate, not a Goal status.
+//
+// What a cancelled Goal stops is starting new work, verifying, and reaching
+// DONE. It does not stop recording something that already happened: a
+// Verification Run underway when the Goal is cancelled still records its
+// Evidence.
 func (s *State) CancelGoal(id, reason string, now time.Time) error {
-	goal, err := s.goalInStatus(id, "cancel", GoalActive, GoalBlocked)
-	if err != nil {
-		return err
+	goal := s.goal(id)
+	if goal == nil {
+		return fmt.Errorf("unknown goal %q", id)
+	}
+	if goal.Status != GoalActive {
+		return fmt.Errorf("cannot cancel goal %q: it is %s", id, goal.Status)
 	}
 	if strings.TrimSpace(reason) == "" {
 		return errors.New("cancelling a goal requires a reason")
@@ -80,15 +31,20 @@ func (s *State) CancelGoal(id, reason string, now time.Time) error {
 	return nil
 }
 
-func (s *State) goalInStatus(id, action string, allowed ...GoalStatus) (*Goal, error) {
-	goal := s.goal(id)
-	if goal == nil {
-		return nil, fmt.Errorf("unknown goal %q", id)
+// completeGoalIfFinished completes an ACTIVE Goal whose Work Items are all DONE.
+// It is called from the transaction that made the last item DONE, so a reader
+// never sees every item DONE under a Goal that is still ACTIVE. Completion asks
+// nothing else: in particular it does not ask whether each PASS names the final
+// Candidate (ADR-0040).
+func (s *State) completeGoalIfFinished(goalID string, now time.Time) {
+	goal := s.goal(goalID)
+	if goal == nil || goal.Status != GoalActive {
+		return
 	}
-	for _, status := range allowed {
-		if goal.Status == status {
-			return goal, nil
+	for _, item := range s.WorkItems {
+		if item.GoalID == goalID && item.Status != Done {
+			return
 		}
 	}
-	return nil, fmt.Errorf("cannot %s goal %q: it is %s", action, id, goal.Status)
+	goal.Status, goal.UpdatedAt = GoalCompleted, now
 }

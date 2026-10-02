@@ -72,8 +72,8 @@ func TestGoalImportDrivesTheWholeLoopWithNodeIDsAsWorkItemIDs(t *testing.T) {
 	if strings.Join(ids, ",") != "sync-job,schema,report" {
 		t.Fatalf("work item IDs = %v, want the plan's node IDs in node order", ids)
 	}
-	if goal, _ := state.GoalByID("billing"); goal.ReviewPolicy != work.ReviewPerWorkItem {
-		t.Fatalf("require_approval true gave policy %s, want WORK_ITEM", goal.ReviewPolicy)
+	if goal, _ := state.GoalByID("billing"); !goal.RequireApproval {
+		t.Fatal("require_approval true was not persisted on the Goal")
 	}
 
 	output, err = command(binary, root, "next")
@@ -85,10 +85,9 @@ func TestGoalImportDrivesTheWholeLoopWithNodeIDsAsWorkItemIDs(t *testing.T) {
 		t.Fatalf("started a PENDING node: %s", output)
 	}
 	output, err = command(binary, root, "verify", "schema")
-	if err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
+	if err != nil || !strings.Contains(output, "PASS") || !strings.Contains(output, "schema REVIEW") {
+		t.Fatalf("verify = %q, %v; want a PASS that waits in REVIEW", output, err)
 	}
-	mustRun(t, binary, root, "review", "request", "schema")
 	output, err = command(binary, root, "review", "approve", "schema")
 	if err != nil || !strings.Contains(output, "schema DONE") {
 		t.Fatalf("approve = %q, %v", output, err)
@@ -131,7 +130,7 @@ func TestGoalImportOrderBreaksTiesBetweenReadyNodes(t *testing.T) {
 	}
 }
 
-func TestGoalImportMapsApprovalToReviewPolicy(t *testing.T) {
+func TestGoalImportPersistsTheApprovalRequirement(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
 	mustRun(t, binary, root, "goal", "import", writePlanText(t, planText("strict", true, "a specs/stories/a.md")))
@@ -141,8 +140,17 @@ func TestGoalImportMapsApprovalToReviewPolicy(t *testing.T) {
 		t.Fatalf("status: %v: %s", err, output)
 	}
 	strict, fast := strings.Index(output, "Goal strict"), strings.Index(output, "Goal fast")
-	if strict < 0 || fast < 0 || !strings.Contains(output[strict:fast], "Review policy: WORK_ITEM") || !strings.Contains(output[fast:], "Review policy: GOAL") {
-		t.Fatalf("status does not show WORK_ITEM for the approving Goal and GOAL for the other:\n%s", output)
+	if strict < 0 || fast < 0 || !strings.Contains(output[strict:fast], "Approval required: yes") || !strings.Contains(output[fast:], "Approval required: no") {
+		t.Fatalf("status does not show the Approval Requirement of each Goal:\n%s", output)
+	}
+	state, err := storage.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for goalID, want := range map[string]bool{"strict": true, "fast": false} {
+		if goal, ok := state.GoalByID(goalID); !ok || goal.RequireApproval != want {
+			t.Errorf("goal %s = %#v, %v; want require_approval=%t", goalID, goal, ok, want)
+		}
 	}
 }
 

@@ -32,7 +32,6 @@ func TestSnapshotCandidateFlowsFromVerificationThroughReview(t *testing.T) {
 	if got := evidence.Candidate(); got != candidate {
 		t.Fatalf("verification candidate = %#v, want %#v", got, candidate)
 	}
-	submitForReview(t, &state, "WI-001", now)
 
 	reviewCandidate, err := state.ResolveReviewCandidate("WI-001", evidence.ID, baseRevision, snapshotDigest)
 	if err != nil {
@@ -41,7 +40,7 @@ func TestSnapshotCandidateFlowsFromVerificationThroughReview(t *testing.T) {
 	if reviewCandidate != candidate {
 		t.Fatalf("review candidate = %#v, want verified %#v", reviewCandidate, candidate)
 	}
-	review, err := state.RecordCandidateReview("WI-001", reviewCandidate, Approved, "reviewer@example.com", "", "", now)
+	review, err := state.RecordCandidateReview("WI-001", reviewCandidate, Approved, "reviewer@example.com", "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +64,10 @@ func TestSnapshotReviewRefusesChangedWorkspace(t *testing.T) {
 	if _, err := state.RecordVerification("WI-001", snapshotRevision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
-	submitForReview(t, &state, "WI-001", now)
 	latest, _ := state.LatestVerification("WI-001")
 	_, err := state.ResolveReviewCandidate("WI-001", latest.ID, baseRevision,
 		"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	if err == nil || !strings.Contains(err.Error(), "workspace no longer matches verified snapshot") {
+	if err == nil || !strings.Contains(err.Error(), "verified snapshot is stale") {
 		t.Fatalf("ResolveReviewCandidate error = %v", err)
 	}
 	if len(state.Evidence) != 1 || state.WorkItemStatus("WI-001") != Review {

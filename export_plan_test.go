@@ -83,9 +83,9 @@ func TestExportedPlansAreAcceptedByGoalImport(t *testing.T) {
 			t.Errorf("%s is %s, want %s", id, statuses[id], status)
 		}
 	}
-	for goalID, policy := range map[string]work.ReviewPolicy{"billing": work.ReviewPerWorkItem, "fast.lane": work.ReviewPerGoal, "paused": work.ReviewPerWorkItem} {
-		if goal, ok := state.GoalByID(goalID); !ok || goal.ReviewPolicy != policy || goal.Status != work.GoalActive {
-			t.Errorf("goal %s = %#v, %v; want ACTIVE under %s", goalID, goal, ok, policy)
+	for goalID, requireApproval := range map[string]bool{"billing": true, "fast.lane": false, "paused": true} {
+		if goal, ok := state.GoalByID(goalID); !ok || goal.RequireApproval != requireApproval || goal.Status != work.GoalActive {
+			t.Errorf("goal %s = %#v, %v; want ACTIVE with require_approval=%t", goalID, goal, ok, requireApproval)
 		}
 	}
 	if output, err := command(binary, root, "next"); err != nil || !strings.Contains(output, "Next: WI-002") {

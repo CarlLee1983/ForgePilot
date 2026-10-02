@@ -7,7 +7,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/CarlLee1983/ForgePilot/internal/app"
 	"github.com/CarlLee1983/ForgePilot/internal/repository"
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
@@ -67,11 +66,7 @@ func resolveGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := app.CandidateFacts(context.Background(), state, root)
-		if factsErr != nil {
-			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
-		}
-		return state.ResolveGateWithRepository(id, values.one("option"), values.one("note"), decidedBy, repositoryState, now())
+		return state.ResolveGate(id, values.one("option"), values.one("note"), decidedBy, now())
 	}); err != nil {
 		return err
 	}
@@ -96,11 +91,7 @@ func cancelGate(args []string, root string, output io.Writer) error {
 		return err
 	}
 	if err := storage.Update(root, func(state *work.State) error {
-		repositoryState, factsErr := app.CandidateFacts(context.Background(), state, root)
-		if factsErr != nil {
-			return fmt.Errorf("resolve current Candidate before closing Gate: %w", factsErr)
-		}
-		return state.CancelGateWithRepository(id, values.one("reason"), decidedBy, repositoryState, now())
+		return state.CancelGate(id, values.one("reason"), decidedBy, now())
 	}); err != nil {
 		return err
 	}

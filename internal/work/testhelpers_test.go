@@ -13,38 +13,34 @@ import (
 // ImportGoalPlan. IDs are WI-001, WI-002, ... in creation order, which is the
 // naming the older tests were written against.
 
+// AddGoal records a Goal without an Approval Requirement: a PASS completes its
+// work.
 func (s *State) AddGoal(id, title, description, repository string, now time.Time) error {
-	return s.AddGoalWithReviewPolicy(id, title, description, repository, ReviewPerWorkItem, now)
+	return s.addGoal(id, title, description, repository, false, now)
 }
 
-func (s *State) AddGoalWithReviewPolicy(id, title, description, repository string, policy ReviewPolicy, now time.Time) error {
-	return s.AddGoalWithPolicies(id, title, description, repository, policy, completionPolicyForReviewPolicy(policy), now)
+// AddGoalRequiringApproval records a Goal whose work goes through REVIEW.
+func (s *State) AddGoalRequiringApproval(id, title, description, repository string, now time.Time) error {
+	return s.addGoal(id, title, description, repository, true, now)
 }
 
-func (s *State) AddGoalWithPolicies(id, title, description, repository string, policy ReviewPolicy, completion CompletionPolicy, now time.Time) error {
+func (s *State) addGoal(id, title, description, repository string, requireApproval bool, now time.Time) error {
 	if id == "" || title == "" {
 		return errors.New("goal id and title are required")
-	}
-	if !validReviewPolicy(policy) || !validCompletionPolicy(completion) || completion != completionPolicyForReviewPolicy(policy) {
-		return fmt.Errorf("invalid policy %q / %q", policy, completion)
 	}
 	if s.goal(id) != nil {
 		return fmt.Errorf("goal %q already exists", id)
 	}
-	s.Goals = append(s.Goals, Goal{ID: id, Title: title, Description: description, Repository: repository, Status: GoalActive, ReviewPolicy: policy, CompletionPolicy: completion, CreatedAt: now, UpdatedAt: now})
+	s.Goals = append(s.Goals, Goal{ID: id, Title: title, Description: description, Repository: repository, RequireApproval: requireApproval, Status: GoalActive, CreatedAt: now, UpdatedAt: now})
 	return nil
 }
 
 func (s *State) AddWork(goalID, story string, dependencies []string, now time.Time) (Item, error) {
-	return s.AddWorkWithRepository(goalID, story, dependencies, RepositoryState{}, now)
-}
-
-func (s *State) AddWorkWithRepository(goalID, story string, dependencies []string, repository RepositoryState, now time.Time) (Item, error) {
 	goal := s.goal(goalID)
 	if goal == nil {
 		return Item{}, fmt.Errorf("unknown goal %q", goalID)
 	}
-	plan := GoalPlan{Goal: PlanGoal{ID: goal.ID, Title: goal.Title, Description: goal.Description, RequireApproval: goal.ReviewPolicy == ReviewPerWorkItem}}
+	plan := GoalPlan{Goal: PlanGoal{ID: goal.ID, Title: goal.Title, Description: goal.Description, RequireApproval: goal.RequireApproval}}
 	for _, item := range s.WorkItems {
 		if item.GoalID == goalID {
 			plan.Nodes = append(plan.Nodes, PlanNode{ID: item.ID, Story: item.StoryRef, DependsOn: item.DependsOn})
@@ -52,7 +48,7 @@ func (s *State) AddWorkWithRepository(goalID, story string, dependencies []strin
 	}
 	id := fmt.Sprintf("WI-%03d", len(s.WorkItems)+1)
 	plan.Nodes = append(plan.Nodes, PlanNode{ID: id, Story: story, DependsOn: dependencies})
-	result, err := s.ImportGoalPlan(plan, goal.Repository, repository, now)
+	result, err := s.ImportGoalPlan(plan, goal.Repository, now)
 	if err != nil {
 		return Item{}, err
 	}

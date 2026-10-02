@@ -86,19 +86,19 @@ func TestNextReportsHumanOnlyBlockers(t *testing.T) {
 	}
 
 	mustRun(t, binary, root, "gate", "cancel", "GATE-001", "--reason", "not needed", "--by", "human@example.com")
-	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "waiting for direction")
+	mustRun(t, binary, root, "goal", "cancel", "queue", "--reason", "waiting for direction")
 	output, err = command(binary, root, "next")
 	if err != nil {
-		t.Fatalf("next with blocked goal = %q, %v", output, err)
+		t.Fatalf("next with cancelled goal = %q, %v", output, err)
 	}
-	for _, want := range []string{"No agent-actionable work.", "Waiting: WI-001", "Reason: goal queue is BLOCKED"} {
+	for _, want := range []string{"No agent-actionable work.", "Waiting: WI-001", "Reason: goal queue is CANCELLED"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("next output %q does not contain %q", output, want)
 		}
 	}
 }
 
-func TestNextRecommendsCommitReverificationWhenEvidenceIsStale(t *testing.T) {
+func TestNextRecommendsReverificationOfAStaleReviewWhenHeadMoves(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
 	createGoal(t, binary, root, "queue", "Queue", true)
@@ -120,7 +120,7 @@ func TestNextRecommendsCommitReverificationWhenEvidenceIsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("next with stale commit = %q, %v", output, err)
 	}
-	for _, want := range []string{"Next: WI-001", "Action: resume implementation\n", "Reason: work is already in progress"} {
+	for _, want := range []string{"Next: WI-001", "State: REVIEW", "Action: forgepilot verify WI-001\n", "Reason: verified candidate is stale"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("next output %q does not contain %q", output, want)
 		}
@@ -284,8 +284,8 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	if got := state.Evidence[0]; got.Result != work.Pass || got.Revision != revision || got.ExitCode == nil || *got.ExitCode != 0 {
 		t.Fatalf("evidence = %#v, want PASS at %s", got, revision)
 	}
-	if state.WorkItems[0].Status != work.Running {
-		t.Fatalf("status after PASS = %s, want RUNNING", state.WorkItems[0].Status)
+	if state.WorkItems[0].Status != work.Review {
+		t.Fatalf("status after PASS = %s, want REVIEW (the Goal requires approval)", state.WorkItems[0].Status)
 	}
 
 	// A dirty worktree cannot be verified: the commit would not describe it.
@@ -336,141 +336,6 @@ func TestVerifyRecordsEvidenceAgainstTheCommittedRevision(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(filepath.Join(root, ".forgepilot", "worktrees")); err == nil && len(entries) != 0 {
 		t.Fatalf("verification worktrees were left behind: %v", entries)
-	}
-}
-
-func TestGoalReviewPolicyRunsAcrossWorkItemsToAutomaticCompletion(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	createGoal(t, binary, root, "queue", "Queue", false)
-	addWork(t, binary, root, "queue", "specs/stories/a.md")
-	addWork(t, binary, root, "queue", "specs/stories/b.md", "WI-001")
-	mustRun(t, binary, root, "start", "WI-001")
-	writeVerify(t, root, passingVerify)
-	output, err := command(binary, root, "verify", "WI-001")
-	if err != nil {
-		t.Fatalf("verify first = %q, %v", output, err)
-	}
-	for _, want := range []string{"WI-001 VERIFIED", "EV-001 PASS"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("first verify output %q does not contain %q", output, want)
-		}
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.WorkItemStatus("WI-002") != work.Ready {
-		t.Fatalf("WI-002 = %s, want READY", state.WorkItemStatus("WI-002"))
-	}
-	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
-	if err != nil {
-		t.Fatalf("Work Item summary = %q, %v", output, err)
-	}
-	for _, want := range []string{"Review policy: GOAL", "Review: not applicable (GOAL policy)", "Completion: verified for goal completion"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("Work Item summary %q does not contain %q", output, want)
-		}
-	}
-	output, err = command(binary, root, "next")
-	if err != nil || !strings.Contains(output, "Action: forgepilot start WI-002") {
-		t.Fatalf("next after first VERIFIED = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "start", "WI-002")
-	output, err = command(binary, root, "verify", "WI-002")
-	if err != nil || !strings.Contains(output, "WI-002 VERIFIED") {
-		t.Fatalf("verify second = %q, %v", output, err)
-	}
-	output, err = command(binary, root, "status")
-	if err != nil {
-		t.Fatalf("status = %q, %v", output, err)
-	}
-	for _, want := range []string{"Review policy: GOAL", "Completion policy: VERIFIED", "Goal completion: ready for automatic completion", "WI-001 VERIFIED", "WI-002 VERIFIED"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("status %q does not contain %q", output, want)
-		}
-	}
-	output, err = command(binary, root, "next")
-	if err != nil {
-		t.Fatalf("next at completion boundary = %q, %v", output, err)
-	}
-	for _, want := range []string{"Goal queue is ready for automatic completion", "Action: forgepilot goal complete queue"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("next output %q does not contain %q", output, want)
-		}
-	}
-	if output, err = command(binary, root, "review", "approve", "WI-001"); err == nil || !strings.Contains(output, "GOAL review policy") {
-		t.Fatalf("Work Item review under GOAL policy = %q, %v", output, err)
-	}
-	// The action `next` names must be the command that completes the Goal.
-	if output, err = command(binary, root, "goal", "complete", "queue"); err != nil || !strings.Contains(output, "Goal queue COMPLETED") {
-		t.Fatalf("goal complete under GOAL policy = %q, %v", output, err)
-	}
-	state, err = storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if goal, _ := state.GoalByID("queue"); goal.Status != work.GoalCompleted {
-		t.Fatalf("Goal status = %s, want COMPLETED", goal.Status)
-	}
-	if _, ok := state.GoalCompletionEvidenceFor("queue"); !ok {
-		t.Fatal("completion left no Goal completion evidence")
-	}
-}
-
-func TestGoalCompleteRefusesGoalPolicyGoalWhoseVerificationIsStale(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	createGoal(t, binary, root, "queue", "Queue", false)
-	addWork(t, binary, root, "queue", "specs/stories/a.md")
-	mustRun(t, binary, root, "start", "WI-001")
-	writeVerify(t, root, passingVerify)
-	mustRun(t, binary, root, "verify", "WI-001")
-	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	commitAll(t, root, "later")
-	if output, err := command(binary, root, "goal", "complete", "queue"); err == nil || !strings.Contains(output, "not ready to complete") {
-		t.Fatalf("goal complete on stale verification = %q, %v", output, err)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if goal, _ := state.GoalByID("queue"); goal.Status != work.GoalActive {
-		t.Fatalf("refused completion changed the Goal to %s", goal.Status)
-	}
-}
-
-func TestGoalReviewPolicyDoesNotStartWorkBehindAStaleVerifiedDependency(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	createGoal(t, binary, root, "queue", "Queue", false)
-	addWork(t, binary, root, "queue", "specs/stories/a.md")
-	addWork(t, binary, root, "queue", "specs/stories/b.md", "WI-001")
-	mustRun(t, binary, root, "start", "WI-001")
-	writeVerify(t, root, passingVerify)
-	mustRun(t, binary, root, "verify", "WI-001")
-	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	commitAll(t, root, "move Goal candidate")
-
-	status, err := command(binary, root, "status")
-	if err != nil || !strings.Contains(status, "stale") || !strings.Contains(status, "Next: none") {
-		t.Fatalf("status behind stale VERIFIED dependency = %q, %v", status, err)
-	}
-	if output, err := command(binary, root, "start", "WI-002"); err == nil || !strings.Contains(output, "stale dependency") {
-		t.Fatalf("start behind stale VERIFIED dependency = %q, %v", output, err)
-	}
-	output, err := command(binary, root, "next")
-	if err != nil {
-		t.Fatalf("next behind stale VERIFIED dependency = %q, %v", output, err)
-	}
-	for _, want := range []string{"Next: WI-001", "Action: forgepilot verify WI-001", "Reason: verified candidate is stale"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("next output %q does not contain %q", output, want)
-		}
 	}
 }
 
@@ -559,7 +424,7 @@ func TestVerifyUsesTheCallersEnvironmentAndIgnoresRuntimeDeclarations(t *testing
 	}
 }
 
-// 同一 Goal 兩件 VERIFIED 後 stale 的工作，驗證第三件只為第三件留 Evidence：
+// 同一 Goal 兩件已 DONE 的工作（HEAD 之後又前進），驗證第三件只為第三件留 Evidence：
 // 另外兩件的最新 Evidence 與狀態都不動。
 func TestVerifyRecordsEvidenceOnlyForTheWorkItemItWasAskedAbout(t *testing.T) {
 	root, binary := fixture(t)
@@ -660,7 +525,7 @@ func TestSnapshotVerificationAndReviewUseTheSameWorkingTreeCandidate(t *testing.
 	if err != nil {
 		t.Fatalf("snapshot verify = %q, %v", output, err)
 	}
-	for _, want := range []string{"Candidate: SNAPSHOT", "Revision: ", "Base: " + base, "PASS", "WI-001 RUNNING"} {
+	for _, want := range []string{"Candidate: SNAPSHOT", "Revision: ", "Base: " + base, "PASS", "WI-001 REVIEW"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("snapshot verify output %q does not contain %q", output, want)
 		}
@@ -680,7 +545,6 @@ func TestSnapshotVerificationAndReviewUseTheSameWorkingTreeCandidate(t *testing.
 	if output := gitCommand(t, root, "cat-file", "-t", verification.Revision); strings.TrimSpace(output) != "commit" {
 		t.Fatalf("snapshot revision is not retained as a commit: %q", output)
 	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
 	if output, err := command(binary, root, "status"); err != nil || strings.Contains(output, "stale") {
 		t.Fatalf("unchanged snapshot status = %q, %v", output, err)
 	}
@@ -710,7 +574,6 @@ func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
 	addWork(t, binary, root, "queue", "specs/stories/a.md")
 	mustRun(t, binary, root, "start", "WI-001")
 	mustRun(t, binary, root, "verify", "WI-001", "--snapshot")
-	mustRun(t, binary, root, "review", "request", "WI-001")
 
 	assertStale := func(want bool) {
 		t.Helper()
@@ -800,7 +663,7 @@ func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	output, err := command(binary, root, "review", "approve", "WI-001")
-	if err == nil || !strings.Contains(output, "workspace no longer matches verified snapshot") ||
+	if err == nil || !strings.Contains(output, "stale") ||
 		!strings.Contains(output, "verify WI-001 --snapshot") {
 		t.Fatalf("review of changed workspace = %q, %v", output, err)
 	}
@@ -815,7 +678,6 @@ func TestSnapshotFreshnessAndReviewFollowWorkspaceDigest(t *testing.T) {
 	if output, err = command(binary, root, "verify", "WI-001", "--snapshot"); err != nil || !strings.Contains(output, "PASS") {
 		t.Fatalf("reverify snapshot = %q, %v", output, err)
 	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
 	if output, err = command(binary, root, "review", "approve", "WI-001"); err != nil || !strings.Contains(output, "WI-001 DONE") {
 		t.Fatalf("review after reverify = %q, %v", output, err)
 	}
@@ -1024,7 +886,9 @@ func TestVerifyIsVisibleSerializedAndRecoversFromInterruption(t *testing.T) {
 	if interrupted.Revision != slow {
 		t.Fatalf("INTERRUPTED evidence carries %q, want the killed run's revision %q", interrupted.Revision, slow)
 	}
-	if state.WorkItems[0].Status != work.Running || state.WorkItems[0].CurrentRun != nil {
+	// The recovered run's own verification then passed, and the Goal requires
+	// approval, so the work waits in REVIEW rather than returning to RUNNING.
+	if state.WorkItems[0].Status != work.Review || state.WorkItems[0].CurrentRun != nil {
 		t.Fatalf("WI-001 = %#v after recovery", state.WorkItems[0])
 	}
 }
@@ -1055,6 +919,7 @@ func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 	}
 
 	// A new commit does not change any status, but the PASS no longer applies.
+	// The Goal requires approval, so the work is waiting in REVIEW.
 	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "a.md"), []byte("# story revised\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -1067,7 +932,7 @@ func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 	if err != nil || !strings.Contains(output, "stale") {
 		t.Fatalf("status after a new commit = %q, %v", output, err)
 	}
-	if !strings.Contains(output, "WI-001 RUNNING") {
+	if !strings.Contains(output, "WI-001 REVIEW") {
 		t.Fatalf("a new commit changed the work item's status: %q", output)
 	}
 	after, err := os.ReadFile(filepath.Join(root, ".forgepilot", "state.json"))
@@ -1078,7 +943,7 @@ func TestStatusReportsEvidenceAndStaleness(t *testing.T) {
 		t.Fatal("status wrote to state while reporting staleness")
 	}
 
-	// RUNNING work can be verified again to obtain evidence that does apply.
+	// Stale REVIEW work can be verified again to obtain evidence that does apply.
 	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
 		t.Fatalf("re-verify of REVIEW work = %q, %v", output, err)
 	}
@@ -1103,12 +968,13 @@ func TestWorkItemStatusSummary(t *testing.T) {
 	addWork(t, binary, root, "queue", "specs/stories/a.md")
 
 	// The no-argument status is deliberately a separate, stable view. This exact
-	// assertion includes the policy because status must make its review boundary explicit.
+	// assertion includes the Approval Requirement because status must make its
+	// review boundary explicit.
 	full, err := command(binary, root, "status")
 	if err != nil {
 		t.Fatalf("status = %q, %v", full, err)
 	}
-	const wantFull = "Goal queue ACTIVE: Queue\n  Review policy: WORK_ITEM\n  WI-001 READY specs/stories/a.md\n    not verified\n    not reviewed\n    Gates: 0 open\nNext: WI-001\n"
+	const wantFull = "Goal queue ACTIVE: Queue\n  Approval required: yes\n  WI-001 READY specs/stories/a.md\n    not verified\n    not reviewed\n    Gates: 0 open\nNext: WI-001\n"
 	if full != wantFull {
 		t.Fatalf("status changed\nwant:\n%s\ngot:\n%s", wantFull, full)
 	}
@@ -1117,9 +983,21 @@ func TestWorkItemStatusSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary = %q, %v", output, err)
 	}
-	const wantReady = "WI-001 READY\nGoal: queue ACTIVE\nReview policy: WORK_ITEM\nStory: specs/stories/a.md\nVerification: not run\nReview: not reviewed\nBlocking gates: none\nCompletion: not started\n"
+	const wantReady = "WI-001 READY\nGoal: queue ACTIVE\nApproval required: yes\nStory: specs/stories/a.md\nVerification: not run\nReview: not reviewed\nBlocking gates: none\nCompletion: not started\n"
 	if output != wantReady {
 		t.Fatalf("ready summary\nwant:\n%s\ngot:\n%s", wantReady, output)
+	}
+
+	// A Goal without an Approval Requirement has no review to report on.
+	createGoal(t, binary, root, "fast", "Fast", false)
+	addWork(t, binary, root, "fast", "specs/stories/b.md")
+	full, err = command(binary, root, "status")
+	if err != nil || !strings.Contains(full, "Goal fast ACTIVE: Fast\n  Approval required: no\n  WI-002 READY specs/stories/b.md\n    not verified\n    Gates: 0 open\n") {
+		t.Fatalf("status of a Goal without approval = %q, %v", full, err)
+	}
+	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
+	if err != nil || !strings.Contains(output, "Approval required: no\n") || !strings.Contains(output, "Review: not required\n") {
+		t.Fatalf("summary of work without approval = %q, %v", output, err)
 	}
 
 	for _, arguments := range [][]string{
@@ -1169,30 +1047,32 @@ func TestWorkItemStatusSummaryShowsCurrentEvidenceReviewAndBlockers(t *testing.T
 		t.Fatalf("gate summary = %q", output)
 	}
 
-	// Approval while a Gate is open is correctly recorded but cannot complete.
-	// Once the Gate resolves, the existing lifecycle requires approval again.
-	mustRun(t, binary, root, "review", "approve", "WI-001")
+	// Approval while a Gate is open is refused outright, and records nothing.
+	// Once the Gate resolves the same command completes the work.
+	if output, err := command(binary, root, "review", "approve", "WI-001"); err == nil || !strings.Contains(output, "GATE-001") {
+		t.Fatalf("approve under an open gate = %q, %v; want a refusal naming GATE-001", output, err)
+	}
 	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "one")
 	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
 	if err != nil {
-		t.Fatalf("summary after unblocking approved work = %q, %v", output, err)
+		t.Fatalf("summary after unblocking = %q, %v", output, err)
 	}
-	if !strings.Contains(output, "Review: EV-002 APPROVED") || !strings.Contains(output, "Completion: awaiting human review (re-approve to complete)") {
-		t.Fatalf("unblocked approved summary = %q", output)
+	if !strings.Contains(output, "Review: not reviewed") || !strings.Contains(output, "Completion: awaiting human review") {
+		t.Fatalf("unblocked summary = %q", output)
 	}
 	mustRun(t, binary, root, "review", "approve", "WI-001")
 	output, err = command(binary, root, "status", "--work", "WI-001", "--summary")
 	if err != nil {
 		t.Fatalf("summary after DONE = %q, %v", output, err)
 	}
-	for _, want := range []string{"WI-001 DONE", "Review: EV-003 APPROVED at " + revision[:12], "Blocking gates: none", "Completion: done"} {
+	for _, want := range []string{"WI-001 DONE", "Review: EV-002 APPROVED at " + revision[:12], "Blocking gates: none", "Completion: done"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("done summary %q does not contain %q", output, want)
 		}
 	}
 }
 
-func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
+func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalCancellation(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
 	createGoal(t, binary, root, "queue", "Queue", true)
@@ -1212,7 +1092,6 @@ func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
 	addWork(t, binary, root, "queue", "specs/stories/b.md")
 	mustRun(t, binary, root, "start", "WI-002")
 	mustRun(t, binary, root, "verify", "WI-002")
-	mustRun(t, binary, root, "review", "request", "WI-002")
 	mustRun(t, binary, root, "review", "reject", "WI-002", "--reason", "fix it")
 	output, err = command(binary, root, "status", "--summary", "--work", "WI-002")
 	if err != nil {
@@ -1222,7 +1101,6 @@ func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
 		t.Fatalf("rejected-review summary = %q", output)
 	}
 	mustRun(t, binary, root, "verify", "WI-002")
-	mustRun(t, binary, root, "review", "request", "WI-002")
 	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
 	if err != nil {
 		t.Fatalf("summary after re-verification = %q, %v", output, err)
@@ -1231,13 +1109,13 @@ func TestWorkItemStatusSummaryProjectsFailureReviewAndGoalBlock(t *testing.T) {
 		t.Fatalf("re-verified summary = %q", output)
 	}
 
-	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "awaiting decision")
+	mustRun(t, binary, root, "goal", "cancel", "queue", "--reason", "awaiting decision")
 	output, err = command(binary, root, "status", "--work", "WI-002", "--summary")
 	if err != nil {
-		t.Fatalf("summary with blocked goal = %q, %v", output, err)
+		t.Fatalf("summary with cancelled goal = %q, %v", output, err)
 	}
-	if !strings.Contains(output, "Goal: queue BLOCKED") || !strings.Contains(output, "Completion: goal blocked") {
-		t.Fatalf("blocked-goal summary = %q", output)
+	if !strings.Contains(output, "Goal: queue CANCELLED") || !strings.Contains(output, "Completion: goal cancelled") {
+		t.Fatalf("cancelled-goal summary = %q", output)
 	}
 }
 
@@ -1854,7 +1732,6 @@ func reviewable(t *testing.T, binary, root string) string {
 	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
 		t.Fatalf("verify = %q, %v", output, err)
 	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
 	return revision
 }
 
@@ -1946,12 +1823,11 @@ func TestReviewRecordsAJudgementBesideTheVerification(t *testing.T) {
 		}
 	}
 
-	// Re-verifying the same revision requires an explicit review request, and an explicit
-	// reviewer overrides the Git-configured default.
+	// Re-verifying the same revision after a rejection puts the work back in
+	// REVIEW, and an explicit reviewer overrides the Git-configured default.
 	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
 		t.Fatalf("verify = %q, %v", output, err)
 	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
 	output, err = command(binary, root, "review", "approve", "WI-001", "--by", "someone@example.com", "--note", "reads correct")
 	if err != nil || !strings.Contains(output, "APPROVED") {
 		t.Fatalf("review approve = %q, %v", output, err)
@@ -2029,148 +1905,6 @@ func TestApprovalCompletesWorkAndUnlocksTheQueue(t *testing.T) {
 	}
 }
 
-func TestApprovalAheadOfVerificationRecordsButDoesNotComplete(t *testing.T) {
-	root, binary := fixture(t)
-	reviewable(t, binary, root)
-	// Move HEAD on: the PASS now covers a revision the approval will not.
-	moved := writeVerify(t, root, "verify:\n\t@echo checked again\n")
-
-	output, err := command(binary, root, "review", "approve", "WI-001")
-	if err != nil {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "WI-001 REVIEW") {
-		t.Fatalf("work completed on a revision that was never verified: %s", output)
-	}
-	if !strings.Contains(output, "Not complete") {
-		t.Fatalf("approve %q did not say why the work is not complete", output)
-	}
-
-	output, err = command(binary, root, "status")
-	if err != nil {
-		t.Fatalf("status = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "Not complete") || !strings.Contains(output, moved[:12]) {
-		t.Fatalf("status %q does not explain the revision mismatch", output)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latest, ok := state.LatestReview("WI-001"); !ok || latest.Result != work.Approved {
-		t.Fatalf("the approval itself was not recorded: %#v, %v", latest, ok)
-	}
-	if state.WorkItemStatus("WI-002") != work.Pending {
-		t.Fatal("a dependent was unlocked without a completion")
-	}
-
-	// Verifying the revision that was approved completes it.
-	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
-	output, err = command(binary, root, "review", "approve", "WI-001")
-	if err != nil || !strings.Contains(output, "WI-001 DONE") {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-}
-
-func TestGoalLifecycle(t *testing.T) {
-	root, binary := fixture(t)
-	revision := reviewable(t, binary, root)
-
-	for _, arguments := range [][]string{
-		{"goal", "block", "queue"},
-		{"goal", "block"},
-		{"goal", "cancel", "queue"},
-		{"goal", "unblock", "queue"},
-		{"goal", "retire", "queue"},
-		{"goal", "block", "missing", "--reason", "wrong direction"},
-	} {
-		if output, err := command(binary, root, arguments...); err == nil {
-			t.Fatalf("%v unexpectedly succeeded: %s", arguments, output)
-		}
-	}
-
-	output, err := command(binary, root, "goal", "block", "queue", "--reason", "the direction is wrong")
-	if err != nil || !strings.Contains(output, "BLOCKED") {
-		t.Fatalf("goal block = %q, %v", output, err)
-	}
-	output, err = command(binary, root, "status")
-	if err != nil {
-		t.Fatalf("status = %q, %v", output, err)
-	}
-	// The pause does not disturb the work underneath it.
-	if !strings.Contains(output, "WI-001 REVIEW") || !strings.Contains(output, "the direction is wrong") {
-		t.Fatalf("status = %s", output)
-	}
-	if !strings.Contains(output, "Next: none") {
-		t.Fatalf("next selected work under a blocked goal: %s", output)
-	}
-	for _, arguments := range [][]string{
-		{"start", "WI-002"},
-		{"verify", "WI-001"},
-	} {
-		if output, err := command(binary, root, arguments...); err == nil {
-			t.Fatalf("%v ran under a blocked goal: %s", arguments, output)
-		}
-	}
-	if output, err := tryAddWork(t, binary, root, "queue", "specs/stories/c.md"); err == nil {
-		t.Fatalf("a plan was imported into a blocked goal: %s", output)
-	}
-	// Approving records the judgement but cannot reach DONE while the goal is
-	// paused, and says so.
-	output, err = command(binary, root, "review", "approve", "WI-001")
-	if err != nil {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "WI-001 REVIEW") || !strings.Contains(output, "Not complete") {
-		t.Fatalf("approve completed work under a blocked goal, or did not say why not: %s", output)
-	}
-
-	if output, err := command(binary, root, "goal", "unblock", "queue"); err != nil || !strings.Contains(output, "ACTIVE") {
-		t.Fatalf("goal unblock = %q, %v", output, err)
-	}
-	// Nothing was lost: the same revision is still verified and can complete.
-	output, err = command(binary, root, "review", "approve", "WI-001")
-	if err != nil || !strings.Contains(output, "WI-001 DONE") {
-		t.Fatalf("review approve after unblock = %q, %v", output, err)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latest, ok := state.LatestVerification("WI-001"); !ok || latest.Revision != revision {
-		t.Fatalf("the progress made before blocking was lost: %#v, %v", latest, ok)
-	}
-
-	// COMPLETED is a declaration, and it is refused while work is unfinished.
-	if output, err := command(binary, root, "goal", "complete", "queue"); err == nil {
-		t.Fatalf("completed a goal with WI-002 unfinished: %s", output)
-	}
-	mustRun(t, binary, root, "start", "WI-002")
-	if output, err := command(binary, root, "verify", "WI-002"); err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "review", "request", "WI-002")
-	if output, err := command(binary, root, "review", "approve", "WI-002"); err != nil || !strings.Contains(output, "WI-002 DONE") {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	if output, err := command(binary, root, "goal", "complete", "queue"); err != nil || !strings.Contains(output, "COMPLETED") {
-		t.Fatalf("goal complete = %q, %v", output, err)
-	}
-	// An ended Goal stays ended.
-	for _, arguments := range [][]string{
-		{"goal", "block", "queue", "--reason", "reconsidered"},
-		{"goal", "cancel", "queue", "--reason", "reconsidered"},
-		{"goal", "unblock", "queue"},
-	} {
-		if output, err := command(binary, root, arguments...); err == nil {
-			t.Fatalf("%v moved a completed goal: %s", arguments, output)
-		}
-	}
-}
-
 func TestGoalCancelEndsAbandonedWork(t *testing.T) {
 	root, binary := fixture(t)
 	mustRun(t, binary, root, "init")
@@ -2190,38 +1924,6 @@ func TestGoalCancelEndsAbandonedWork(t *testing.T) {
 	}
 	if output, err := tryAddWork(t, binary, root, "queue", "specs/stories/b.md"); err == nil {
 		t.Fatalf("added work to a cancelled goal: %s", output)
-	}
-}
-
-// TestBlockingMidRunStillRecordsTheEvidence proves the line an inactive Goal
-// draws: it stops new work, not the recording of a fact that already happened.
-func TestBlockingMidRunStillRecordsTheEvidence(t *testing.T) {
-	root, binary := fixture(t)
-	mustRun(t, binary, root, "init")
-	createGoal(t, binary, root, "queue", "Queue", true)
-	addWork(t, binary, root, "queue", "specs/stories/a.md")
-	mustRun(t, binary, root, "start", "WI-001")
-	revision := writeVerify(t, root, "verify:\n\t@sleep 2\n")
-
-	running := startVerify(t, binary, root, "WI-001")
-	mustRun(t, binary, root, "goal", "block", "queue", "--reason", "the direction is wrong")
-	if err := running.Wait(); err != nil {
-		t.Fatalf("verification did not finish after the goal was blocked: %v", err)
-	}
-
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	latest, ok := state.LatestVerification("WI-001")
-	if !ok {
-		t.Fatal("a run underway when the goal was blocked lost its evidence")
-	}
-	if latest.Result != work.Pass || latest.Revision != revision {
-		t.Fatalf("evidence = %#v, want PASS at %s", latest, revision)
-	}
-	if state.WorkItemStatus("WI-001") != work.Running {
-		t.Fatalf("WI-001 = %s, want RUNNING", state.WorkItemStatus("WI-001"))
 	}
 }
 
@@ -2262,7 +1964,6 @@ func TestEndToEndQueueAdvances(t *testing.T) {
 	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
 		t.Fatalf("verify = %q, %v", output, err)
 	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
 	output, err = command(binary, root, "review", "approve", "WI-001", "--note", "solves the right problem")
 	if err != nil || !strings.Contains(output, "WI-001 DONE") {
 		t.Fatalf("review approve = %q, %v", output, err)
@@ -2337,49 +2038,6 @@ func TestMissingIdentityNamesTheFlagThatFixesIt(t *testing.T) {
 	// The named flag must be the one the command actually accepts.
 	if output, err := withoutIdentity("gate", "resolve", "GATE-001", "--option", "redis", flag, "someone@example.com"); err != nil {
 		t.Fatalf("%s did not fix the error it was offered for: %q, %v", flag, output, err)
-	}
-}
-
-// TestApprovalHeldByAGateSaysWhatIsLeftAfterItCloses covers the state ADR-0008
-// forbids: an approval that did not complete must never sit silently. Once the
-// last blocker is lifted the conditions all hold, and the user has to be told
-// what finishes the work — the completion check runs inside `review approve`,
-// so nothing happens until it is run again.
-func TestApprovalHeldByAGateSaysWhatIsLeftAfterItCloses(t *testing.T) {
-	root, binary := fixture(t)
-	reviewable(t, binary, root)
-	mustRun(t, binary, root, "gate", "open", "--work", "WI-001",
-		"--question", "Which cache?", "--option", "redis", "--option", "in-process")
-
-	output, err := command(binary, root, "review", "approve", "WI-001")
-	if err != nil {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "Not complete") || !strings.Contains(output, "gate") {
-		t.Fatalf("approve %q does not name the gate holding the completion", output)
-	}
-
-	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "redis")
-	output, err = command(binary, root, "status")
-	if err != nil {
-		t.Fatalf("status = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "WI-001 REVIEW") {
-		t.Fatalf("resolving a gate completed the work on its own: %s", output)
-	}
-	if !strings.Contains(output, "review approve WI-001") {
-		t.Fatalf("status %q leaves an approved, unblocked work item stalled without saying what finishes it", output)
-	}
-
-	if output, err := command(binary, root, "review", "approve", "WI-001"); err != nil || !strings.Contains(output, "WI-001 DONE") {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.WorkItemStatus("WI-002") != work.Ready {
-		t.Fatalf("WI-002 = %s, want READY", state.WorkItemStatus("WI-002"))
 	}
 }
 
@@ -2467,205 +2125,6 @@ func TestOrphanIsReclaimedEvenWhenANewRunIsRefused(t *testing.T) {
 	writeVerify(t, root, passingVerify)
 	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
 		t.Fatalf("verify = %q, %v", output, err)
-	}
-}
-
-// TestReviewRecordsThePullRequestItHappenedOn covers the M4 addition at the CLI:
-// --pr is optional, stored beside the exact revision it was reviewed at, and a
-// malformed value is invalid input rather than a review with a bad outcome.
-func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
-	root, binary := fixture(t)
-	revision := reviewable(t, binary, root)
-
-	for _, reference := range []string{
-		"https://github.com/CarlLee1983/ForgePilot/pull/7",
-		"carl/forgepilot",
-		"carl/forgepilot#0",
-		"carl/forgepilot#007",
-	} {
-		output, err := command(binary, root, "review", "approve", "WI-001", "--pr", reference)
-		if err == nil {
-			t.Fatalf("accepted %q: %s", reference, output)
-		}
-		// Distinguish a malformed value from a usage error: the usage line names
-		// the same form, so matching only that would accept either failure.
-		if !strings.Contains(output, "is not a pull request reference") {
-			t.Fatalf("error %q does not say the value is malformed", output)
-		}
-		state, err := storage.Load(root)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Invalid input writes nothing at all — not even a record that someone
-		// tried.
-		if len(state.Evidence) != 1 {
-			t.Fatalf("a refused review left evidence for %q: %#v", reference, state.Evidence)
-		}
-		if state.WorkItemStatus("WI-001") != work.Review {
-			t.Fatalf("a refused review moved the work: %s", state.WorkItemStatus("WI-001"))
-		}
-	}
-
-	// Naming the flag and giving it nothing is invalid input, not a review
-	// without a pull request.
-	if output, err := command(binary, root, "review", "approve", "WI-001", "--pr", ""); err == nil {
-		t.Fatalf("accepted an empty --pr: %s", output)
-	}
-
-	// Rejection carries the pull request too: being sent back has a venue just
-	// as much as being approved does.
-	if output, err := command(binary, root, "review", "reject", "WI-001",
-		"--reason", "the error path is unhandled", "--pr", "carl/forgepilot#7"); err != nil {
-		t.Fatalf("review reject = %q, %v", output, err)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := state.Evidence[1]; got.PR != "carl/forgepilot#7" || got.Result != work.Rejected || got.Revision != revision {
-		t.Fatalf("rejection did not record the pull request: %#v", got)
-	}
-
-	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
-	if output, err := command(binary, root, "review", "approve", "WI-001", "--pr", "carl/forgepilot#7"); err != nil {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	state, err = storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	approval := state.Evidence[len(state.Evidence)-1]
-	if approval.PR != "carl/forgepilot#7" || approval.Revision != revision || approval.Result != work.Approved {
-		t.Fatalf("approval = %#v", approval)
-	}
-	// The PR is identification, not a condition: the work completes exactly as
-	// it would have without one (ADR-0011).
-	if state.WorkItemStatus("WI-001") != work.Done {
-		t.Fatalf("work with a PR reference did not complete: %s", state.WorkItemStatus("WI-001"))
-	}
-}
-
-// TestPRReviewSurvivesAChangeOfHead is M4's acceptance flow. It proves the three
-// fields the milestone requires are held together — repository, pull request and
-// the exact HEAD — and that moving HEAD makes a new review target rather than
-// letting the previous approval carry over.
-//
-// The second half runs on WI-002 rather than reopening WI-001: DONE is terminal
-// and has no reopen (ADR-0006), so "a new HEAD needs a fresh review" is a claim
-// about work that has not completed yet.
-func TestPRReviewSurvivesAChangeOfHead(t *testing.T) {
-	root, binary := fixture(t)
-	first := reviewable(t, binary, root)
-
-	output, err := command(binary, root, "review", "approve", "WI-001", "--pr", "carl/forgepilot#7")
-	if err != nil || !strings.Contains(output, "WI-001 DONE") {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "WI-002 READY") {
-		t.Fatalf("the queue did not advance: %s", output)
-	}
-	state, err := storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	approval, ok := state.LatestReview("WI-001")
-	if !ok || approval.PR != "carl/forgepilot#7" || approval.Revision != first || approval.Repository == "" {
-		t.Fatalf("approval does not carry repository, pull request and exact head: %#v", approval)
-	}
-
-	// WI-002 reaches REVIEW on the same revision, and then HEAD moves.
-	mustRun(t, binary, root, "start", "WI-002")
-	if output, err := command(binary, root, "verify", "WI-002"); err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "review", "request", "WI-002")
-	if err := os.WriteFile(filepath.Join(root, "specs", "stories", "b.md"), []byte("# story\n\nmore\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	second := commitAll(t, root, "more work on the pull request")
-	if second == first {
-		t.Fatal("the fixture did not move HEAD")
-	}
-
-	// The approval lands on the new HEAD, which nothing has verified: the PASS
-	// from the previous revision is history, not a result that carries over.
-	output, err = command(binary, root, "review", "approve", "WI-002", "--pr", "carl/forgepilot#7")
-	if err != nil {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "WI-002 REVIEW") || !strings.Contains(output, "Not complete") {
-		t.Fatalf("work completed against a revision nothing verified: %s", output)
-	}
-	state, err = storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latest, ok := state.LatestVerification("WI-002"); !ok || latest.Revision != first {
-		t.Fatalf("the earlier verification was rewritten: %#v", latest)
-	}
-
-	// Re-verifying and re-approving the new HEAD completes it, and the fresh
-	// Evidence names the new revision rather than the old one.
-	if output, err := command(binary, root, "verify", "WI-002"); err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "review", "request", "WI-002")
-	output, err = command(binary, root, "review", "approve", "WI-002", "--pr", "carl/forgepilot#7")
-	if err != nil || !strings.Contains(output, "WI-002 DONE") {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	state, err = storage.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verification, _ := state.LatestVerification("WI-002")
-	review, _ := state.LatestReview("WI-002")
-	if verification.Revision != second || review.Revision != second || review.PR != "carl/forgepilot#7" {
-		t.Fatalf("the new review target was not recorded: %#v, %#v", verification, review)
-	}
-	// Every earlier record is still there: superseded, not replaced.
-	if len(state.Evidence) != 6 {
-		t.Fatalf("history was rewritten: %#v", state.Evidence)
-	}
-}
-
-// TestStatusShowsThePullRequestOnlyWhenThereIsOne keeps the display honest in
-// both directions: a recorded pull request is readable, and its absence is a
-// legal state that must not be dressed up as something to act on.
-func TestStatusShowsThePullRequestOnlyWhenThereIsOne(t *testing.T) {
-	root, binary := fixture(t)
-	reviewable(t, binary, root)
-
-	if output, err := command(binary, root, "review", "reject", "WI-001", "--reason", "not yet"); err != nil {
-		t.Fatalf("review reject = %q, %v", output, err)
-	}
-	output, err := command(binary, root, "status")
-	if err != nil {
-		t.Fatalf("status = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "EV-002 REJECTED") {
-		t.Fatalf("status %q does not show the review", output)
-	}
-	if strings.Contains(output, "PR") || strings.Contains(output, "pull request") {
-		t.Fatalf("status %q mentions a pull request for a review that has none", output)
-	}
-
-	if output, err := command(binary, root, "verify", "WI-001"); err != nil || !strings.Contains(output, "PASS") {
-		t.Fatalf("verify = %q, %v", output, err)
-	}
-	mustRun(t, binary, root, "review", "request", "WI-001")
-	if output, err := command(binary, root, "review", "approve", "WI-001", "--pr", "carl/forgepilot#7"); err != nil {
-		t.Fatalf("review approve = %q, %v", output, err)
-	}
-	output, err = command(binary, root, "status")
-	if err != nil {
-		t.Fatalf("status = %q, %v", output, err)
-	}
-	if !strings.Contains(output, "carl/forgepilot#7") {
-		t.Fatalf("status %q does not show the pull request that was recorded", output)
 	}
 }
 

@@ -11,99 +11,29 @@ import (
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
-// CandidateFacts gathers the external facts needed to decide whether persisted
-// REVIEW/VERIFIED Evidence, or a Verification currently finishing, still names
-// the repository's current Candidate. Callers pass the values into
-// internal/work; that package remains filesystem- and Git-free.
+// CandidateFacts gathers the external facts needed to decide whether the
+// persisted Evidence of work in REVIEW still names the repository's current
+// Candidate. Callers pass the values into internal/work; that package remains
+// filesystem- and Git-free. Only REVIEW work is compared: DONE is never stale
+// (ADR-0006), and nothing else has a pending Candidate to compare.
 func CandidateFacts(ctx context.Context, state *work.State, root string) (work.RepositoryState, error) {
 	needsCommitRevision, needsSnapshotDigest := false, false
 	for _, item := range state.WorkItems {
-		kind := work.CandidateKind("")
-		if item.Status == work.Verifying && item.CurrentRun != nil {
-			kind = item.CurrentRun.CandidateKind
-		} else if item.Status == work.Review || item.Status == work.Verified {
-			if verification, ok := state.LatestVerification(item.ID); ok {
-				kind = verification.CandidateKind
-			}
-		}
-		switch kind {
-		case work.CommitCandidate:
-			needsCommitRevision = true
-		case work.SnapshotCandidate:
-			needsSnapshotDigest = true
-		}
-	}
-	return resolveFacts(ctx, root, needsCommitRevision, needsSnapshotDigest)
-}
-
-// GoalCandidateFacts is CandidateFacts narrowed to one Goal. A Goal-scoped
-// decision must not be refused because an unrelated Goal holds COMMIT Evidence
-// and HEAD cannot be read: the answer never depended on that fact. It also
-// keeps a precondition and the transaction it guards on one criterion, which
-// this project has twice been bitten by getting wrong.
-func GoalCandidateFacts(ctx context.Context, state *work.State, goalID, root string) (work.RepositoryState, error) {
-	needsCommitRevision, needsSnapshotDigest := false, false
-	for _, item := range state.WorkItems {
-		if item.GoalID != goalID {
+		if item.Status != work.Review {
 			continue
 		}
-		kind := work.CandidateKind("")
-		if item.Status == work.Verifying && item.CurrentRun != nil {
-			kind = item.CurrentRun.CandidateKind
-		} else if item.Status == work.Review || item.Status == work.Verified {
-			if verification, ok := state.LatestVerification(item.ID); ok {
-				kind = verification.CandidateKind
-			}
-		}
-		switch kind {
-		case work.CommitCandidate:
-			needsCommitRevision = true
-		case work.SnapshotCandidate:
-			needsSnapshotDigest = true
-		}
-	}
-	return resolveFacts(ctx, root, needsCommitRevision, needsSnapshotDigest)
-}
-
-// GoalReadinessFacts resolves only the Candidate facts one Goal's readiness
-// depends on, so an unrelated Goal's SNAPSHOT Evidence cannot make reconciling
-// this one require a workspace digest — or fail when one cannot be computed.
-func GoalReadinessFacts(ctx context.Context, state *work.State, goalID, root string) (work.RepositoryState, error) {
-	needsCommitRevision, needsSnapshotDigest := false, false
-	for _, kind := range state.ReadinessCandidateKinds(goalID) {
-		switch kind {
-		case work.SnapshotCandidate:
-			needsSnapshotDigest = true
-		case work.CommitCandidate:
-			needsCommitRevision = true
-		}
-	}
-	return resolveFacts(ctx, root, needsCommitRevision, needsSnapshotDigest)
-}
-
-// StartFacts resolves the facts one start transition depends on: the Candidate
-// kinds of its VERIFIED prerequisites, and nothing else.
-func StartFacts(ctx context.Context, state *work.State, id, root string) (work.RepositoryState, error) {
-	summary, err := state.WorkSummary(id, work.RepositoryState{})
-	if err != nil {
-		return work.RepositoryState{}, err
-	}
-	needsCommit, needsSnapshot := false, false
-	for _, dependencyID := range summary.Item.DependsOn {
-		if state.WorkItemStatus(dependencyID) != work.Verified {
-			continue
-		}
-		verification, ok := state.LatestVerification(dependencyID)
+		verification, ok := state.LatestVerification(item.ID)
 		if !ok {
 			continue
 		}
-		if verification.CandidateKind == work.SnapshotCandidate {
-			needsSnapshot = true
-		} else {
-			needsCommit = true
+		switch verification.CandidateKind {
+		case work.CommitCandidate:
+			needsCommitRevision = true
+		case work.SnapshotCandidate:
+			needsSnapshotDigest = true
 		}
 	}
-	return resolveFacts(ctx, root, needsCommit, needsSnapshot)
+	return resolveFacts(ctx, root, needsCommitRevision, needsSnapshotDigest)
 }
 
 // resolveFacts reads exactly the Git facts a caller asked for. Facts that

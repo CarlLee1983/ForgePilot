@@ -14,7 +14,7 @@ import (
 
 func TestVerificationVerdictFingerprintIncludesTheWholeLatestVerificationEvidence(t *testing.T) {
 	state := &work.State{
-		Goals: []work.Goal{{ID: "goal", Repository: "repo", ReviewPolicy: work.ReviewPerGoal, CompletionPolicy: work.CompletionVerified, Status: work.GoalActive}},
+		Goals: []work.Goal{{ID: "goal", Repository: "repo", Status: work.GoalActive}},
 		WorkItems: []work.Item{{ID: "WI-001", GoalID: "goal", Status: work.Verifying, CurrentRun: &work.Run{
 			CandidateDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 		}}},
@@ -30,11 +30,11 @@ func TestVerificationVerdictFingerprintIncludesTheWholeLatestVerificationEvidenc
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.Goals[0].Status = work.GoalBlocked
-	if afterGoalBlock, err := verificationVerdictFingerprint(state, "WI-001"); err != nil {
+	state.Goals[0].Status = work.GoalCancelled
+	if afterGoalCancel, err := verificationVerdictFingerprint(state, "WI-001"); err != nil {
 		t.Fatal(err)
-	} else if before != afterGoalBlock {
-		t.Fatal("blocking the owning Goal changed the verification verdict fingerprint")
+	} else if before != afterGoalCancel {
+		t.Fatal("cancelling the owning Goal changed the verification verdict fingerprint")
 	}
 	state.Goals[0].Status = work.GoalActive
 	state.WorkItems[0].CurrentRun.CandidateDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -54,18 +54,6 @@ func TestVerificationVerdictFingerprintIncludesTheWholeLatestVerificationEvidenc
 	}
 	if err := ensureVerificationVerdictUnchanged(state, "WI-001", before); err == nil {
 		t.Fatal("changed Verification Evidence was accepted at the final transaction boundary")
-	}
-}
-
-func TestVerificationRetryCommandPreservesCandidateMode(t *testing.T) {
-	commit := work.Candidate{Kind: work.CommitCandidate, Revision: "1111111111111111111111111111111111111111"}
-	if got := VerificationRetryCommand("WI-001", commit); got != "forgepilot verify WI-001" {
-		t.Fatalf("commit retry = %q", got)
-	}
-	snapshot := work.Candidate{Kind: work.SnapshotCandidate, Revision: "2222222222222222222222222222222222222222",
-		BaseRevision: "1111111111111111111111111111111111111111", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-	if got := VerificationRetryCommand("WI-001", snapshot); got != "forgepilot verify WI-001 --snapshot" {
-		t.Fatalf("snapshot retry = %q", got)
 	}
 }
 

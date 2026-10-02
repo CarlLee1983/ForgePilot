@@ -93,8 +93,8 @@ func TestActionableNextReverifiesStaleCandidates(t *testing.T) {
 
 func TestActionableNextUsesExistingReadySelection(t *testing.T) {
 	old, same := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
-	state := State{SchemaVersion: SchemaVersion, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1, NextGoalCompletionEvidenceID: 1,
-		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem, CompletionPolicy: CompletionHuman}},
+	state := State{SchemaVersion: SchemaVersion, NextEvidenceID: 1, NextGateID: 1, NextVerificationRunID: 1,
+		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, RequireApproval: true}},
 		WorkItems: []Item{{ID: "WI-003", GoalID: "g", StoryRef: "specs/stories/three", Status: Ready, CreatedAt: same},
 			{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/two", Status: Ready, CreatedAt: same},
 			{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/one", Status: Ready, CreatedAt: old}}}
@@ -126,13 +126,13 @@ func TestActionableNextReportsOnlyHumanBlockersWhenNothingCanAdvance(t *testing.
 		}
 	})
 
-	t.Run("blocked goal", func(t *testing.T) {
+	t.Run("cancelled goal", func(t *testing.T) {
 		state, now, _ := summaryFixture(t)
-		if err := state.BlockGoal("goal", "waiting for direction", now); err != nil {
+		if err := state.CancelGoal("goal", "waiting for direction", now); err != nil {
 			t.Fatal(err)
 		}
 		action := state.ActionableNext(RepositoryState{})
-		if action.Kind != NextActionWaitGoal || action.Reason != "goal goal is BLOCKED" {
+		if action.Kind != NextActionWaitGoal || action.Reason != "goal goal is CANCELLED" {
 			t.Fatalf("action = %#v", action)
 		}
 	})
@@ -178,54 +178,56 @@ func TestActionableNextPrefersIndependentReadyWorkOverHumanWait(t *testing.T) {
 	}
 }
 
-func TestActionableNextHasNoRecommendationForEmptyOrDoneState(t *testing.T) {
+func TestActionableNextHasNoRecommendationForAnEmptyState(t *testing.T) {
 	empty := NewState()
 	if action := empty.ActionableNext(RepositoryState{}); action.Kind != NextActionNone {
 		t.Fatalf("empty action = %#v", action)
 	}
-	state, now, revision := summaryFixture(t)
-	passVerification(t, &state, now, Candidate{Kind: CommitCandidate, Revision: revision})
-	if _, err := state.RecordReview("WI-001", revision, Approved, "human@example.com", "", "", now); err != nil {
-		t.Fatal(err)
+}
+
+// When the last Work Item is DONE the Goal is complete and `next` says so
+// instead of going quiet, but only the Goal that just finished is news.
+func TestActionableNextReportsACompletedGoalOnlyWhenNothingElseIsActive(t *testing.T) {
+	state := lifecycleState(t, false, "a")
+	if action := state.ActionableNext(RepositoryState{}); action.Kind != NextActionStart {
+		t.Fatalf("before completion: %#v", action)
 	}
-	if action := state.ActionableNext(RepositoryState{Revision: revision}); action.Kind != NextActionNone {
-		t.Fatalf("done action = %#v", action)
+	runVerification(t, &state, "a", commitAt(revisionOne), 0)
+	action := state.ActionableNext(RepositoryState{Revision: revisionOne})
+	if action.Kind != NextActionGoalCompleted || action.Goal.ID != "g" {
+		t.Fatalf("after the last item is DONE: %#v", action)
+	}
+
+	// A second Goal with work to do is what the agent should hear about; the
+	// finished one is history, not an action.
+	later := lifecycleNow.Add(time.Hour)
+	state.Goals = append(state.Goals, Goal{ID: "h", Title: "Other", Repository: "/repo", Status: GoalActive, CreatedAt: later, UpdatedAt: later})
+	state.WorkItems = append(state.WorkItems, Item{ID: "h1", GoalID: "h", StoryRef: "specs/stories/h1", Status: Ready, CreatedAt: later, UpdatedAt: later})
+	action = state.ActionableNext(RepositoryState{Revision: revisionOne})
+	if action.Kind != NextActionStart || action.Item.ID != "h1" {
+		t.Fatalf("a completed Goal masked another Goal's work: %#v", action)
+	}
+
+	// While the other Goal is in flight but has nothing actionable, a finished
+	// Goal is still not announced: not every Goal has ended.
+	state.WorkItems[1].Status = Verifying
+	state.WorkItems[1].CurrentRun = &Run{VerificationRunID: "VR-009", Revision: revisionOne, CandidateKind: CommitCandidate}
+	if action = state.ActionableNext(RepositoryState{Revision: revisionOne}); action.Kind != NextActionNone {
+		t.Fatalf("an ACTIVE Goal remains but the answer was %#v", action)
 	}
 }
 
-func TestActionableNextDoesNotLetCompletedGoalMaskAnotherGoalCompletion(t *testing.T) {
-	now := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
-	revision := "1111111111111111111111111111111111111111"
-	repository := RepositoryState{Revision: revision}
-	candidate := Candidate{Kind: CommitCandidate, Revision: revision}
-	state := NewState()
-	if err := state.AddGoalWithPolicies("completed", "Completed", "", "/repo", ReviewPerGoal, CompletionVerified, now); err != nil {
-		t.Fatal(err)
+func TestActionableNextNeverRecommendsReverifyingDoneOrCompletedWork(t *testing.T) {
+	state := lifecycleState(t, false, "a", "b<a")
+	runVerification(t, &state, "a", commitAt(revisionOne), 0)
+	// HEAD moved on, and a is DONE: nothing about a is stale or owed.
+	action := state.ActionableNext(RepositoryState{Revision: revisionTwo})
+	if action.Kind != NextActionStart || action.Item.ID != "b" {
+		t.Fatalf("action = %#v", action)
 	}
-	completedItem, err := state.AddWork("completed", "specs/stories/completed", nil, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	passVerificationFor(t, &state, completedItem.ID, now, candidate, repository)
-	completedSummary, err := state.GoalSummary("completed", repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := state.CompleteVerifiedGoal("completed", repository, completedSummary.VerificationEvidenceIDs, now); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := state.AddGoalWithPolicies("active", "Active", "", "/repo", ReviewPerGoal, CompletionVerified, now.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	activeItem, err := state.AddWork("active", "specs/stories/active", nil, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	passVerificationFor(t, &state, activeItem.ID, now.Add(time.Minute), candidate, repository)
-
-	action := state.ActionableNext(repository)
-	if action.Kind != NextActionCompleteGoal || action.Goal.ID != "active" {
-		t.Fatalf("completed Goal masked the active Goal's completion action: %#v", action)
+	runVerification(t, &state, "b", commitAt(revisionTwo), 0)
+	action = state.ActionableNext(RepositoryState{Revision: "3333333333333333333333333333333333333333"})
+	if action.Kind != NextActionGoalCompleted {
+		t.Fatalf("action = %#v, want the Goal reported completed without any re-verification", action)
 	}
 }
