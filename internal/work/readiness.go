@@ -23,6 +23,10 @@ func (s *State) Readiness(id string) (Readiness, bool) {
 	if item == nil || item.Status != NotStarted {
 		return "", false
 	}
+	// Work of an ended Goal can never start, so there is no readiness to report.
+	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
+		return "", false
+	}
 	if len(s.unfinishedDependencies(item.DependsOn)) > 0 {
 		return ReadinessPending, true
 	}
@@ -112,6 +116,10 @@ func (s *State) Obstacles(id string) []Obstacle {
 		}
 	case Review:
 		obstacles = append(obstacles, Obstacle{Kind: ObstacleApproval, Message: "waiting for review approve"})
+		if occupant, ok := s.Occupant(); ok {
+			obstacles = append(obstacles, Obstacle{Kind: ObstacleOccupied, Ref: occupant.ID,
+				Message: fmt.Sprintf("review reject and re-verify are refused while %s is %s and holds the workspace; %s", occupant.ID, occupant.Status, occupantWayOut(occupant))})
+		}
 	case Verifying:
 		obstacles = append(obstacles, Obstacle{Kind: ObstacleVerifying, Message: "verification is in progress or was interrupted"})
 	}
@@ -123,10 +131,17 @@ func (s *State) Obstacles(id string) []Obstacle {
 	if item.Status == NotStarted && len(s.unfinishedDependencies(item.DependsOn)) == 0 {
 		if occupant, ok := s.Occupant(); ok {
 			obstacles = append(obstacles, Obstacle{Kind: ObstacleOccupied, Ref: occupant.ID,
-				Message: fmt.Sprintf("%s is %s and holds the workspace", occupant.ID, occupant.Status)})
+				Message: fmt.Sprintf("%s is %s and holds the workspace; %s", occupant.ID, occupant.Status, occupantWayOut(occupant))})
 		}
 	}
 	return obstacles
+}
+
+// occupantWayOut says how the workspace slot gets freed: finish the occupant
+// (a PASS completes it or sends it to REVIEW; a FAIL returns it to RUNNING to be
+// fixed) or cancel its Goal.
+func occupantWayOut(occupant Item) string {
+	return fmt.Sprintf("let it finish with forgepilot verify %s (PASS, or fix it after a FAIL), or forgepilot goal cancel %s", occupant.ID, occupant.GoalID)
 }
 
 // ObstacleMessages joins obstacle messages for one-line presentation.

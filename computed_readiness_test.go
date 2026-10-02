@@ -133,7 +133,11 @@ func TestOrphanedVerifyingWorkHoldsTheWorkspaceAndNextRecommendsRecovery(t *test
 	if err == nil || !strings.Contains(output, "VERIFYING") || !strings.Contains(output, "forgepilot verify "+first) {
 		t.Fatalf("start with an orphan = %q, %v; want a refusal pointing at verify %s", output, err, first)
 	}
+	before := readState(t, root)
 	orphan := jsonOf(t, binary, root, "next", "--json")
+	if readState(t, root) != before {
+		t.Fatal("next reclaimed the orphan; only verify may write")
+	}
 	if orphan["action"] != "RECOVER" || orphan["work_id"] != first || orphan["instruction"] != "forgepilot verify "+first {
 		t.Fatalf("next with an orphan = %v, want RECOVER with the verify command", orphan)
 	}

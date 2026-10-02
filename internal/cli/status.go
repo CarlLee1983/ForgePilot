@@ -63,16 +63,19 @@ type goalJSON struct {
 }
 
 type workJSON struct {
-	ID                string         `json:"id"`
-	StoryRef          string         `json:"story_ref"`
-	Status            string         `json:"status"`
-	DependsOn         []string       `json:"depends_on"`
-	Completion        string         `json:"completion"`
-	Verification      *evidenceJSON  `json:"verification"`
-	Review            *evidenceJSON  `json:"review"`
-	VerificationStale bool           `json:"verification_stale"`
-	OpenGates         []gateJSON     `json:"open_gates"`
-	CannotAdvance     []obstacleJSON `json:"cannot_advance"`
+	ID           string        `json:"id"`
+	StoryRef     string        `json:"story_ref"`
+	Status       string        `json:"status"`
+	DependsOn    []string      `json:"depends_on"`
+	Completion   string        `json:"completion"`
+	Verification *evidenceJSON `json:"verification"`
+	Review       *evidenceJSON `json:"review"`
+	// VerificationStale is null when the repository facts needed to judge it
+	// could not be read; StaleUnknownReason then says why ("" otherwise).
+	VerificationStale  *bool          `json:"verification_stale"`
+	StaleUnknownReason string         `json:"stale_unknown_reason"`
+	OpenGates          []gateJSON     `json:"open_gates"`
+	CannotAdvance      []obstacleJSON `json:"cannot_advance"`
 }
 
 type evidenceJSON struct {
@@ -94,8 +97,8 @@ type obstacleJSON struct {
 }
 
 // status is a pure query. A repository without the facts needed to judge
-// staleness is not an error: what is known is reported and the comparison is
-// omitted.
+// staleness is not an error, but it is not "fresh" either: what is known is
+// reported and the unjudgeable Evidence is marked "staleness unknown".
 func status(args []string, root string, output io.Writer) error {
 	options, err := parseStatusArgs(args)
 	if err != nil {
@@ -119,10 +122,16 @@ func status(args []string, root string, output io.Writer) error {
 			return fmt.Errorf("work item %q belongs to goal %q, not %q", options.workID, goal.ID, options.goalID)
 		}
 	}
-	facts := statusFacts(&state, root)
+	facts := gatherStatusFacts(&state, root)
+	scopeGoal := options.goalID
+	if scopeGoal == "" && options.workID != "" {
+		// --work narrows to the Goal the work belongs to.
+		goal, _ := state.GoalOfWorkItem(options.workID)
+		scopeGoal = goal.ID
+	}
 	var goals []work.Goal
 	for _, goal := range state.Goals {
-		if options.goalID == "" || goal.ID == options.goalID {
+		if scopeGoal == "" || goal.ID == scopeGoal {
 			goals = append(goals, goal)
 		}
 	}
@@ -130,25 +139,35 @@ func status(args []string, root string, output io.Writer) error {
 		return writeJSON(output, newStatusJSON(&state, goals, options, facts))
 	}
 	if options.workID != "" {
-		summary, err := state.WorkSummary(options.workID, facts)
+		summary, err := state.WorkSummary(options.workID, facts.RepositoryState)
 		if err != nil {
 			return err
 		}
-		return writeWorkSummary(output, &state, summary)
+		return writeWorkSummary(output, &state, summary, facts)
 	}
 	return writeFullStatus(output, &state, goals, facts)
 }
 
-// statusFacts gathers repository facts leniently, only when some unfinished work
-// has Evidence to compare.
-func statusFacts(state *work.State, root string) work.RepositoryState {
-	facts := work.RepositoryState{}
-	// The revision is needed for any COMMIT Evidence; HEAD may not exist.
-	facts.Revision, _ = repository.Head(context.Background(), root)
+// statusFacts are the repository facts a status read could gather, with the
+// reason for each one it could not. A fact that cannot be read is reported as
+// unknown, never silently treated as "not stale".
+type statusFacts struct {
+	work.RepositoryState
+	headErr, snapshotErr error
+}
+
+// gatherStatusFacts reads HEAD, and the workspace snapshot only when some
+// unfinished work has SNAPSHOT Evidence to compare.
+func gatherStatusFacts(state *work.State, root string) statusFacts {
+	facts := statusFacts{}
+	facts.Revision, facts.headErr = repository.Head(context.Background(), root)
 	for _, item := range state.WorkItems {
 		latest, ok := state.LatestVerification(item.ID)
 		if item.Status != work.Done && ok && latest.CandidateKind == work.SnapshotCandidate {
-			if workspace, err := repository.InspectSnapshot(context.Background(), root); err == nil {
+			workspace, err := repository.InspectSnapshot(context.Background(), root)
+			if err != nil {
+				facts.snapshotErr = err
+			} else {
 				facts.Revision, facts.SnapshotDigest = workspace.BaseRevision, workspace.Digest
 			}
 			break
@@ -167,7 +186,44 @@ func statusFacts(state *work.State, root string) work.RepositoryState {
 	return facts
 }
 
-func writeFullStatus(output io.Writer, state *work.State, goals []work.Goal, facts work.RepositoryState) error {
+// unknownStaleness explains why an unfinished Work Item's Evidence cannot be
+// judged fresh or stale, or returns "" when it can (or there is no Evidence).
+func (f statusFacts) unknownStaleness(state *work.State, id string) string {
+	if state.WorkItemStatus(id) == work.Done {
+		return ""
+	}
+	latest, ok := state.LatestVerification(id)
+	if !ok {
+		return ""
+	}
+	if latest.CandidateKind == work.SnapshotCandidate {
+		if f.snapshotErr != nil {
+			return "cannot read the workspace snapshot: " + f.snapshotErr.Error()
+		}
+		return ""
+	}
+	if f.headErr != nil {
+		return "cannot read HEAD: " + f.headErr.Error()
+	}
+	return ""
+}
+
+// undecidableNext explains why the next action cannot be decided: some REVIEW
+// work's staleness is unknown. It is the same condition under which `next`
+// fails on its own, so the two entry points agree.
+func (f statusFacts) undecidableNext(state *work.State) string {
+	for _, item := range state.WorkItems {
+		if item.Status != work.Review {
+			continue
+		}
+		if reason := f.unknownStaleness(state, item.ID); reason != "" {
+			return fmt.Sprintf("cannot decide the next action: staleness of %s is unknown (%s)", item.ID, reason)
+		}
+	}
+	return ""
+}
+
+func writeFullStatus(output io.Writer, state *work.State, goals []work.Goal, facts statusFacts) error {
 	for _, goal := range goals {
 		heading := fmt.Sprintf("Goal %s %s: %s", goal.ID, goal.Status, goal.Title)
 		if goal.Reason != "" {
@@ -189,8 +245,11 @@ func writeFullStatus(output io.Writer, state *work.State, goals []work.Goal, fac
 				// command, so this instruction works even when the work is blocked.
 				note = " (verifier is gone; run forgepilot verify to recover)"
 			}
-			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n", item.ID, state.DisplayStatus(item.ID), item.StoryRef, note,
-				verificationSummary(state, item.ID, facts.Revision, facts.SnapshotDigest)); err != nil {
+			evidence := verificationSummary(state, item.ID, facts.Revision, facts.SnapshotDigest)
+			if reason := facts.unknownStaleness(state, item.ID); reason != "" {
+				evidence += " (staleness unknown: " + reason + ")"
+			}
+			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n", item.ID, state.DisplayStatus(item.ID), item.StoryRef, note, evidence); err != nil {
 				return err
 			}
 			if goal.RequireApproval {
@@ -210,16 +269,24 @@ func writeFullStatus(output io.Writer, state *work.State, goals []work.Goal, fac
 			}
 		}
 	}
-	action := state.ActionableNext(facts)
-	if action.Item.ID != "" {
+	if reason := facts.undecidableNext(state); reason != "" {
+		_, err := fmt.Fprintf(output, "Next: unknown (%s)\n", reason)
+		return err
+	}
+	action := state.ActionableNext(facts.RepositoryState)
+	switch {
+	case action.Item.ID != "":
 		_, err := fmt.Fprintf(output, "Next: %s\n", action.Item.ID)
 		return err
+	case action.Kind == work.NextActionWait:
+		// Waiting is not "nothing": list what is waited on, as `next` does.
+		return writeNextText(output, state, action)
 	}
 	_, err := fmt.Fprintln(output, "Next: none")
 	return err
 }
 
-func writeWorkSummary(output io.Writer, state *work.State, summary work.WorkItemSummary) error {
+func writeWorkSummary(output io.Writer, state *work.State, summary work.WorkItemSummary, facts statusFacts) error {
 	blocking := "none"
 	if len(summary.BlockingGates) > 0 {
 		ids := make([]string, 0, len(summary.BlockingGates))
@@ -233,7 +300,7 @@ func writeWorkSummary(output io.Writer, state *work.State, summary work.WorkItem
 		summary.Goal.ID, summary.Goal.Status,
 		yesNo(summary.Goal.RequireApproval),
 		summary.Item.StoryRef,
-		workVerificationSummary(summary),
+		workVerificationSummary(summary, facts.unknownStaleness(state, summary.Item.ID)),
 		workReviewSummary(summary),
 		blocking,
 		summary.Completion); err != nil {
@@ -247,7 +314,7 @@ func writeWorkSummary(output io.Writer, state *work.State, summary work.WorkItem
 	return nil
 }
 
-func workVerificationSummary(summary work.WorkItemSummary) string {
+func workVerificationSummary(summary work.WorkItemSummary, unknownReason string) string {
 	if !summary.HasVerification {
 		return "not run"
 	}
@@ -257,6 +324,9 @@ func workVerificationSummary(summary work.WorkItemSummary) string {
 	}
 	if summary.VerificationStale {
 		result += " (stale)"
+	}
+	if unknownReason != "" {
+		result += " (staleness unknown: " + unknownReason + ")"
 	}
 	return result
 }
@@ -271,8 +341,13 @@ func workReviewSummary(summary work.WorkItemSummary) string {
 	return fmt.Sprintf("%s %s at %s", summary.Review.ID, summary.Review.Result, shortRevision(summary.Review.Revision))
 }
 
-func newStatusJSON(state *work.State, goals []work.Goal, options statusOptions, facts work.RepositoryState) statusJSON {
-	result := statusJSON{Goals: []goalJSON{}, Next: newNextJSON(state, state.ActionableNext(facts))}
+func newStatusJSON(state *work.State, goals []work.Goal, options statusOptions, facts statusFacts) statusJSON {
+	result := statusJSON{Goals: []goalJSON{}}
+	if reason := facts.undecidableNext(state); reason != "" {
+		result.Next = nextJSON{Action: "UNKNOWN", Reason: reason, Waiting: []waitingJSON{}}
+	} else {
+		result.Next = newNextJSON(state, state.ActionableNext(facts.RepositoryState))
+	}
 	for _, goal := range goals {
 		entry := goalJSON{ID: goal.ID, Title: goal.Title, Status: string(goal.Status), Reason: goal.Reason,
 			RequireApproval: goal.RequireApproval, WorkItems: []workJSON{}}
@@ -280,22 +355,28 @@ func newStatusJSON(state *work.State, goals []work.Goal, options statusOptions, 
 			if item.GoalID != goal.ID || options.workID != "" && item.ID != options.workID {
 				continue
 			}
-			summary, err := state.WorkSummary(item.ID, facts)
+			summary, err := state.WorkSummary(item.ID, facts.RepositoryState)
 			if err != nil {
 				continue
 			}
-			entry.WorkItems = append(entry.WorkItems, newWorkJSON(state, summary))
+			entry.WorkItems = append(entry.WorkItems, newWorkJSON(state, summary, facts.unknownStaleness(state, item.ID)))
 		}
 		result.Goals = append(result.Goals, entry)
 	}
 	return result
 }
 
-func newWorkJSON(state *work.State, summary work.WorkItemSummary) workJSON {
+func newWorkJSON(state *work.State, summary work.WorkItemSummary, unknownReason string) workJSON {
 	item := summary.Item
 	entry := workJSON{ID: item.ID, StoryRef: item.StoryRef, Status: state.DisplayStatus(item.ID),
 		DependsOn: append([]string{}, item.DependsOn...), Completion: string(summary.Completion),
-		VerificationStale: summary.VerificationStale, OpenGates: []gateJSON{}, CannotAdvance: []obstacleJSON{}}
+		OpenGates: []gateJSON{}, CannotAdvance: []obstacleJSON{}}
+	if unknownReason != "" {
+		entry.StaleUnknownReason = unknownReason
+	} else {
+		stale := summary.VerificationStale
+		entry.VerificationStale = &stale
+	}
 	if summary.HasVerification {
 		entry.Verification = &evidenceJSON{ID: summary.Verification.ID, Result: string(summary.Verification.Result),
 			Revision: summary.Verification.Revision, CandidateKind: string(summary.Verification.CandidateKind)}

@@ -318,7 +318,7 @@ func TestGoalCancelNeedsAReasonAndTheOtherGoalCommandsAreGone(t *testing.T) {
 	if output, err := command(binary, root, "goal", "cancel", "queue", "--reason", "no longer needed"); err != nil || !strings.Contains(output, "CANCELLED") {
 		t.Fatalf("cancel = %q, %v", output, err)
 	}
-	wantStatuses(t, root, "queue", map[string]string{"WI-001": "READY"}, work.GoalCancelled)
+	wantStatuses(t, root, "queue", map[string]string{"WI-001": "NOT_STARTED"}, work.GoalCancelled)
 	if output, err := command(binary, root, "goal", "cancel", "queue", "--reason", "again"); err == nil {
 		t.Fatalf("cancelled a cancelled goal: %s", output)
 	}

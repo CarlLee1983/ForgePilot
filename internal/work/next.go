@@ -71,8 +71,11 @@ func (s *State) ActionableNext(repository RepositoryState) NextAction {
 			if repository.AbandonedRuns[occupant.ID] {
 				return NextAction{Item: occupant, Kind: NextActionRecover, Reason: "verification was interrupted; verify reclaims it"}
 			}
-			return NextAction{Kind: NextActionWait, Reason: "verification is in progress",
-				Waiting: []Waiting{{Kind: WaitVerification, ItemID: occupant.ID, GoalID: occupant.GoalID, Reason: "verification in progress"}}}
+			// Gates and reviews that exist alongside the running verification are
+			// listed too, after it.
+			waiting := []Waiting{{Kind: WaitVerification, ItemID: occupant.ID, GoalID: occupant.GoalID, Reason: "verification in progress"}}
+			waiting = append(waiting, s.waitAction(items, repository).Waiting...)
+			return NextAction{Kind: NextActionWait, Reason: "verification is in progress", Waiting: waiting}
 		}
 		if s.Verifiable(occupant.ID) == nil {
 			if verification, ok := s.LatestVerification(occupant.ID); ok && verification.Result == Fail {
