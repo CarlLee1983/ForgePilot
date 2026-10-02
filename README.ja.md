@@ -2,6 +2,8 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | **日本語**
 
+Webサイト（英語）：[https://carllee1983.github.io/ForgePilot/en/](https://carllee1983.github.io/ForgePilot/en/)
+
 ForgePilot tells your engineering agents what work is actionable next.
 
 Warrant bounds that work to human-approved Stories and proves completion with your repository's own verification.
