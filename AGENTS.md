@@ -32,7 +32,7 @@
 - **不發出任何網路請求。** 不自行 HTTP，不 spawn `gh`。PR Reference 是使用者輸入的字串，只驗格式，不查證那個 PR 存在——ADR-0010
 - **`verify` 先無條件回收孤兒，再判斷能不能開始新的執行。** `internal/cli/verify.go` 有一段被縮小的承諾，那是 M3 刻意改的——ADR-0009
 - **verification orchestration 只有一份，在 `internal/app`。** `internal/cli/verify.go` 是薄殼，改驗證流程改 `internal/app/verify.go`——ADR-0019
-- **`internal/work` 仍保留 `Goal.Execution` 的型別與 `Validate`，卻沒有任何行為讀寫它。** 嚴格解碼要讓 schema 18 的舊 state 仍可讀寫，資料模型留到 schema 19 斷代時刪除——ADR-0040
+- **State 只讀 schema 19，沒有升版鏈，也沒有 `migrate`。** 讀到其他版本一律在嚴格解碼之前就拒絕（舊版本會帶著本版不認得的欄位，先解碼只會得到 "unknown field" 而看不到原因）；舊 state 走 `tools/export-plan` 轉成 Goal Plan 再 `goal import`。看到 `internal/storage` 沒有 migration 是決定，不是疏漏。Goal 與 Work Item 只能由 `goal import` 建立，Work Item ID 就是計畫節點 ID，不再有 `WI-###` 自動配發——ADR-0040
 - **`Validate` 不檢查 DONE 的四項條件。** 加上去會讓 Validate 與當下的完成規則綁死，日後規則一改，舊的合法 DONE 就變成讀不進來的 state
 
 ## 地雷
@@ -43,7 +43,7 @@
 
 **Snapshot capture 只操作 private index。** `verify --snapshot` 可以寫 local Git objects 與 ForgePilot snapshot ref，但 capture 前後的 current branch、HEAD、real index、staging state 與 working files 必須相同；`status`／snapshot review 重算 digest 時連 object database 都要隔離。詳見 ADR-0014。
 
-**每次 schema 升版，兩處 fixture 的版本號必須跟著往上調**——`internal/storage/storage_test.go` 中驗證「較新 schema 應被拒讀」的那一筆，與 `internal/work/work_test.go` 中區分較舊／較新 schema 錯誤的那一筆。它們壞掉的方式不是變紅，是在無人察覺下改為驗證一個合法的 state。M2 踩過一次。同一個檔案裡還有一處用字串替換改寫版本號的測試，改動時確認它仍然抓得到你要它抓的東西。
+**每次 schema 升版，兩處 fixture 必須跟著重設**——`internal/storage/storage_test.go` 的 `TestLoadRejectsCorruptOlderAndNewerState` 與 `internal/work/work_test.go` 的 `TestSchemaVersionErrorsDistinguishOlderFromNewer`。它們壞掉的方式不是變紅，是在無人察覺下改為驗證一個合法的 state，或因別的原因（例如 schema 19 前的欄位 `next_work_id` 變成 unknown field）而「拒絕」，卻沒驗到版本。現在兩處都以 `SchemaVersion ± 1` 相對寫成，並先確認同一份文件在當前版本下載得進來；升版時確認這個前置檢查仍在，並更新 `tools/export-plan` 的 `currentSchema`。
 
 **測試的註解不算數，斷言才算數。** M4 有一條測試，註解寫「同一 revision 上標不同 PR 的兩筆 review 仍互相取代」、變數也叫 `rejecting`，但整段只記了一筆 review。它照樣通過，exit checklist 也照樣被勾成完成。寫完一條測試後讀一遍：註解宣稱的事，斷言真的驗到了嗎。
 

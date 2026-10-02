@@ -193,8 +193,9 @@ func TestGoalImportRefusesBadPlansAndWritesNothing(t *testing.T) {
 		}
 	}
 
-	// A bad node anywhere refuses the whole plan: the good nodes before it must
-	// not have been written.
+	// An unreadable plan file is refused as well. Together with the byte-for-byte
+	// comparison above (the "missing story file" plan has a good node before the
+	// bad one), this shows no refusal leaves part of a plan behind.
 	if output, err := command(binary, root, "goal", "import", filepath.Join(t.TempDir(), "absent.json")); err == nil || !strings.Contains(output, "read goal plan") {
 		t.Fatalf("missing plan file = %q, %v", output, err)
 	}
@@ -275,7 +276,7 @@ func TestGoalReimportIsAppendOnly(t *testing.T) {
 		{"changed approval", planText("g", true, "a specs/stories/a.md", "b specs/stories/b.md a", "c specs/stories/c.md b", "d specs/stories/c.md c,a"), "require_approval"},
 		{"changed title", strings.Replace(grown, "Title of g", "Another title", 1), "goal.title"},
 		{"changed description", strings.Replace(grown, `"title":"Title of g"`, `"title":"Title of g","description":"new"`, 1), "goal.description"},
-		{"new node id owned by nobody but story missing", planText("g", false, "a specs/stories/a.md", "b specs/stories/b.md a", "c specs/stories/c.md b", "d specs/stories/c.md c,a", "e specs/stories/nope.md"), `node "e"`},
+		{"new node with a missing story", planText("g", false, "a specs/stories/a.md", "b specs/stories/b.md a", "c specs/stories/c.md b", "d specs/stories/c.md c,a", "e specs/stories/nope.md"), `node "e"`},
 	}
 	for _, test := range rejections {
 		output, err := command(binary, root, "goal", "import", writePlanText(t, test.plan))
