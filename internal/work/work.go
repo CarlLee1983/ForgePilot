@@ -306,7 +306,7 @@ func (s State) Validate() error {
 	}
 	goals := map[string]Goal{}
 	for _, goal := range s.Goals {
-		if goal.ID == "" || goal.Title == "" || goal.Repository == "" {
+		if !ValidPlanID(goal.ID) || goal.Title == "" || goal.Repository == "" {
 			return fmt.Errorf("invalid goal %q", goal.ID)
 		}
 		if !validReviewPolicy(goal.ReviewPolicy) {
@@ -337,7 +337,7 @@ func (s State) Validate() error {
 	}
 	items := map[string]Item{}
 	for _, item := range s.WorkItems {
-		if item.ID == "" || item.GoalID == "" || item.StoryRef == "" {
+		if !ValidPlanID(item.ID) || item.GoalID == "" || item.StoryRef == "" {
 			return fmt.Errorf("invalid work item %q", item.ID)
 		}
 		if _, ok := goals[item.GoalID]; !ok {

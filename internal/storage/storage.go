@@ -71,6 +71,11 @@ func Load(root string) (work.State, error) {
 	return state, validateRepository(state, root)
 }
 
+// ErrNoChange is returned by an Update callback that decided, without mutating
+// the state, that there is nothing to write. Update then succeeds and leaves
+// state.json untouched: no validation, no atomic replace, no new inode.
+var ErrNoChange = errors.New("state unchanged")
+
 func Update(root string, operation func(*work.State) error) error {
 	var err error
 	root, err = canonicalRoot(root)
@@ -87,6 +92,9 @@ func Update(root string, operation func(*work.State) error) error {
 			return err
 		}
 		if err := operation(&state); err != nil {
+			if errors.Is(err, ErrNoChange) {
+				return nil
+			}
 			return err
 		}
 		if err := state.Validate(); err != nil {

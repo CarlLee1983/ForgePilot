@@ -53,7 +53,7 @@ func TestValidPlanID(t *testing.T) {
 	for id, want := range map[string]bool{
 		"a": true, "WI-001": true, "sync.job_2": true, "9lives": true, long: true,
 		"": false, long + "a": false, "-lead": false, ".lead": false, "_lead": false,
-		"has space": false, "slash/y": false, "dollar$": false, "tab\t": false, "é": false, "a:b": false,
+		"a..b": false, "x.lock": false, "a.": false, "a.lock.b": true, "lock": true, "has space": false, "slash/y": false, "dollar$": false, "tab\t": false, "é": false, "a:b": false,
 	} {
 		if got := ValidPlanID(id); got != want {
 			t.Errorf("ValidPlanID(%q) = %t, want %t", id, got, want)

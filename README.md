@@ -30,7 +30,7 @@ ForgePilot 是服務 AI-assisted software engineering 的 Engineering Control Pl
 
 M1 提供本機 CLI、Goal、Work Item、依賴、READY → RUNNING 與原子 JSON state。
 
-M2 加上 `forgepilot verify`：在隔離的 detached worktree 對確切的 commit 執行受管理專案自己的 `make verify`，把結果保存成綁定該 revision 的 Evidence，PASS 進入 REVIEW、FAIL 退回 RUNNING。`status` 呈現最新一筆 Evidence 與它是否已對不上目前的 HEAD。M2 另提供 `forgepilot migrate`。
+M2 加上 `forgepilot verify`：在隔離的 detached worktree 對確切的 commit 執行受管理專案自己的 `make verify`，把結果保存成綁定該 revision 的 Evidence，PASS 進入 REVIEW、FAIL 退回 RUNNING。`status` 呈現最新一筆 Evidence 與它是否已對不上目前的 HEAD。
 
 M3 接上工作真正能完成的那條線：`gate` 讓需要人判斷的問題被記錄下來並確實擋住工作，`review` 記錄人對某個確切 revision 的 APPROVED／REJECTED，`goal` 讓 Goal 能被暫停、取消或宣告完成。條件滿足時 `review approve` 在同一次交易內讓工作進入 DONE 並解鎖下游依賴——佇列因此第一次會前進。
 
@@ -80,40 +80,33 @@ go install github.com/CarlLee1983/ForgePilot/cmd/forgepilot@<tag>
 
 ```bash
 forgepilot init
-forgepilot goal create --id dbcli-dba --title "DBA Workflow Support"
-forgepilot work add --goal dbcli-dba --story specs/stories/DBCLI-001
-# 假設上一個指令回傳 WI-001。
-forgepilot work add --goal dbcli-dba --story specs/stories/DBCLI-002 --depends-on WI-001
+forgepilot goal import plans/dbcli-dba.json
 forgepilot next
-forgepilot start WI-001
+forgepilot start DBCLI-001
 forgepilot status
 ```
 
-若要把例行審查邊界設在整個 Goal，建立時明確選擇。GOAL policy 會在所有 Work Item 的 current Candidate 驗證通過且沒有 OPEN Gate 後以 `forgepilot goal complete` 完成 Goal：
+Goal 與整張依賴 DAG 由一份 Goal Plan（JSON）一次建立；節點 ID 就是 Work Item ID，`start`、`verify` 與 `--depends-on` 之類的引用都用它：
 
-```bash
-forgepilot goal create --id dbcli-dba --title "DBA Workflow Support" --review-policy goal
+```json
+{
+  "goal": { "id": "dbcli-dba", "title": "DBA Workflow Support", "require_approval": false },
+  "nodes": [
+    { "id": "DBCLI-001", "story": "specs/stories/DBCLI-001", "depends_on": [] },
+    { "id": "DBCLI-002", "story": "specs/stories/DBCLI-002", "depends_on": ["DBCLI-001"] }
+  ]
+}
 ```
 
-接受值為 `work-item`（預設）與 `goal`。這不是 `--skip-review`：`goal` 讓機器驗證通過的 Work Item 推進依賴，並在整個 Goal 的 current verification 條件滿足時由 `goal complete` 完成。GOAL 沒有人工 final-review 模式；每件工作的人工作業審查仍由 `WORK_ITEM` policy 提供。Goal 完成時會保存 aggregate completion evidence。
+ID 以英數開頭，其後可含英數、`.`、`_`、`-`，至多 64 字元，且不含 `..`、不以 `.` 或 `.lock` 結尾；節點 ID 在整個 state 內唯一。計畫中任何一項驗證失敗（環、未知／自我／重複依賴、重複節點、不存在或逃逸的 Story 路徑、未知 JSON 欄位）整份都不寫入，錯誤訊息指出節點與欄位。節點順序是多件工作同時 READY 時 `next` 的推薦順序。
 
-`--depends-on` 與 `start` 使用 Work Item ID；`--story` 使用 Story 路徑。Agent 讀取 Story，依 PraxisBound 執行工程工作。
+需要補單時修改計畫檔再匯入同一個 Goal：只接受新增節點（可依賴既有節點），既有節點的 `story`、`depends_on` 與 Goal 的屬性必須與原本相同；完全相同的計畫是無變化的成功，COMPLETED 或 CANCELLED 的 Goal 一律拒絕。
 
-若 `work add` 發現該 Story 尚未提交，它會在成功輸出後提供兩條下一步：使用剛配發的 Work Item ID 執行 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行不帶 flag 的 commit-mode verification。
+`require_approval` 目前對應既有的審查設定：`true` 為 `WORK_ITEM` policy（每件工作 PASS 後經人審查），預設 `false` 為 `GOAL` policy，由 `forgepilot goal complete` 在整個 Goal 的 current verification 條件滿足時完成。完整的指令與計畫格式契約見 [docs/development-plan.md 的 ADR-0040 目標 CLI 契約](docs/development-plan.md#adr-0040-目標-cli-契約)。Agent 讀取 Story，依 PraxisBound 執行工程工作。
 
-### Machine-readable handoff and safe retry
+若新加入的節點的 Story 尚未提交，`goal import` 會在成功輸出後提供兩條下一步：執行 `forgepilot verify <work-id> --snapshot` 驗證 working tree，或先 commit 再執行不帶 flag 的 commit-mode verification。
 
-外部工具可使用版本化 JSON 來建立與恢復一個 Goal 的 Work Item 清單，而不需解析人類輸出：
-
-```bash
-forgepilot goal create --id batch-01 --title "Batch 01" --review-policy goal --json
-forgepilot work add --goal batch-01 --story specs/stories/FP-101 --external-ref FP-101 --json
-forgepilot work list --goal batch-01 --json
-```
-
-成功輸出是單一 JSON document，`format_version` 目前固定為 `forgepilot.cli/v1`。`work add` 的同一 Goal 與 `--external-ref` 是大小寫敏感的冪等鍵：完全相同的 Story 與 dependency set 重試時回傳同一 Work Item 並標示 `created: false`；不相同的請求會失敗且不改 state。`work list` 依建立順序列出該 Goal，`depends_on` 一律是 array，沒有 external reference 的歷史 Work Item 以 `external_ref: null` 表示。JSON 只保證 exit 0 的成功輸出；非零 exit 的 caller 必須停止並處理診斷，而不是嘗試解析 JSON。破壞性格式變更會使用新的 `format_version`。
-
-此時保存的是 `WI-001 = RUNNING`、`WI-002 = PENDING`。重新啟動 CLI 後，`status` 應呈現相同狀態；`next` 會推薦 `WI-001` 的 `resume implementation`，而不是開始另一張 READY 工作。沒有進行中的工作時，它才會輸出像 `Action: forgepilot start WI-002` 的建議。遇到 fresh REVIEW 的 Human Review、OPEN Gate 或 BLOCKED Goal 而沒有其他可做工作時，`next` 明確輸出等待原因；它從不替 Agent 執行建議。
+此時保存的是 `DBCLI-001 = RUNNING`、`DBCLI-002 = PENDING`。重新啟動 CLI 後，`status` 應呈現相同狀態；`next` 會推薦 `DBCLI-001` 的 `resume implementation`，而不是開始另一張 READY 工作。沒有進行中的工作時，它才會輸出像 `Action: forgepilot start DBCLI-002` 的建議。遇到 fresh REVIEW 的 Human Review、OPEN Gate 或 BLOCKED Goal 而沒有其他可做工作時，`next` 明確輸出等待原因；它從不替 Agent 執行建議。
 
 Agent 可以選擇驗證已提交 revision：
 
@@ -181,15 +174,15 @@ forgepilot goal cancel dbcli-dba --reason "需求已撤回"
 
 被擋住的 Goal 底下，正在進行的工作維持原狀——暫停不丟狀態，所以 `unblock` 之後一切照舊。它擋的是「開始新工作」與「到達 DONE」，不是「記錄已發生的事」：某次驗證進行中 Goal 被擋住，那次驗證跑完仍然記錄它的 Evidence。`goal complete` 在 WORK_ITEM policy 下要求每件工作都是 DONE；在 GOAL policy 下則要求所有 current verification 與 Gate 條件成立，否則拒絕。
 
-### 升級舊版的 state
+### 舊版 state
 
-舊版寫下的 state 會被新的 binary 拒讀並要求升級：
+State 只讀 schema 19，沒有升級指令。舊版寫下的 state 會被拒讀，訊息指出一次性匯出工具：在 ForgePilot 原始碼 checkout 中執行
 
 ```bash
-forgepilot migrate
+go run ./tools/export-plan --state <舊 repo>/.forgepilot/state.json --out <dir>
 ```
 
-它會先把原本的 snapshot 備份為以來源版本命名的 `state.json.v<n>.bak` 再升級，備份已存在時拒絕執行。跳過幾個版本沒關係，`migrate` 逐版套用，執行一次就會走到最新。升級是單向的，不提供 downgrade；要回頭就手動還原那個備份。
+它為每個 ACTIVE（與 BLOCKED）Goal 輸出一份 `<goal-id>.json` Goal Plan，只含尚未 DONE 或 VERIFIED 的工作，沿用舊 Work Item ID。把舊的 `.forgepilot/` 移到封存位置後 `forgepilot init`，再對每份計畫執行 `forgepilot goal import`。
 
 ## 範圍
 

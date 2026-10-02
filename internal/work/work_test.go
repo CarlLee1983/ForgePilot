@@ -164,6 +164,28 @@ func TestSelectionUsesTimestampThenImportOrder(t *testing.T) {
 	}
 }
 
+// IDs are only ever written by goal import, but they end up in paths and ref
+// names, so a hand-edited or damaged state must not be able to smuggle one in.
+func TestValidateRejectsMalformedGoalAndWorkItemIDs(t *testing.T) {
+	build := func(goalID, itemID string) State {
+		state := NewState()
+		state.Goals = []Goal{{ID: goalID, Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerWorkItem, CompletionPolicy: CompletionHuman}}
+		state.WorkItems = []Item{{ID: itemID, GoalID: goalID, StoryRef: "specs/stories/a", Status: Ready}}
+		return state
+	}
+	if state := build("g", "a"); state.Validate() != nil {
+		t.Fatalf("the baseline state is invalid: %v", state.Validate())
+	}
+	for _, bad := range []string{"../../x", "a/b", "a..b", "x.lock", "has space", ""} {
+		if err := build(bad, "a").Validate(); err == nil {
+			t.Errorf("accepted goal ID %q", bad)
+		}
+		if err := build("g", bad).Validate(); err == nil {
+			t.Errorf("accepted work item ID %q", bad)
+		}
+	}
+}
+
 // TestRemovedStatusesAreRejected pins the status set to the six that survived
 // M3's decision that blocking is not a status: a snapshot naming WAITING_HUMAN
 // or a Work Item BLOCKED must be refused rather than quietly carried forward.

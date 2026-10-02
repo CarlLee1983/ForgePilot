@@ -42,6 +42,11 @@ func ValidPlanID(id string) bool {
 	if id == "" || len(id) > maxPlanIDLength {
 		return false
 	}
+	// A work ID is a path component of refs/forgepilot/snapshots/<id>/..., and
+	// Git refuses "..", a trailing "." and a ".lock" suffix in a ref name.
+	if strings.Contains(id, "..") || strings.HasSuffix(id, ".") || strings.HasSuffix(id, ".lock") {
+		return false
+	}
 	for i := 0; i < len(id); i++ {
 		c := id[i]
 		alphanumeric := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
@@ -52,7 +57,7 @@ func ValidPlanID(id string) bool {
 	return true
 }
 
-const planIDRule = "must start with a letter or digit, contain only letters, digits, '.', '_' or '-', and be at most 64 characters"
+const planIDRule = "must start with a letter or digit, contain only letters, digits, '.', '_' or '-', be at most 64 characters, must not contain \"..\", and must not end with '.' or '.lock'"
 
 // ParseGoalPlan decodes a Goal Plan strictly: unknown fields and trailing
 // content are errors, so a misspelled key cannot be silently ignored.
@@ -161,6 +166,9 @@ func (p GoalPlan) checkAcyclic() error {
 	}
 	return nil
 }
+
+// HasWorkItem reports whether a Work Item with this ID already exists in any Goal.
+func (s *State) HasWorkItem(id string) bool { return s.item(id) != nil }
 
 // PlanImport reports what an import changed. Added holds the new Work Items in
 // plan order; an import that changes nothing has GoalCreated false and no Added.

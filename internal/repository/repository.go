@@ -15,7 +15,11 @@ import (
 // instead of leaking which internal check happened to catch it.
 const storyLocationRule = "story reference must be located under specs/stories"
 
-func ValidateStory(root, reference string) (string, error) {
+// NormalizeStory is the literal half of ValidateStory: it rejects a reference
+// that is empty, absolute or traverses with "..", and returns the
+// repository-relative slash spelling a Work Item stores. It never touches the
+// filesystem, so it can be applied to a Story that has since been moved.
+func NormalizeStory(root, reference string) (string, error) {
 	if reference == "" || filepath.IsAbs(reference) {
 		return "", fmt.Errorf("%s: reference must be repository-relative, got %q", storyLocationRule, reference)
 	}
@@ -23,6 +27,18 @@ func ValidateStory(root, reference string) (string, error) {
 		if part == ".." {
 			return "", fmt.Errorf("%s: reference must not traverse with \"..\", got %q", storyLocationRule, reference)
 		}
+	}
+	normalized, err := filepath.Rel(root, filepath.Join(root, reference))
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(normalized), nil
+}
+
+func ValidateStory(root, reference string) (string, error) {
+	normalized, err := NormalizeStory(root, reference)
+	if err != nil {
+		return "", err
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -50,11 +66,7 @@ func ValidateStory(root, reference string) (string, error) {
 	if err != nil || (!info.Mode().IsRegular() && !info.IsDir()) {
 		return "", fmt.Errorf("story reference %q is not a file or directory", reference)
 	}
-	normalized, err := filepath.Rel(root, candidate)
-	if err != nil {
-		return "", err
-	}
-	return filepath.ToSlash(normalized), nil
+	return normalized, nil
 }
 
 func within(base, path string) bool {

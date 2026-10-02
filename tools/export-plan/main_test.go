@@ -132,12 +132,16 @@ func TestExportRefusesStateItCannotOrShouldNotRead(t *testing.T) {
 		state string
 		want  string
 	}{
-		"current schema":    {`{"schema_version":19,"goals":[],"work_items":[]}`, "nothing to export"},
-		"newer schema":      {`{"schema_version":20,"goals":[],"work_items":[]}`, "nothing to export"},
-		"no schema version": {`{"goals":[]}`, "schema_version"},
-		"not json":          {`{`, "read"},
-		"bad goal id":       {`{"schema_version":18,"goals":[{"id":"has space","title":"T","status":"ACTIVE"}],"work_items":[{"id":"WI-001","goal_id":"has space","story_ref":"s","status":"READY"}]}`, `"has space"`},
-		"bad item id":       {`{"schema_version":18,"goals":[{"id":"g","title":"T","status":"ACTIVE"}],"work_items":[{"id":"bad id","goal_id":"g","story_ref":"s","status":"READY"}]}`, `"bad id"`},
+		"current schema":             {`{"schema_version":19,"goals":[],"work_items":[]}`, "nothing to export"},
+		"newer schema":               {`{"schema_version":20,"goals":[],"work_items":[]}`, "nothing to export"},
+		"no schema version":          {`{"goals":[]}`, "schema_version"},
+		"not json":                   {`{`, "read"},
+		"bad goal id":                {`{"schema_version":18,"goals":[{"id":"has space","title":"T","status":"ACTIVE"}],"work_items":[{"id":"WI-001","goal_id":"has space","story_ref":"s","status":"READY"}]}`, `"has space"`},
+		"dependency on another goal": {`{"schema_version":18,"goals":[{"id":"g","title":"T","status":"ACTIVE"},{"id":"h","title":"T","status":"ACTIVE"}],"work_items":[{"id":"WI-001","goal_id":"g","story_ref":"s","status":"READY"},{"id":"WI-002","goal_id":"h","story_ref":"s","status":"PENDING","depends_on":["WI-001"]}]}`, `"WI-002"`},
+		"dependency on nothing":      {`{"schema_version":18,"goals":[{"id":"g","title":"T","status":"ACTIVE"}],"work_items":[{"id":"WI-002","goal_id":"g","story_ref":"s","status":"PENDING","depends_on":["WI-404"]}]}`, `"WI-404"`},
+		"goal ids differing by case": {`{"schema_version":18,"goals":[{"id":"Billing","title":"T","status":"ACTIVE"},{"id":"billing","title":"T","status":"ACTIVE"}],"work_items":[{"id":"WI-001","goal_id":"Billing","story_ref":"s","status":"READY"},{"id":"WI-002","goal_id":"billing","story_ref":"s","status":"READY"}]}`, "differ only by case"},
+		"ref-hostile item id":        {`{"schema_version":18,"goals":[{"id":"g","title":"T","status":"ACTIVE"}],"work_items":[{"id":"a..b","goal_id":"g","story_ref":"s","status":"READY"},{"id":"x.lock","goal_id":"g","story_ref":"s","status":"READY"}]}`, `"x.lock"`},
+		"bad item id":                {`{"schema_version":18,"goals":[{"id":"g","title":"T","status":"ACTIVE"}],"work_items":[{"id":"bad id","goal_id":"g","story_ref":"s","status":"READY"}]}`, `"bad id"`},
 	}
 	for name, test := range cases {
 		outDir := filepath.Join(t.TempDir(), "plans")

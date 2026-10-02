@@ -2,11 +2,13 @@ package forgepilot_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
@@ -237,14 +239,29 @@ func TestGoalReimportIsAppendOnly(t *testing.T) {
 	original := planText("g", false, "a specs/stories/a.md", "b specs/stories/b.md a")
 	mustRun(t, binary, root, "goal", "import", writePlanText(t, original))
 	before := stateBytes(t, root)
+	statePath := filepath.Join(root, ".forgepilot", "state.json")
+	infoBefore, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// Identical: success, says nothing changed, writes nothing.
+	// Identical: success, says nothing changed, writes nothing. Not rewriting
+	// the file is checked by identity and mtime, not just contents: a rewrite of
+	// the same bytes goes through an atomic replace and gets a new inode.
+	time.Sleep(20 * time.Millisecond)
 	output, err := command(binary, root, "goal", "import", writePlanText(t, original))
 	if err != nil || !strings.Contains(output, "Goal g unchanged") {
 		t.Fatalf("identical re-import = %q, %v", output, err)
 	}
 	if stateBytes(t, root) != before {
 		t.Fatal("an identical re-import rewrote state.json")
+	}
+	infoAfter, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(infoBefore, infoAfter) || !infoAfter.ModTime().Equal(infoBefore.ModTime()) {
+		t.Fatal("an identical re-import replaced state.json (new inode or mtime) although nothing changed")
 	}
 
 	// Appending works, and new nodes may depend on old ones and each other.
@@ -384,7 +401,7 @@ func TestOldSchemaStateIsRefusedWithTheExportInstructions(t *testing.T) {
 	}
 
 	// A newer state is refused too, without the export instructions.
-	newer := strings.Replace(legacy, `"schema_version":18`, `"schema_version":20`, 1)
+	newer := strings.Replace(legacy, `"schema_version":18`, fmt.Sprintf(`"schema_version":%d`, work.SchemaVersion+1), 1)
 	if err := os.WriteFile(path, []byte(newer), 0600); err != nil {
 		t.Fatal(err)
 	}

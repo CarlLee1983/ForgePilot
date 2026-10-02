@@ -149,8 +149,10 @@ func export(statePath, outDir string, report io.Writer) error {
 // first, so one run tells the operator everything to fix.
 func buildPlans(state oldState) (plans []exported, skipped, problems []string) {
 	finished := map[string]bool{}
+	goalOf := map[string]string{}
 	for _, item := range state.WorkItems {
 		finished[item.ID] = item.Status == "DONE" || item.Status == "VERIFIED"
+		goalOf[item.ID] = item.GoalID
 	}
 	for _, goal := range state.Goals {
 		if goal.Status != "ACTIVE" && goal.Status != "BLOCKED" {
@@ -184,9 +186,17 @@ func buildPlans(state oldState) (plans []exported, skipped, problems []string) {
 			}
 			dependsOn := []string{}
 			for _, dependency := range item.DependsOn {
-				if !finished[dependency] {
-					dependsOn = append(dependsOn, dependency)
+				if finished[dependency] {
+					continue
 				}
+				// An edge the import would refuse anyway is reported here, where the
+				// operator still has the old state in front of them.
+				if owner, known := goalOf[dependency]; !known {
+					problems = append(problems, fmt.Sprintf("goal %q: work item %q depends on %q, which does not exist", goal.ID, item.ID, dependency))
+				} else if owner != goal.ID {
+					problems = append(problems, fmt.Sprintf("goal %q: work item %q depends on %q, which belongs to goal %q; plans cannot depend across goals", goal.ID, item.ID, dependency, owner))
+				}
+				dependsOn = append(dependsOn, dependency)
 			}
 			result.Plan.Nodes = append(result.Plan.Nodes, node{ID: item.ID, Story: item.StoryRef, DependsOn: dependsOn})
 		}
@@ -206,6 +216,16 @@ func buildPlans(state oldState) (plans []exported, skipped, problems []string) {
 		}
 		plans = append(plans, result)
 	}
+	// Output files are named after the Goal ID; two IDs that differ only by case
+	// would overwrite each other on a case-insensitive filesystem.
+	byFold := map[string]string{}
+	for _, item := range plans {
+		fold := strings.ToLower(item.Plan.Goal.ID)
+		if other, clash := byFold[fold]; clash {
+			problems = append(problems, fmt.Sprintf("goals %q and %q differ only by case, so their plan files would collide on a case-insensitive filesystem", other, item.Plan.Goal.ID))
+		}
+		byFold[fold] = item.Plan.Goal.ID
+	}
 	sort.SliceStable(plans, func(i, j int) bool { return plans[i].Plan.Goal.ID < plans[j].Plan.Goal.ID })
 	return plans, skipped, problems
 }
@@ -214,6 +234,11 @@ func buildPlans(state oldState) (plans []exported, skipped, problems []string) {
 // import the product's packages.
 func validID(id string) bool {
 	if id == "" || len(id) > 64 {
+		return false
+	}
+	// A work ID is a path component of refs/forgepilot/snapshots/<id>/..., and
+	// Git refuses "..", a trailing "." and a ".lock" suffix in a ref name.
+	if strings.Contains(id, "..") || strings.HasSuffix(id, ".") || strings.HasSuffix(id, ".lock") {
 		return false
 	}
 	for i := 0; i < len(id); i++ {
