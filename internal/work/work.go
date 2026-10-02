@@ -10,14 +10,14 @@ import (
 const SchemaVersion = 19
 
 // CheckSchemaVersion refuses any state version this binary does not read. Schema
-// 19 is a clean break with no upgrade path: older state is exported to Goal
-// Plans by tools/export-plan and re-imported, so the refusal says that rather
-// than suggesting an in-place upgrade. Callers check this before decoding the
+// 19 is a clean break with no upgrade path: this version does not read older
+// state, so the refusal says to re-import as Goal Plans rather than suggesting
+// an in-place upgrade. Callers check this before decoding the
 // state strictly, because an older state's fields are unknown to this shape.
 func CheckSchemaVersion(version int) error {
 	switch {
 	case version < SchemaVersion:
-		return fmt.Errorf("state uses schema version %d, which is no longer supported: schema %d replaced the earlier model without an upgrade path. Export its unfinished work to Goal Plans with `go run ./tools/export-plan --state <state.json> --out <dir>` from a ForgePilot source checkout, move the old .forgepilot aside, run `forgepilot init`, then `forgepilot goal import` each plan", version, SchemaVersion)
+		return fmt.Errorf("state uses schema version %d, which is no longer supported: schema %d replaced the earlier model and this version does not read older state. Write the unfinished work as Goal Plans, move the old .forgepilot aside, run `forgepilot init`, then `forgepilot goal import` each plan", version, SchemaVersion)
 	case version > SchemaVersion:
 		return fmt.Errorf("state uses schema version %d, which is newer than this binary supports (%d)", version, SchemaVersion)
 	}

@@ -148,13 +148,7 @@ DONE 是終態，沒有 reopen；需要重做就在計畫檔新增一個節點�
 
 ### 舊版 state
 
-State 只讀 schema 19，沒有升級指令。舊版寫下的 state 會被拒讀，訊息指出一次性匯出工具：在 ForgePilot 原始碼 checkout 中執行
-
-```bash
-go run ./tools/export-plan --state <舊 repo>/.forgepilot/state.json --out <dir>
-```
-
-它為每個 ACTIVE（與 BLOCKED）Goal 輸出一份 `<goal-id>.json` Goal Plan，只含尚未 DONE 或 VERIFIED 的工作，沿用舊 Work Item ID。把舊的 `.forgepilot/` 移到封存位置後 `forgepilot init`，再對每份計畫執行 `forgepilot goal import`。
+State 只讀 schema 19，沒有升級指令。舊版寫下的 state 會被拒讀，訊息說明 schema 已斷代、此版本不讀舊 state。要延續未完成的工作，為每個 Goal 寫一份 Goal Plan，把舊的 `.forgepilot/` 移到封存位置後 `forgepilot init`，再對每份計畫執行 `forgepilot goal import`。
 
 ## 範圍
 

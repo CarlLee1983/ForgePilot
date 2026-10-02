@@ -328,7 +328,7 @@ Next: none</code></pre>
 </table>
 </div>
 
-<p>舊版（schema 19 之前）寫下的 state 會被拒讀，沒有升級指令。訊息指向一次性匯出工具：<code>go run ./tools/export-plan --state … --out &lt;dir&gt;</code> 為每個未完成的 Goal 輸出一份 Goal Plan，把舊的 <code>.forgepilot/</code> 封存後 <code>init</code>、再逐份 <code>goal import</code>。</p>
+<p>舊版（schema 19 之前）寫下的 state 會被拒讀，沒有升級指令。訊息建議以 Goal Plan 重新匯入：為每個未完成的 Goal 寫一份 Goal Plan，把舊的 <code>.forgepilot/</code> 封存後 <code>init</code>、再逐份 <code>goal import</code>。</p>
 
 <h2 id="why">DONE 的條件</h2>
 

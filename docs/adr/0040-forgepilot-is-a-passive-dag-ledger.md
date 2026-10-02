@@ -75,3 +75,5 @@ Gate 10 次，屬實際在用的能力。
 - `internal/app/verify.go` 讓一次 Verification Run 完成多於一個節點，或啟動 Git 與 canonical
   check 以外的程序。
 - 一個 Goal 在仍有非 DONE 節點時被標為完成。
+
+匯出工具已於三個 repository 遷移後刪除（#77）。

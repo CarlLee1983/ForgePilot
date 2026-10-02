@@ -33,7 +33,7 @@
 - **Evidence 上沒有指向 verification 輸出的欄位。** 輸出以 Verification Run 為鍵存在 `.forgepilot/logs/`，只有 `current_run` 有 log path——ADR-0012
 - **`verify` 先無條件回收孤兒，再判斷能不能開始新的執行。** `internal/app/verify.go` 有一段被縮小的承諾：被 Gate 擋住的 `verify` 仍會記下先前中斷的那一筆 INTERRUPTED——ADR-0009
 - **`goal import` 的重新匯入有四個細節，不是疏漏。** 依賴以集合比較（重排不算改動）；計畫必須列出每個既有節點（漏列即拒絕，計畫永遠是整張 DAG）；零節點的計畫拒絕；既有節點只逐字比較，不重新檢查 Story 是否存在（已完成而後來被搬走的 Story 不該凍結整個 Goal）。節點 ID 還必須是合法的 Git ref component，因為它會被嵌進 snapshot ref——GitHub issue #68 的留言
-- **沒有 migration。** Schema 19 是斷代：舊版 state 被拒讀並指向 `tools/export-plan`，不要加 `migrate`。匯出腳本在三個採用 repository 遷移完成後刪除（issue #77）
+- **沒有 migration。** Schema 19 是斷代：舊版 state 被拒讀並建議以 Goal Plan 重新 `goal import`，不要加 `migrate`。一次性匯出腳本已在三個採用 repository 遷移後刪除（issue #77），不要補回
 - **`Validate` 不檢查 DONE 的完成條件。** 加上去會讓 Validate 與當下的完成規則綁死，日後規則一改，舊的合法 DONE 就變成讀不進來的 state
 
 ## 地雷
