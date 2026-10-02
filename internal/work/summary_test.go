@@ -62,7 +62,7 @@ func TestWorkSummaryProjectsCurrentActionableState(t *testing.T) {
 	t.Run("rejected review requests changes", func(t *testing.T) {
 		state, now, revision := summaryFixture(t)
 		passVerification(t, &state, now, Candidate{Kind: CommitCandidate, Revision: revision})
-		if _, err := state.RecordReview("WI-001", revision, Rejected, "human@example.com", "fix it", "", now); err != nil {
+		if _, err := state.RecordReview("WI-001", revision, Rejected, "human@example.com", "fix it", now); err != nil {
 			t.Fatal(err)
 		}
 		summary := mustWorkSummary(t, &state, RepositoryState{Revision: revision})
@@ -74,7 +74,7 @@ func TestWorkSummaryProjectsCurrentActionableState(t *testing.T) {
 	t.Run("a new pass supersedes an earlier rejected review", func(t *testing.T) {
 		state, now, revision := summaryFixture(t)
 		passVerification(t, &state, now, Candidate{Kind: CommitCandidate, Revision: revision})
-		if _, err := state.RecordReview("WI-001", revision, Rejected, "human@example.com", "fix it", "", now); err != nil {
+		if _, err := state.RecordReview("WI-001", revision, Rejected, "human@example.com", "fix it", now); err != nil {
 			t.Fatal(err)
 		}
 		if err := state.BeginCandidateVerification("WI-001", Candidate{Kind: CommitCandidate, Revision: revision}, "/tmp/worktree", "", now); err != nil {
@@ -83,7 +83,6 @@ func TestWorkSummaryProjectsCurrentActionableState(t *testing.T) {
 		if _, err := state.RecordVerification("WI-001", revision, "make verify", 0, now); err != nil {
 			t.Fatal(err)
 		}
-		submitForReview(t, &state, "WI-001", now)
 		summary := mustWorkSummary(t, &state, RepositoryState{Revision: revision})
 		if summary.Review.Result != Rejected || !summary.HasVerification || summary.Completion != CompletionAwaitingReview {
 			t.Fatalf("summary = %#v", summary)
@@ -135,52 +134,49 @@ func TestWorkSummaryProjectsCurrentActionableState(t *testing.T) {
 		}
 	})
 
-	t.Run("a released gate requires approval to be recorded again", func(t *testing.T) {
+	t.Run("a gate holds approval back and releasing it lets approval complete", func(t *testing.T) {
 		state, now, revision := summaryFixture(t)
 		passVerification(t, &state, now, Candidate{Kind: CommitCandidate, Revision: revision})
 		gate, err := state.OpenGate("WI-001", "open?", []string{"yes", "no"}, "", now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := state.RecordReview("WI-001", revision, Approved, "human@example.com", "", "", now); err != nil {
-			t.Fatal(err)
+		if got := mustWorkSummary(t, &state, RepositoryState{Revision: revision}).Completion; got != CompletionBlockedByGate {
+			t.Fatalf("completion under an open gate = %q", got)
 		}
 		if err := state.ResolveGate(gate.ID, "yes", "", "human@example.com", now); err != nil {
 			t.Fatal(err)
 		}
+		if got := mustWorkSummary(t, &state, RepositoryState{Revision: revision}).Completion; got != CompletionAwaitingReview {
+			t.Fatalf("completion after the gate closed = %q", got)
+		}
+		if _, err := state.RecordReview("WI-001", revision, Approved, "human@example.com", "", now); err != nil {
+			t.Fatal(err)
+		}
+		if got := mustWorkSummary(t, &state, RepositoryState{Revision: revision}).Completion; got != CompletionDone {
+			t.Fatalf("completion after approval = %q", got)
+		}
+	})
+
+	t.Run("cancelled goal takes precedence", func(t *testing.T) {
+		state, now, revision := summaryFixture(t)
+		if err := state.CancelGoal("goal", "awaiting decision", now); err != nil {
+			t.Fatal(err)
+		}
 		summary := mustWorkSummary(t, &state, RepositoryState{Revision: revision})
-		if summary.Completion != CompletionAwaitingReview || !summary.ApprovalNeedsRerecord {
+		if summary.Goal.Status != GoalCancelled || summary.Completion != CompletionGoalCancelled {
 			t.Fatalf("summary = %#v", summary)
 		}
 	})
 
-	t.Run("a later matching pass requires approval to be recorded again", func(t *testing.T) {
-		state, now, revision := summaryFixture(t)
-		passVerification(t, &state, now, Candidate{Kind: CommitCandidate, Revision: revision})
-		newRevision := "2222222222222222222222222222222222222222"
-		if _, err := state.RecordReview("WI-001", newRevision, Approved, "human@example.com", "", "", now); err != nil {
+	t.Run("a pass without an approval requirement is done", func(t *testing.T) {
+		state := lifecycleState(t, false, "a", "b")
+		runVerification(t, &state, "a", commitAt(revisionOne), 0)
+		summary, err := state.WorkSummary("a", RepositoryState{Revision: revisionTwo})
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := state.BeginCandidateVerification("WI-001", Candidate{Kind: CommitCandidate, Revision: newRevision}, "/tmp/worktree", "", now); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := state.RecordVerification("WI-001", newRevision, "make verify", 0, now); err != nil {
-			t.Fatal(err)
-		}
-		submitForReview(t, &state, "WI-001", now)
-		summary := mustWorkSummary(t, &state, RepositoryState{Revision: newRevision})
-		if summary.Completion != CompletionAwaitingReview || !summary.ApprovalNeedsRerecord {
-			t.Fatalf("summary = %#v", summary)
-		}
-	})
-
-	t.Run("blocked goal takes precedence", func(t *testing.T) {
-		state, now, revision := summaryFixture(t)
-		if err := state.BlockGoal("goal", "awaiting decision", now); err != nil {
-			t.Fatal(err)
-		}
-		summary := mustWorkSummary(t, &state, RepositoryState{Revision: revision})
-		if summary.Goal.Status != GoalBlocked || summary.Completion != CompletionGoalBlocked {
+		if summary.Completion != CompletionDone || summary.VerificationStale || summary.HasReview {
 			t.Fatalf("summary = %#v", summary)
 		}
 	})
@@ -188,7 +184,7 @@ func TestWorkSummaryProjectsCurrentActionableState(t *testing.T) {
 	t.Run("done remains done", func(t *testing.T) {
 		state, now, revision := summaryFixture(t)
 		passVerification(t, &state, now, Candidate{Kind: CommitCandidate, Revision: revision})
-		if _, err := state.RecordReview("WI-001", revision, Approved, "human@example.com", "", "", now); err != nil {
+		if _, err := state.RecordReview("WI-001", revision, Approved, "human@example.com", "", now); err != nil {
 			t.Fatal(err)
 		}
 		summary := mustWorkSummary(t, &state, RepositoryState{Revision: "2222222222222222222222222222222222222222"})
@@ -216,7 +212,7 @@ func summaryFixture(t *testing.T) (State, time.Time, string) {
 	now := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
 	revision := "1111111111111111111111111111111111111111"
 	state := NewState()
-	if err := state.AddGoal("goal", "Goal", "", "/repo", now); err != nil {
+	if err := state.AddGoalRequiringApproval("goal", "Goal", "", "/repo", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.AddWork("goal", "specs/stories/one", nil, now); err != nil {
@@ -236,7 +232,6 @@ func passVerification(t *testing.T, state *State, now time.Time, candidate Candi
 	if _, err := state.RecordVerification("WI-001", candidate.Revision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
-	submitForReview(t, state, "WI-001", now)
 }
 
 func mustWorkSummary(t *testing.T, state *State, repository RepositoryState) WorkItemSummary {

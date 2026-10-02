@@ -105,7 +105,7 @@ func TestImportCreatesGoalAndWholeDAGInPlanOrder(t *testing.T) {
 	state := NewState()
 	plan := planOf(node("sync-job", "schema"), node("schema"), node("report", "schema", "sync-job"), node("docs"))
 	plan.Goal.RequireApproval = true
-	result, err := state.ImportGoalPlan(plan, "/repo", RepositoryState{}, planNow)
+	result, err := state.ImportGoalPlan(plan, "/repo", planNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestImportCreatesGoalAndWholeDAGInPlanOrder(t *testing.T) {
 		t.Fatalf("imported state is invalid: %v", err)
 	}
 	goal, _ := state.GoalByID("billing")
-	if goal.Title != "Billing sync" || goal.Description != "sync it" || goal.Repository != "/repo" || goal.Status != GoalActive || goal.ReviewPolicy != ReviewPerWorkItem || goal.CompletionPolicy != CompletionHuman {
+	if goal.Title != "Billing sync" || goal.Description != "sync it" || goal.Repository != "/repo" || goal.Status != GoalActive || !goal.RequireApproval {
 		t.Fatalf("goal = %#v", goal)
 	}
 	var order []string
@@ -140,28 +140,24 @@ func TestImportCreatesGoalAndWholeDAGInPlanOrder(t *testing.T) {
 	}
 }
 
-func TestImportMapsApprovalToTheTransitionalReviewPolicy(t *testing.T) {
+func TestImportPersistsTheApprovalRequirement(t *testing.T) {
 	for _, requireApproval := range []bool{true, false} {
 		state := NewState()
 		plan := planOf(node("a"))
 		plan.Goal.RequireApproval = requireApproval
-		if _, err := state.ImportGoalPlan(plan, "/repo", RepositoryState{}, planNow); err != nil {
+		if _, err := state.ImportGoalPlan(plan, "/repo", planNow); err != nil {
 			t.Fatal(err)
 		}
 		goal, _ := state.GoalByID("billing")
-		wantPolicy, wantCompletion := ReviewPerGoal, CompletionVerified
-		if requireApproval {
-			wantPolicy, wantCompletion = ReviewPerWorkItem, CompletionHuman
-		}
-		if goal.ReviewPolicy != wantPolicy || goal.CompletionPolicy != wantCompletion {
-			t.Errorf("require_approval=%t gave %s/%s, want %s/%s", requireApproval, goal.ReviewPolicy, goal.CompletionPolicy, wantPolicy, wantCompletion)
+		if goal.RequireApproval != requireApproval {
+			t.Errorf("plan require_approval=%t gave goal %t", requireApproval, goal.RequireApproval)
 		}
 	}
 }
 
 func TestInvalidImportChangesNothing(t *testing.T) {
 	state := NewState()
-	if _, err := state.ImportGoalPlan(planOf(node("a")), "/repo", RepositoryState{}, planNow); err != nil {
+	if _, err := state.ImportGoalPlan(planOf(node("a")), "/repo", planNow); err != nil {
 		t.Fatal(err)
 	}
 	before := state
@@ -169,11 +165,11 @@ func TestInvalidImportChangesNothing(t *testing.T) {
 	before.WorkItems = append([]Item(nil), state.WorkItems...)
 
 	other := GoalPlan{Goal: PlanGoal{ID: "other", Title: "Other"}, Nodes: []PlanNode{node("fresh"), node("a")}}
-	if _, err := state.ImportGoalPlan(other, "/repo", RepositoryState{}, planNow); err == nil || !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), "billing") {
+	if _, err := state.ImportGoalPlan(other, "/repo", planNow); err == nil || !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), "billing") {
 		t.Fatalf("a node ID owned by another goal: %v", err)
 	}
 	cycle := planOf(node("a"), node("new1", "new2"), node("new2", "new1"))
-	if _, err := state.ImportGoalPlan(cycle, "/repo", RepositoryState{}, planNow); err == nil {
+	if _, err := state.ImportGoalPlan(cycle, "/repo", planNow); err == nil {
 		t.Fatal("accepted a cycle")
 	}
 	if !reflect.DeepEqual(state, before) {
@@ -185,7 +181,7 @@ func TestReimportRules(t *testing.T) {
 	base := func() (State, GoalPlan) {
 		state := NewState()
 		plan := planOf(node("a"), node("b", "a"))
-		if _, err := state.ImportGoalPlan(plan, "/repo", RepositoryState{}, planNow); err != nil {
+		if _, err := state.ImportGoalPlan(plan, "/repo", planNow); err != nil {
 			t.Fatal(err)
 		}
 		return state, plan
@@ -202,7 +198,7 @@ func TestReimportRules(t *testing.T) {
 		before := state
 		before.Goals = append([]Goal(nil), state.Goals...)
 		before.WorkItems = append([]Item(nil), state.WorkItems...)
-		result, err := state.ImportGoalPlan(clone(plan), "/repo", RepositoryState{}, later)
+		result, err := state.ImportGoalPlan(clone(plan), "/repo", later)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,12 +213,12 @@ func TestReimportRules(t *testing.T) {
 	t.Run("dependency order is not a change", func(t *testing.T) {
 		state := NewState()
 		plan := planOf(node("a"), node("b"), node("c", "a", "b"))
-		if _, err := state.ImportGoalPlan(plan, "/repo", RepositoryState{}, planNow); err != nil {
+		if _, err := state.ImportGoalPlan(plan, "/repo", planNow); err != nil {
 			t.Fatal(err)
 		}
 		reordered := clone(plan)
 		reordered.Nodes[2] = node("c", "b", "a")
-		if result, err := state.ImportGoalPlan(reordered, "/repo", RepositoryState{}, later); err != nil || result.Changed() {
+		if result, err := state.ImportGoalPlan(reordered, "/repo", later); err != nil || result.Changed() {
 			t.Fatalf("reordered depends_on: %#v, %v; want an unchanged success", result, err)
 		}
 	})
@@ -232,12 +228,12 @@ func TestReimportRules(t *testing.T) {
 		state := NewState()
 		plan := planOf(node("a"), node("b", "a"))
 		plan.Goal.RequireApproval = true
-		if _, err := state.ImportGoalPlan(plan, "/repo", RepositoryState{}, planNow); err != nil {
+		if _, err := state.ImportGoalPlan(plan, "/repo", planNow); err != nil {
 			t.Fatal(err)
 		}
 		state.item("a").Status = Done // a finished node can still be depended on
 		plan.Nodes = append(plan.Nodes, node("c", "a"), node("d", "c", "b"))
-		result, err := state.ImportGoalPlan(plan, "/repo", RepositoryState{}, later)
+		result, err := state.ImportGoalPlan(plan, "/repo", later)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -283,7 +279,6 @@ func TestReimportRules(t *testing.T) {
 		{"changed approval", func(_ *State, p *GoalPlan) { p.Goal.RequireApproval = true }, "goal.require_approval"},
 		{"completed goal", func(s *State, _ *GoalPlan) { s.Goals[0].Status = GoalCompleted }, "COMPLETED"},
 		{"cancelled goal", func(s *State, _ *GoalPlan) { s.Goals[0].Status, s.Goals[0].Reason = GoalCancelled, "dropped" }, "CANCELLED"},
-		{"blocked goal", func(s *State, _ *GoalPlan) { s.Goals[0].Status, s.Goals[0].Reason = GoalBlocked, "paused" }, "BLOCKED"},
 	}
 	for _, test := range rejections {
 		t.Run("rejects "+test.name, func(t *testing.T) {
@@ -294,7 +289,7 @@ func TestReimportRules(t *testing.T) {
 			before := state
 			before.Goals = append([]Goal(nil), state.Goals...)
 			before.WorkItems = append([]Item(nil), state.WorkItems...)
-			_, err := state.ImportGoalPlan(plan, "/repo", RepositoryState{}, later)
+			_, err := state.ImportGoalPlan(plan, "/repo", later)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want one mentioning %q", err, test.want)
 			}

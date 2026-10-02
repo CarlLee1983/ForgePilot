@@ -32,15 +32,15 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
 
   init                              create .forgepilot state in the current repository
   goal import <plan-path>           create a Goal and its whole DAG from a Goal Plan (JSON); re-import only adds nodes
-  goal <block|unblock|complete|cancel> <goal-id>
+  goal cancel <goal-id> --reason <text>
   next                              recommend the next legal agent action
   start <work-id>                   move a READY work item to RUNNING
   reconcile --goal <goal-id>        recompute one Goal's PENDING/READY readiness
   verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
   gate <resolve|cancel> <gate-id>
-  review request <work-id>            submit a passing WORK_ITEM candidate for human review
-  review <approve|reject> <work-id> [--pr <owner/name#number>]
+  review approve <work-id> [--note <text>] [--by <name>]    complete REVIEW work (Goals that require approval)
+  review reject <work-id> --reason <text> [--by <name>]     send REVIEW work back to RUNNING
   status [--work <work-id> --summary] print full status, or one Work Item's current summary
 
 ForgePilot does not replace PraxisBound or your coding agent. Nothing here makes
@@ -93,73 +93,42 @@ func run(args []string, cwd string, output io.Writer) error {
 
 func goal(args []string, cwd, root string, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: forgepilot goal <import|block|unblock|complete|cancel>")
+		return errors.New("usage: forgepilot goal <import|cancel>")
 	}
 	switch args[0] {
 	case "import":
 		return importGoal(args[1:], cwd, root, output)
-	case "block":
-		return changeGoal(args[1:], root, output, "block", work.GoalBlocked)
-	case "unblock":
-		return changeGoal(args[1:], root, output, "unblock", work.GoalActive)
-	case "complete":
-		return changeGoal(args[1:], root, output, "complete", work.GoalCompleted)
 	case "cancel":
-		return changeGoal(args[1:], root, output, "cancel", work.GoalCancelled)
+		return cancelGoal(args[1:], root, output)
 	default:
 		return fmt.Errorf("unknown goal subcommand %q", args[0])
 	}
 }
 
-// changeGoal drives the four lifecycle moves. Only the two that stop a Goal take
-// a reason: a status saying a Goal stopped without saying why is the record this
-// is meant to avoid.
-func changeGoal(args []string, root string, output io.Writer, action string, target work.GoalStatus) error {
-	needsReason := target == work.GoalBlocked || target == work.GoalCancelled
-	usage := fmt.Sprintf("usage: forgepilot goal %s <goal-id>", action)
-	if needsReason {
-		usage += " --reason <text>"
-	}
+// cancelGoal ends a Goal that will not be done. It needs a reason: a status
+// saying a Goal stopped without saying why is the record this is meant to avoid.
+// A Goal has no other command: it completes by itself when its last Work Item is
+// DONE.
+func cancelGoal(args []string, root string, output io.Writer) error {
+	const usage = "usage: forgepilot goal cancel <goal-id> --reason <text>"
 	if len(args) == 0 || strings.HasPrefix(args[0], "--") {
 		return errors.New(usage)
 	}
 	id := args[0]
-	allowed := map[string]bool{}
-	if needsReason {
-		allowed["reason"] = false
-	}
-	values, err := flags(args[1:], allowed)
+	values, err := flags(args[1:], map[string]bool{"reason": false})
 	if err != nil {
 		return err
 	}
 	reason := values.one("reason")
-	if needsReason && reason == "" {
+	if reason == "" {
 		return errors.New("--reason is required")
 	}
-	if target == work.GoalCompleted {
-		if err := app.CompleteGoal(context.Background(), root, id, now); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintf(output, "Goal %s %s\n", id, target)
-		return err
-	}
 	if err := storage.Update(root, func(state *work.State) error {
-		switch target {
-		case work.GoalBlocked:
-			return state.BlockGoal(id, reason, now())
-		case work.GoalActive:
-			repositoryState, err := app.CandidateFacts(context.Background(), state, root)
-			if err != nil {
-				return fmt.Errorf("resolve current Candidate before unblocking: %w", err)
-			}
-			return state.UnblockGoalWithRepository(id, repositoryState, now())
-		default:
-			return state.CancelGoal(id, reason, now())
-		}
+		return state.CancelGoal(id, reason, now())
 	}); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "Goal %s %s\n", id, target)
+	_, err = fmt.Fprintf(output, "Goal %s %s\n", id, work.GoalCancelled)
 	return err
 }
 
@@ -179,11 +148,11 @@ func next(args []string, root string, output io.Writer) error {
 	switch action.Kind {
 	case work.NextActionNone:
 		_, err = fmt.Fprintln(output, "No actionable work.")
-	case work.NextActionCompleteGoal:
-		_, err = fmt.Fprintf(output, "Goal %s is ready for automatic completion.\nAction: forgepilot goal complete %s\nReason: %s\n", action.Goal.ID, action.Goal.ID, action.Reason)
 	case work.NextActionGoalCompleted:
-		_, err = fmt.Fprintf(output, "Goal %s is already completed.\n", action.Goal.ID)
-	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
+		_, err = fmt.Fprintf(output, "Goal %s is completed: every Work Item is DONE.\n", action.Goal.ID)
+	case work.NextActionGoalCancelled:
+		_, err = fmt.Fprintf(output, "Goal %s is cancelled (%s). No actionable work.\n", action.Goal.ID, action.Reason)
+	case work.NextActionWaitHumanReview, work.NextActionWaitGate:
 		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: %s\nReason: %s\n", action.Item.ID, action.Reason)
 	default:
 		_, err = fmt.Fprintf(output, "Next: %s\nState: %s\nGoal: %s\nStory: %s\nAction: %s\nReason: %s\n",
@@ -193,18 +162,17 @@ func next(args []string, root string, output io.Writer) error {
 	return err
 }
 
-// nextRepositoryState gathers Git facts only when a REVIEW or VERIFIED Work Item can
-// actually be re-verified or is waiting for a Human Review. READY and RUNNING
-// recommendations still work in a repository without a commit, just as next
-// did before candidate-aware selection existed.
+// nextRepositoryState gathers repository facts only when some Work Item is in
+// REVIEW, the one status whose Evidence can be stale or is waiting for a Human
+// Review. READY and RUNNING recommendations still work in a repository without
+// a commit.
 func nextRepositoryState(state *work.State, root string) (work.RepositoryState, error) {
 	return app.CandidateFacts(context.Background(), state, root)
 }
 
-// reconcile writes the readiness the current facts imply for one Goal. It is the
-// explicit command that recovers a queue whose persisted PENDING outlived the
-// condition that caused it; it appends no Evidence, answers no Gate and changes
-// no review policy.
+// reconcile writes the readiness the dependency rule implies for one Goal. It is
+// the explicit command that recovers a queue whose persisted PENDING disagrees
+// with it; it appends no Evidence and answers no Gate.
 func reconcile(args []string, root string, output io.Writer) error {
 	values, err := flags(args, map[string]bool{"goal": false})
 	if err != nil {
@@ -214,7 +182,7 @@ func reconcile(args []string, root string, output io.Writer) error {
 	if id == "" {
 		return errors.New("usage: forgepilot reconcile --goal <goal-id>")
 	}
-	changes, err := app.ReconcileGoal(context.Background(), root, id, now)
+	changes, err := app.ReconcileGoal(root, id, now)
 	if err != nil {
 		return err
 	}
@@ -251,8 +219,6 @@ func nextActionText(state *work.State, action work.NextAction) string {
 		// The recommendation names the Goal because readiness is reconciled a Goal
 		// at a time; the Work Item it is about is already on the Next: line.
 		return fmt.Sprintf("forgepilot reconcile --goal %s", action.Item.GoalID)
-	case work.NextActionCompleteGoal:
-		return fmt.Sprintf("forgepilot goal complete %s", action.Goal.ID)
 	default:
 		return ""
 	}
@@ -262,7 +228,7 @@ func start(args []string, root string, output io.Writer) error {
 	if len(args) != 1 {
 		return errors.New("usage: forgepilot start <work-id>")
 	}
-	if err := app.StartWork(context.Background(), root, args[0], now); err != nil {
+	if err := app.StartWork(root, args[0], now); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(output, "%s RUNNING\n", args[0])
@@ -298,20 +264,8 @@ func status(args []string, root string, output io.Writer) error {
 		if _, err := fmt.Fprintln(output, heading); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(output, "  Review policy: %s\n", goal.ReviewPolicy); err != nil {
+		if _, err := fmt.Fprintf(output, "  Approval required: %s\n", yesNo(goal.RequireApproval)); err != nil {
 			return err
-		}
-		if goal.ReviewPolicy == work.ReviewPerGoal {
-			if _, err := fmt.Fprintf(output, "  Completion policy: %s\n", goal.CompletionPolicy); err != nil {
-				return err
-			}
-			summary, summaryErr := state.GoalSummary(goal.ID, work.RepositoryState{Revision: revision, SnapshotDigest: digest})
-			if summaryErr != nil {
-				return summaryErr
-			}
-			if _, err := fmt.Fprintf(output, "  Goal completion: %s\n", summary.Completion); err != nil {
-				return err
-			}
 		}
 		for _, item := range state.WorkItems {
 			if item.GoalID != goal.ID {
@@ -325,12 +279,12 @@ func status(args []string, root string, output io.Writer) error {
 				// command, so this instruction works even when the work is blocked.
 				note = " (verifier is gone; run forgepilot verify to recover)"
 			}
-			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
-				verificationSummary(&state, item.ID, revision, digest), reviewSummary(&state, item.ID, goal.ReviewPolicy)); err != nil {
+			if _, err := fmt.Fprintf(output, "  %s %s %s%s\n    %s\n", item.ID, item.Status, item.StoryRef, note,
+				verificationSummary(&state, item.ID, revision, digest)); err != nil {
 				return err
 			}
-			if unfinished := completionSummary(&state, item.ID); unfinished != "" {
-				if _, err := fmt.Fprintf(output, "    %s\n", unfinished); err != nil {
+			if goal.RequireApproval {
+				if _, err := fmt.Fprintf(output, "    %s\n", reviewSummary(&state, item.ID)); err != nil {
 					return err
 				}
 			}
@@ -341,7 +295,7 @@ func status(args []string, root string, output io.Writer) error {
 			}
 		}
 	}
-	if next, ok := state.NextWithRepository(work.RepositoryState{Revision: revision, SnapshotDigest: digest}); ok {
+	if next, ok := state.Next(); ok {
 		_, err = fmt.Fprintf(output, "Next: %s\n", next.ID)
 	} else {
 		_, err = fmt.Fprintln(output, "Next: none")
@@ -390,7 +344,7 @@ func statusSummary(args []string, root string, output io.Writer) error {
 		return err
 	}
 	repositoryState := work.RepositoryState{}
-	if summary.HasVerification && summary.Item.Status != work.Done && summary.Goal.Status != work.GoalCompleted {
+	if summary.HasVerification && summary.Item.Status != work.Done {
 		if summary.Verification.CandidateKind == work.SnapshotCandidate {
 			workspace, inspectErr := repository.InspectSnapshot(context.Background(), root)
 			if inspectErr != nil {
@@ -421,15 +375,15 @@ func writeWorkSummary(output io.Writer, summary work.WorkItemSummary) error {
 		}
 		blocking = strings.Join(ids, ", ")
 	}
-	_, err := fmt.Fprintf(output, "%s %s\nGoal: %s %s\nReview policy: %s\nStory: %s\nVerification: %s\nReview: %s\nBlocking gates: %s\nCompletion: %s\n",
+	_, err := fmt.Fprintf(output, "%s %s\nGoal: %s %s\nApproval required: %s\nStory: %s\nVerification: %s\nReview: %s\nBlocking gates: %s\nCompletion: %s\n",
 		summary.Item.ID, summary.Item.Status,
 		summary.Goal.ID, summary.Goal.Status,
-		summary.Goal.ReviewPolicy,
+		yesNo(summary.Goal.RequireApproval),
 		summary.Item.StoryRef,
 		workVerificationSummary(summary),
 		workReviewSummary(summary),
 		blocking,
-		workCompletionSummary(summary))
+		summary.Completion)
 	return err
 }
 
@@ -448,8 +402,8 @@ func workVerificationSummary(summary work.WorkItemSummary) string {
 }
 
 func workReviewSummary(summary work.WorkItemSummary) string {
-	if summary.Goal.ReviewPolicy == work.ReviewPerGoal {
-		return "not applicable (GOAL policy)"
+	if !summary.Goal.RequireApproval {
+		return "not required"
 	}
 	if !summary.HasReview {
 		return "not reviewed"
@@ -457,11 +411,11 @@ func workReviewSummary(summary work.WorkItemSummary) string {
 	return fmt.Sprintf("%s %s at %s", summary.Review.ID, summary.Review.Result, shortRevision(summary.Review.Revision))
 }
 
-func workCompletionSummary(summary work.WorkItemSummary) string {
-	if summary.ApprovalNeedsRerecord {
-		return "awaiting human review (re-approve to complete)"
+func yesNo(value bool) string {
+	if value {
+		return "yes"
 	}
-	return string(summary.Completion)
+	return "no"
 }
 
 type flagValues map[string][]string

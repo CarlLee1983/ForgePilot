@@ -9,7 +9,7 @@ func verifiableState(t *testing.T) (State, time.Time) {
 	t.Helper()
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	state := NewState()
-	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+	if err := state.AddGoalRequiringApproval("g", "Goal", "", "/repo", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.AddWork("g", "specs/stories/a", nil, now); err != nil {
@@ -38,7 +38,7 @@ func TestVerifiableRejectsWorkThatCannotBeVerified(t *testing.T) {
 		t.Fatalf("rejected REVIEW work: %v", err)
 	}
 	state.WorkItems[0].Status = Running
-	state.Goals[0].Status = GoalBlocked
+	state.Goals[0].Status = GoalCancelled
 	if err := state.Verifiable("WI-001"); err == nil {
 		t.Fatal("accepted work under a non-active goal")
 	}
@@ -68,8 +68,8 @@ func TestRecordVerificationAppendsEvidenceAndMovesWork(t *testing.T) {
 	if pass.WorkItemID != "WI-001" || pass.StoryRef != "specs/stories/a" || pass.Repository != "/repo" {
 		t.Fatalf("evidence lost its bindings: %#v", pass)
 	}
-	if state.WorkItems[0].Status != Running {
-		t.Fatalf("PASS left work as %s, want RUNNING", state.WorkItems[0].Status)
+	if state.WorkItems[0].Status != Review {
+		t.Fatalf("PASS left work as %s, want REVIEW", state.WorkItems[0].Status)
 	}
 
 	if err := state.BeginVerification("WI-001", "def456", "/tmp/wt", "", now); err != nil {
@@ -218,7 +218,7 @@ func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	revision := "1111111111111111111111111111111111111111"
 	state := NewState()
-	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+	if err := state.AddGoalRequiringApproval("g", "Goal", "", "/repo", now); err != nil {
 		t.Fatal(err)
 	}
 	item, err := state.AddWork("g", "specs/stories/a", nil, now)
@@ -260,14 +260,14 @@ func TestOrphanReclaimSeparatesRecordingFromStarting(t *testing.T) {
 	if err := state.BeginVerification(item.ID, revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.BlockGoal("g", "the direction is wrong", now); err != nil {
+	if err := state.CancelGoal("g", "the direction is wrong", now); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.CanBeginVerification(item.ID); err == nil {
-		t.Fatal("an orphaned run let verification start under a blocked goal")
+		t.Fatal("an orphaned run let verification start under a cancelled goal")
 	}
 	if _, _, _, found, err := state.ReclaimRun(item.ID, "make verify", now); err != nil || !found {
-		t.Fatalf("a blocked goal discarded an interrupted run: %v, %v", found, err)
+		t.Fatalf("a cancelled goal discarded an interrupted run: %v, %v", found, err)
 	}
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)

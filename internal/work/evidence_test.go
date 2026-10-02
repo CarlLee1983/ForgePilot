@@ -2,7 +2,6 @@ package work
 
 import (
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,10 +41,38 @@ func TestV3EvidenceCarriesEmptyReviewFields(t *testing.T) {
 	}
 }
 
+// The v19 shape has no PR on Evidence and no policy fields on Goal: a Goal says
+// only whether it requires approval.
+func TestV19ShapeCarriesNoPRReviewPolicyOrCompletionProvenance(t *testing.T) {
+	zero := 0
+	evidence, err := json.Marshal(Evidence{ExitCode: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goal, err := json.Marshal(Goal{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := json.Marshal(NewState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{`"pr"`, `"review_policy"`, `"completion_policy"`, `"goal_completion_evidence"`, `"next_goal_completion_evidence_id"`} {
+		for name, encoded := range map[string][]byte{"evidence": evidence, "goal": goal, "state": state} {
+			if strings.Contains(string(encoded), removed) {
+				t.Errorf("%s still serialises %s: %s", name, removed, encoded)
+			}
+		}
+	}
+	if !strings.Contains(string(goal), `"require_approval":false`) {
+		t.Errorf("goal does not serialise its Approval Requirement: %s", goal)
+	}
+}
+
 func TestStateValidationRejectsFalseEvidenceRepositoryOrStoryAssociation(t *testing.T) {
 	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 	state := NewState()
-	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+	if err := state.AddGoalRequiringApproval("g", "Goal", "", "/repo", now); err != nil {
 		t.Fatal(err)
 	}
 	item, err := state.AddWork("g", "specs/stories/a", nil, now)
@@ -84,11 +111,11 @@ func TestVerificationRunIDsAreUsedExactlyOnce(t *testing.T) {
 	zero := 0
 	build := func() State {
 		return State{
-			SchemaVersion: SchemaVersion, NextEvidenceID: 3, NextGateID: 1, NextVerificationRunID: 3, NextGoalCompletionEvidenceID: 1,
-			Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerGoal, CompletionPolicy: CompletionVerified}},
+			SchemaVersion: SchemaVersion, NextEvidenceID: 3, NextGateID: 1, NextVerificationRunID: 3,
+			Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive}},
 			WorkItems: []Item{
-				{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Verified},
-				{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Verified},
+				{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Done},
+				{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Done},
 			},
 			Evidence: []Evidence{
 				{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo", WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-001", CreatedAt: now},
@@ -130,14 +157,14 @@ func TestVerificationRunIDsAreUsedExactlyOnce(t *testing.T) {
 	})
 }
 
-// reviewFixture returns state with WI-001 explicitly submitted for review,
-// plus WI-002 depending on it.
+// reviewFixture returns state under a Goal that requires approval, with WI-001
+// passed into REVIEW and WI-002 depending on it.
 func reviewFixture(t *testing.T) (State, time.Time, string) {
 	t.Helper()
 	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	revision := "1111111111111111111111111111111111111111"
 	state := NewState()
-	if err := state.AddGoal("g", "Goal", "", "/repo", now); err != nil {
+	if err := state.AddGoalRequiringApproval("g", "Goal", "", "/repo", now); err != nil {
 		t.Fatal(err)
 	}
 	first, err := state.AddWork("g", "specs/stories/a", nil, now)
@@ -156,128 +183,35 @@ func reviewFixture(t *testing.T) (State, time.Time, string) {
 	if _, err := state.RecordVerification(first.ID, revision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
-	submitForReview(t, &state, first.ID, now)
 	if state.WorkItemStatus(first.ID) != Review {
 		t.Fatalf("fixture did not reach REVIEW: %s", state.WorkItemStatus(first.ID))
 	}
 	return state, now, revision
 }
 
-func submitForReview(t *testing.T, state *State, id string, now time.Time) {
-	t.Helper()
-	verification, ok := state.LatestVerification(id)
-	if !ok {
-		t.Fatalf("%s has no verification", id)
-	}
-	repository := RepositoryState{Revision: verification.Revision}
-	if verification.CandidateKind == SnapshotCandidate {
-		repository.SnapshotDigest = verification.CandidateDigest
-	}
-	if err := state.RequestReviewWithRepository(id, verification.ID, repository, now); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPassingVerificationStaysRunningUntilReviewIsRequested(t *testing.T) {
-	state, now := verifiableState(t)
-	if err := state.BeginVerification("WI-001", "abc123", "/tmp/worktree", "", now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := state.RecordVerification("WI-001", "abc123", "make verify", 0, now); err != nil {
-		t.Fatal(err)
-	}
-	if got := state.WorkItemStatus("WI-001"); got != Running {
-		t.Fatalf("PASS left work as %s, want RUNNING", got)
-	}
-	if err := state.Reviewable("WI-001"); err == nil {
-		t.Fatal("a passing verification became reviewable without an explicit request")
-	}
-	submitForReview(t, &state, "WI-001", now)
-	if got := state.WorkItemStatus("WI-001"); got != Review {
-		t.Fatalf("request left work as %s, want REVIEW", got)
-	}
-}
-
-func TestReviewRequestFailsClosedOnCurrentState(t *testing.T) {
-	newPassedState := func(t *testing.T) (State, time.Time, Evidence, RepositoryState) {
-		t.Helper()
-		state, now := verifiableState(t)
-		candidate := Candidate{Kind: CommitCandidate, Revision: "abc123"}
-		if err := state.BeginCandidateVerification("WI-001", candidate, "/tmp/worktree", "", now); err != nil {
-			t.Fatal(err)
-		}
-		verification, err := state.RecordVerification("WI-001", candidate.Revision, "make verify", 0, now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return state, now, verification, RepositoryState{Revision: candidate.Revision}
-	}
-
-	t.Run("stale candidate", func(t *testing.T) {
-		state, now, verification, _ := newPassedState(t)
-		if err := state.RequestReviewWithRepository("WI-001", verification.ID, RepositoryState{Revision: "def456"}, now); err == nil {
-			t.Fatal("submitted a stale candidate")
-		}
-		if got := state.WorkItemStatus("WI-001"); got != Running {
-			t.Fatalf("stale submission changed status to %s", got)
-		}
-	})
-
-	t.Run("open gate and inactive goal", func(t *testing.T) {
-		state, now, verification, repository := newPassedState(t)
-		if _, err := state.OpenGate("WI-001", "Choose", []string{"one", "two"}, "", now); err != nil {
-			t.Fatal(err)
-		}
-		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err == nil {
-			t.Fatal("submitted work with an open Gate")
-		}
-
-		state, now, verification, repository = newPassedState(t)
-		if err := state.BlockGoal("g", "paused", now); err != nil {
-			t.Fatal(err)
-		}
-		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err == nil {
-			t.Fatal("submitted work in an inactive Goal")
-		}
-	})
-
-	t.Run("later rejection at the same timestamp", func(t *testing.T) {
-		state, now, verification, repository := newPassedState(t)
-		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := state.RecordReview("WI-001", verification.Revision, Rejected, "human@example.com", "fix it", "", now); err != nil {
-			t.Fatal(err)
-		}
-		if err := state.RequestReviewWithRepository("WI-001", verification.ID, repository, now); err == nil {
-			t.Fatal("re-submitted a rejected candidate without a later verification")
-		}
-	})
-}
-
 func TestRecordReviewBindsAJudgementToAnExactRevision(t *testing.T) {
 	state, now, revision := reviewFixture(t)
 
-	if _, err := state.RecordReview("WI-001", revision, Approved, "", "", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Approved, "", "", now); err == nil {
 		t.Fatal("recorded a review with no reviewer")
 	}
-	if _, err := state.RecordReview("WI-001", "", Approved, "carl@example.com", "", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", "", Approved, "carl@example.com", "", now); err == nil {
 		t.Fatal("recorded a review with no revision")
 	}
-	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "", now); err == nil {
 		t.Fatal("recorded a rejection with no reason")
 	}
-	if _, err := state.RecordReview("WI-001", revision, Pass, "carl@example.com", "", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Pass, "carl@example.com", "", now); err == nil {
 		t.Fatal("recorded a verification result as a review")
 	}
-	if _, err := state.RecordReview("WI-002", revision, Approved, "carl@example.com", "", "", now); err == nil {
+	if _, err := state.RecordReview("WI-002", revision, Approved, "carl@example.com", "", now); err == nil {
 		t.Fatal("reviewed work that is not in REVIEW")
 	}
 	if len(state.Evidence) != 1 {
 		t.Fatalf("a refused review left evidence: %#v", state.Evidence)
 	}
 
-	evidence, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "reads correct", "", now)
+	evidence, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "reads correct", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +239,7 @@ func TestRecordReviewBindsAJudgementToAnExactRevision(t *testing.T) {
 
 func TestRejectionReturnsWorkToRunning(t *testing.T) {
 	state, now, revision := reviewFixture(t)
-	evidence, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "the error path is unhandled", "", now)
+	evidence, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "the error path is unhandled", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,15 +263,6 @@ func TestRejectionReturnsWorkToRunning(t *testing.T) {
 	}
 }
 
-// approveAt drives a Work Item that is already in REVIEW through an approval at
-// the given revision.
-func approveAt(t *testing.T, state *State, id, revision string, now time.Time) {
-	t.Helper()
-	if _, err := state.RecordReview(id, revision, Approved, "carl@example.com", "", "", now); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestApprovalCompletesWorkAndUnlocksDependents(t *testing.T) {
 	state, now, revision := reviewFixture(t)
 	// A third item that depends on both, so unlocking has something to refuse.
@@ -345,12 +270,11 @@ func TestApprovalCompletesWorkAndUnlocksDependents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	approveAt(t, &state, "WI-001", revision, now)
+	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", now); err != nil {
+		t.Fatal(err)
+	}
 	if got := state.WorkItemStatus("WI-001"); got != Done {
 		t.Fatalf("status after approval = %s, want DONE", got)
-	}
-	if blockers := state.CompletionBlockers("WI-001"); len(blockers) != 0 {
-		t.Fatalf("completed work still reports blockers: %v", blockers)
 	}
 	// Every dependency of WI-002 is now DONE, so it is unlocked in the same
 	// transaction. WI-003 still waits on WI-002 and must not be.
@@ -365,7 +289,7 @@ func TestApprovalCompletesWorkAndUnlocksDependents(t *testing.T) {
 	}
 
 	// DONE is terminal: nothing reviews, verifies or restarts it again.
-	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "changed my mind", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "changed my mind", now); err == nil {
 		t.Fatal("reviewed completed work")
 	}
 	if err := state.Verifiable("WI-001"); err == nil {
@@ -374,42 +298,6 @@ func TestApprovalCompletesWorkAndUnlocksDependents(t *testing.T) {
 	if err := state.Start("WI-001", now); err == nil {
 		t.Fatal("restarted completed work")
 	}
-}
-
-func TestCompletionRequiresAPassAtTheApprovedRevision(t *testing.T) {
-	state, now, revision := reviewFixture(t)
-	other := "2222222222222222222222222222222222222222"
-
-	// Approving at a revision the PASS does not cover records the review but
-	// completes nothing, and says why.
-	approveAt(t, &state, "WI-001", other, now)
-	if got := state.WorkItemStatus("WI-001"); got != Review {
-		t.Fatalf("status = %s, want REVIEW when the approval names another revision", got)
-	}
-	blockers := state.CompletionBlockers("WI-001")
-	if len(blockers) == 0 {
-		t.Fatal("no reason given for work that was approved but not completed")
-	}
-	if !strings.Contains(strings.Join(blockers, "; "), "revision") {
-		t.Fatalf("blockers %v do not explain the revision mismatch", blockers)
-	}
-	if got := state.WorkItemStatus("WI-002"); got != Pending {
-		t.Fatalf("a dependent was unlocked without a completion: %s", got)
-	}
-
-	// Verifying that revision and approving it again does complete the work.
-	if err := state.BeginVerification("WI-001", other, "/tmp/worktree", "", now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := state.RecordVerification("WI-001", other, "make verify", 0, now); err != nil {
-		t.Fatal(err)
-	}
-	submitForReview(t, &state, "WI-001", now)
-	approveAt(t, &state, "WI-001", other, now)
-	if got := state.WorkItemStatus("WI-001"); got != Done {
-		t.Fatalf("status = %s, want DONE", got)
-	}
-	_ = revision
 }
 
 // TestTheLatestResultWinsOnTheSameRevision is what makes re-running a check
@@ -429,20 +317,22 @@ func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
 	if got := state.WorkItemStatus("WI-001"); got != Running {
 		t.Fatalf("status after FAIL = %s, want RUNNING", got)
 	}
-	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "", now); err == nil {
+	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", now); err == nil {
 		t.Fatal("approved work whose latest verification failed")
 	}
 
-	// A newer REJECTED on the same revision beats the older APPROVED. Getting
-	// back to REVIEW takes a fresh PASS, and the rejection then holds.
+	// A newer REJECTED on the same revision beats the older PASS. Getting back to
+	// REVIEW takes a fresh PASS, and the rejection then holds.
 	if err := state.BeginVerification("WI-001", revision, "/tmp/worktree", "", now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordVerification("WI-001", revision, "make verify", 0, now); err != nil {
 		t.Fatal(err)
 	}
-	submitForReview(t, &state, "WI-001", now)
-	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "found a leak", "", now); err != nil {
+	if got := state.WorkItemStatus("WI-001"); got != Review {
+		t.Fatalf("status after the fresh PASS = %s, want REVIEW", got)
+	}
+	if _, err := state.RecordReview("WI-001", revision, Rejected, "carl@example.com", "found a leak", now); err != nil {
 		t.Fatal(err)
 	}
 	if got := state.WorkItemStatus("WI-001"); got != Running {
@@ -454,37 +344,16 @@ func TestTheLatestResultWinsOnTheSameRevision(t *testing.T) {
 	}
 }
 
-func TestOpenGatesAndInactiveGoalsBlockCompletion(t *testing.T) {
+// A Goal that is no longer ACTIVE has nothing left to approve.
+func TestReviewIsRefusedUnderACancelledGoal(t *testing.T) {
 	state, now, revision := reviewFixture(t)
-	if _, err := state.OpenGate("WI-001", "Which cache?", []string{"redis", "in-process"}, "", now); err != nil {
+	if err := state.CancelGoal("g", "dropped", now); err != nil {
 		t.Fatal(err)
 	}
-	approveAt(t, &state, "WI-001", revision, now)
-	if got := state.WorkItemStatus("WI-001"); got != Review {
-		t.Fatalf("status = %s, want REVIEW while a gate is open", got)
-	}
-	if !strings.Contains(strings.Join(state.CompletionBlockers("WI-001"), "; "), "gate") {
-		t.Fatalf("blockers %v do not name the open gate", state.CompletionBlockers("WI-001"))
-	}
-	if err := state.ResolveGate("GATE-001", "redis", "", "carl@example.com", now); err != nil {
-		t.Fatal(err)
-	}
-
-	// A Goal that is not ACTIVE blocks reaching DONE, but not recording what
-	// already happened.
-	state.Goals[0].Status = GoalBlocked
-	approveAt(t, &state, "WI-001", revision, now)
-	if got := state.WorkItemStatus("WI-001"); got != Review {
-		t.Fatalf("status = %s, want REVIEW while the goal is not active", got)
-	}
-	if !strings.Contains(strings.Join(state.CompletionBlockers("WI-001"), "; "), "goal") {
-		t.Fatalf("blockers %v do not name the inactive goal", state.CompletionBlockers("WI-001"))
-	}
-
-	state.Goals[0].Status = GoalActive
-	approveAt(t, &state, "WI-001", revision, now)
-	if got := state.WorkItemStatus("WI-001"); got != Done {
-		t.Fatalf("status = %s, want DONE once every condition holds", got)
+	for _, result := range []Result{Approved, Rejected} {
+		if _, err := state.RecordReview("WI-001", revision, result, "carl@example.com", "because", now); err == nil || !strings.Contains(err.Error(), "active goal") {
+			t.Fatalf("%s under a cancelled goal = %v", result, err)
+		}
 	}
 }
 
@@ -492,201 +361,14 @@ func TestOpenGatesAndInactiveGoalsBlockCompletion(t *testing.T) {
 // accumulating until the user starts ignoring every warning.
 func TestCompletedWorkIsNeverStale(t *testing.T) {
 	state, now, revision := reviewFixture(t)
-	approveAt(t, &state, "WI-001", revision, now)
+	if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", now); err != nil {
+		t.Fatal(err)
+	}
 	if state.Stale("WI-001", "3333333333333333333333333333333333333333") {
 		t.Fatal("completed work was marked stale against a later revision")
 	}
 	latest, ok := state.LatestVerification("WI-001")
 	if !ok || latest.Revision != revision {
 		t.Fatalf("completed work no longer shows the revision it finished on: %#v", latest)
-	}
-}
-
-// TestV4EvidenceCarriesEmptyPRReference pins the field schema v4 adds without
-// yet writing to it. PR Reference belongs to Human Review alone: Verification
-// Evidence serialises it empty and is refused if it carries one, for the same
-// reason a verification may not carry a reviewer — one kind of Evidence must
-// never be readable as the other.
-func TestV4EvidenceCarriesEmptyPRReference(t *testing.T) {
-	zero := 0
-	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
-		Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-001", CreatedAt: time.Now().UTC()}
-	encoded, err := json.Marshal(verification)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(encoded), `"pr":""`) {
-		t.Fatalf("evidence %s lacks an empty pr field", encoded)
-	}
-
-	items := map[string]Item{"WI-001": {ID: "WI-001"}}
-	if err := validateEvidence([]Evidence{verification}, 2, items); err != nil {
-		t.Fatal(err)
-	}
-	withPR := verification
-	withPR.PR = "carl/forgepilot#123"
-	if err := validateEvidence([]Evidence{withPR}, 2, items); err == nil {
-		t.Fatal("accepted verification evidence carrying a PR reference")
-	}
-}
-
-// TestReviewRecordsThePullRequestItHappenedOn covers the optional PR Reference:
-// present it is stored beside the exact revision, absent the review is exactly
-// what M3 recorded.
-func TestReviewRecordsThePullRequestItHappenedOn(t *testing.T) {
-	state, now, revision := reviewFixture(t)
-	evidence, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "carl/forgepilot#123", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if evidence.PR != "carl/forgepilot#123" || evidence.Revision != revision {
-		t.Fatalf("review did not bind the PR to the revision: %#v", evidence)
-	}
-	if err := state.Validate(); err != nil {
-		t.Fatal(err)
-	}
-
-	bare, _, bareRevision := reviewFixture(t)
-	plain, err := bare.RecordReview("WI-001", bareRevision, Approved, "carl@example.com", "", "", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plain.PR != "" {
-		t.Fatalf("a review without --pr carries one anyway: %#v", plain)
-	}
-}
-
-// TestPRReferenceMustBeOwnerNameNumber pins the single accepted form. Only one
-// form is accepted so that two records pointing at the same pull request cannot
-// be written differently, which would make them incomparable.
-func TestPRReferenceMustBeOwnerNameNumber(t *testing.T) {
-	// Case is preserved and accepted as written: a user copying the name off the
-	// pull request page must not be refused. That two spellings of one pull
-	// request stay distinguishable is the known cost.
-	for _, reference := range []string{"carl/forgepilot#1", "carl/forgepilot#123", "a-b.c_d/e-f.g_h#9", "Carl/ForgePilot#7"} {
-		state, now, revision := reviewFixture(t)
-		if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", reference, now); err != nil {
-			t.Fatalf("rejected %q: %v", reference, err)
-		}
-	}
-	rejected := []string{
-		"https://github.com/CarlLee1983/ForgePilot/pull/123",
-		"github.com/CarlLee1983/ForgePilot#123",
-		"carl/forgepilot/123",
-		"carl/forgepilot",
-		"#123",
-		"carl#123",
-		"/forgepilot#123",
-		"carl/#123",
-		"carl/forgepilot#0",
-		"carl/forgepilot#007",
-		"carl/forgepilot#-1",
-		"carl/forgepilot#12a",
-		" carl/forgepilot#123",
-		"carl/forgepilot#123 ",
-		"carl/forge pilot#123",
-		"carl/forgepilot#123#4",
-		"carl/forgepilot#1\ncarl/evil#2",
-		"carl/forgepilot#1\n",
-		"../..#1",
-		".github/.#1",
-		"-carl/forgepilot#1",
-		"carl/-forgepilot#1",
-		"carl/forgepilot#" + strings.Repeat("1", 300),
-		strings.Repeat("a", 300) + "/b#1",
-	}
-	for _, reference := range rejected {
-		state, now, revision := reviewFixture(t)
-		if _, err := state.RecordReview("WI-001", revision, Approved, "carl@example.com", "", reference, now); err == nil {
-			t.Fatalf("accepted %q", reference)
-		}
-		// A malformed reference is invalid input, not a review with a bad
-		// outcome: nothing may be written.
-		if len(state.Evidence) != 1 {
-			t.Fatalf("a refused review still appended evidence for %q: %#v", reference, state.Evidence)
-		}
-	}
-}
-
-// TestLoadedEvidenceWithAMalformedPRIsRejected keeps the rule in the domain
-// rather than at the CLI: a hand-edited state.json must not smuggle a value the
-// command line would have refused.
-func TestLoadedEvidenceWithAMalformedPRIsRejected(t *testing.T) {
-	items := map[string]Item{"WI-001": {ID: "WI-001"}}
-	review := Evidence{ID: "EV-001", Type: ReviewEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
-		Result: Approved, Reviewer: "carl@example.com", CreatedAt: time.Now().UTC()}
-	if err := validateEvidence([]Evidence{review}, 2, items); err != nil {
-		t.Fatal(err)
-	}
-	good := review
-	good.PR = "carl/forgepilot#123"
-	if err := validateEvidence([]Evidence{good}, 2, items); err != nil {
-		t.Fatal(err)
-	}
-	bad := review
-	bad.PR = "https://github.com/CarlLee1983/ForgePilot/pull/123"
-	if err := validateEvidence([]Evidence{bad}, 2, items); err == nil {
-		t.Fatal("accepted a review carrying a malformed PR reference")
-	}
-}
-
-// TestPRReferenceChangesNothingAboutCompletionOrStaleness is the executable form
-// of ADR-0011. The same commit is the same code whatever pull request it was
-// read under, so the completion conditions and the stale rule must give the same
-// answer with a PR Reference as without one — and two reviews of one revision
-// must still replace each other rather than form separate tracks per PR.
-func TestPRReferenceChangesNothingAboutCompletionOrStaleness(t *testing.T) {
-	withPR, now, revision := reviewFixture(t)
-	without, _, _ := reviewFixture(t)
-
-	if got, want := withPR.CompletionBlockers("WI-001"), without.CompletionBlockers("WI-001"); !slices.Equal(got, want) {
-		t.Fatalf("blockers differ before review: %v vs %v", got, want)
-	}
-	if withPR.Stale("WI-001", "other") != without.Stale("WI-001", "other") {
-		t.Fatal("staleness differs before review")
-	}
-
-	if _, err := withPR.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "carl/forgepilot#123", now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := without.RecordReview("WI-001", revision, Approved, "carl@example.com", "", "", now); err != nil {
-		t.Fatal(err)
-	}
-	if withPR.WorkItemStatus("WI-001") != Done || without.WorkItemStatus("WI-001") != Done {
-		t.Fatalf("completion differs: %s vs %s", withPR.WorkItemStatus("WI-001"), without.WorkItemStatus("WI-001"))
-	}
-	if withPR.Stale("WI-001", "other") != without.Stale("WI-001", "other") {
-		t.Fatal("staleness differs after review")
-	}
-
-	if got, want := withPR.CompletionBlockers("WI-001"), without.CompletionBlockers("WI-001"); !slices.Equal(got, want) {
-		t.Fatalf("blockers differ after review: %v vs %v", got, want)
-	}
-
-	// A later judgement on the same revision wins even when it names a different
-	// pull request: the PR does not open a second, parallel review track. The
-	// route runs through a rejection because DONE has no reopen (ADR-0006).
-	replaced, _, replacedRevision := reviewFixture(t)
-	if _, err := replaced.RecordReview("WI-001", replacedRevision, Rejected, "carl@example.com", "not yet", "carl/forgepilot#123", now); err != nil {
-		t.Fatal(err)
-	}
-	if err := replaced.BeginVerification("WI-001", replacedRevision, "/tmp/worktree", "", now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := replaced.RecordVerification("WI-001", replacedRevision, "make verify", 0, now); err != nil {
-		t.Fatal(err)
-	}
-	submitForReview(t, &replaced, "WI-001", now)
-	if _, err := replaced.RecordReview("WI-001", replacedRevision, Approved, "carl@example.com", "", "carl/forgepilot#456", now); err != nil {
-		t.Fatal(err)
-	}
-	latest, ok := replaced.LatestReview("WI-001")
-	if !ok || latest.PR != "carl/forgepilot#456" || latest.Result != Approved {
-		t.Fatalf("the later review on the same revision did not win: %#v", latest)
-	}
-	if replaced.WorkItemStatus("WI-001") != Done {
-		t.Fatalf("a review naming a different PR blocked completion: %s", replaced.WorkItemStatus("WI-001"))
 	}
 }

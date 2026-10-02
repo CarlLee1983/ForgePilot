@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/CarlLee1983/ForgePilot/internal/repository"
@@ -15,7 +14,7 @@ import (
 // of each Story path), and the rest is decided inside one locked transaction, so
 // an error anywhere leaves state untouched and two concurrent imports cannot
 // interleave into a half-built DAG. A plan that adds nothing writes nothing.
-func ImportGoalPlan(ctx context.Context, root string, plan work.GoalPlan, now Now) (work.PlanImport, error) {
+func ImportGoalPlan(root string, plan work.GoalPlan, now Now) (work.PlanImport, error) {
 	if err := plan.Validate(); err != nil {
 		return work.PlanImport{}, err
 	}
@@ -45,18 +44,8 @@ func ImportGoalPlan(ctx context.Context, root string, plan work.GoalPlan, now No
 				return fmt.Errorf("node %q: story: %w", node.ID, err)
 			}
 		}
-		// New nodes depend only on nodes of their own Goal, so only that Goal's
-		// Candidate facts are resolved: another Goal's unresolvable Candidate must
-		// not refuse this import. A Goal that does not exist yet has no Candidate.
-		facts := work.RepositoryState{}
-		if _, exists := state.GoalByID(plan.Goal.ID); exists {
-			var err error
-			if facts, err = GoalCandidateFacts(ctx, state, plan.Goal.ID, root); err != nil {
-				return fmt.Errorf("resolve current Candidate before importing: %w", err)
-			}
-		}
 		var err error
-		if result, err = state.ImportGoalPlan(plan, root, facts, now.at()); err != nil {
+		if result, err = state.ImportGoalPlan(plan, root, now.at()); err != nil {
 			return err
 		}
 		if !result.Changed() {
@@ -65,4 +54,23 @@ func ImportGoalPlan(ctx context.Context, root string, plan work.GoalPlan, now No
 		return nil
 	})
 	return result, err
+}
+
+// CompletionLines describes what finishing a Work Item just changed beyond the
+// item itself, so the person or agent running the command sees the queue move
+// rather than having to go looking for it: the work it unlocked and, if it was
+// the Goal's last unfinished item, the Goal's completion. It says nothing about
+// work that is not DONE.
+func CompletionLines(state *work.State, id string) []string {
+	if state.WorkItemStatus(id) != work.Done {
+		return nil
+	}
+	var lines []string
+	for _, dependent := range state.ReadyDependents(id) {
+		lines = append(lines, fmt.Sprintf("%s READY", dependent))
+	}
+	if goal, ok := state.GoalOfWorkItem(id); ok && goal.Status == work.GoalCompleted {
+		lines = append(lines, fmt.Sprintf("Goal %s COMPLETED", goal.ID))
+	}
+	return lines
 }

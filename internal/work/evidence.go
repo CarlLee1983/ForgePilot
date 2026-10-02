@@ -3,7 +3,6 @@ package work
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -54,14 +53,8 @@ type Evidence struct {
 	// self-asserted identity, never an authenticated one (ADR-0005); Note holds
 	// the free text behind the judgement. Verification Evidence leaves both
 	// empty, and is refused if it does not.
-	Reviewer string `json:"reviewer"`
-	Note     string `json:"note"`
-	// PR names the pull request a Human Review was carried out on, as
-	// owner/name#number. It is identification alone: nothing reads it when
-	// deciding whether work completes or whether Evidence has gone stale
-	// (ADR-0011), and it is never checked against GitHub (ADR-0010). Optional,
-	// and forbidden on Verification Evidence.
-	PR                string    `json:"pr"`
+	Reviewer          string    `json:"reviewer"`
+	Note              string    `json:"note"`
 	VerificationRunID string    `json:"verification_run_id"`
 	CreatedAt         time.Time `json:"created_at"`
 }
@@ -70,10 +63,26 @@ func (evidence Evidence) Candidate() Candidate {
 	return Candidate{Kind: evidence.CandidateKind, Revision: evidence.Revision, BaseRevision: evidence.BaseRevision, Digest: evidence.CandidateDigest}
 }
 
-// Verifiable reports whether a Work Item may enter a Verification Run. REVIEW and
-// VERIFIED are allowed so that a Work Item whose Evidence has gone Stale can be verified again
+// CompletionBlock reports why a Work Item cannot become DONE right now: its Goal
+// is not ACTIVE, or a Gate is open on it. It is the one criterion shared by a
+// PASS that would complete work and an approval that would, so the two paths
+// cannot drift apart.
+func (s *State) CompletionBlock(id string) error {
+	item := s.item(id)
+	if item == nil {
+		return fmt.Errorf("unknown work item %q", id)
+	}
+	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
+		return fmt.Errorf("work item %q does not belong to an active goal", id)
+	}
+	return s.gateBlock(id)
+}
+
+// Verifiable reports whether a Work Item may enter a Verification Run. REVIEW is
+// allowed so that a Work Item whose Evidence has gone Stale can be verified again
 // against the current revision; re-running against an unchanged revision is also
-// permitted, since Evidence only ever accumulates.
+// permitted, since Evidence only ever accumulates. DONE work is not: it is
+// terminal (ADR-0006).
 func (s *State) Verifiable(id string) error {
 	item := s.item(id)
 	if item == nil {
@@ -82,8 +91,8 @@ func (s *State) Verifiable(id string) error {
 	if err := s.gateBlock(id); err != nil {
 		return err
 	}
-	if item.Status != Running && item.Status != Review && item.Status != Verified {
-		return fmt.Errorf("work item %q is %s; only RUNNING, REVIEW, or VERIFIED work can be verified", id, item.Status)
+	if item.Status != Running && item.Status != Review {
+		return fmt.Errorf("work item %q is %s; only RUNNING or REVIEW work can be verified", id, item.Status)
 	}
 	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
 		return fmt.Errorf("work item %q does not belong to an active goal", id)
@@ -115,31 +124,27 @@ func (s *State) CanBeginVerification(id string) error {
 
 // RecordVerification appends the Evidence for a finished Verification Run and
 // moves the Work Item accordingly. It never overwrites existing Evidence.
+//
+// A PASS is the whole completion decision for a Goal without an Approval
+// Requirement: the work becomes DONE, its dependents are unlocked and, if it was
+// the Goal's last unfinished item, the Goal completes, all in this one call. Under
+// a Goal that requires approval a PASS moves the work to REVIEW instead. FAIL and
+// INTERRUPTED return it to RUNNING.
 func (s *State) RecordVerification(id, revision, command string, exitCode int, now time.Time) (Evidence, error) {
-	return s.recordVerification(id, revision, command, exitCode, nil, now)
-}
-
-// RecordVerificationWithRepository records the outcome and uses current
-// repository facts for any dependency promotions caused by a GOAL-policy PASS.
-func (s *State) RecordVerificationWithRepository(id, revision, command string, exitCode int, repository RepositoryState, now time.Time) (Evidence, error) {
-	return s.recordVerification(id, revision, command, exitCode, &repository, now)
-}
-
-func (s *State) recordVerification(id, revision, command string, exitCode int, repository *RepositoryState, now time.Time) (Evidence, error) {
 	result := Pass
 	if exitCode != 0 {
 		result = Fail
 	}
-	return s.appendEvidence(id, revision, command, &exitCode, result, repository, now)
+	return s.appendEvidence(id, revision, command, &exitCode, result, now)
 }
 
-func (s *State) appendEvidence(id, revision, command string, exitCode *int, result Result, repository *RepositoryState, now time.Time) (Evidence, error) {
+func (s *State) appendEvidence(id, revision, command string, exitCode *int, result Result, now time.Time) (Evidence, error) {
 	item := s.item(id)
 	if item == nil {
 		return Evidence{}, fmt.Errorf("unknown work item %q", id)
 	}
 	// Only a Verification Run produces Evidence, so only VERIFYING work can leave
-	// it. Without this the domain would offer a jump to REVIEW from any status.
+	// it. Without this the domain would offer a jump to DONE from any status.
 	if item.Status != Verifying {
 		return Evidence{}, fmt.Errorf("work item %q is %s; only VERIFYING work can record verification evidence", id, item.Status)
 	}
@@ -175,88 +180,22 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 	}
 	s.Evidence = append(s.Evidence, evidence)
 	item.CurrentRun = nil
-	switch result {
-	case Pass:
-		if goal.ReviewPolicy == ReviewPerGoal {
-			item.Status = Verified
-			s.refreshDependents(id, repository, now)
-		} else {
-			item.Status = Running
-		}
-	default:
-		item.Status = Running
-	}
 	item.UpdatedAt = now
+	item.Status = Running
+	// A PASS that cannot complete the work still keeps its Evidence: a Goal that
+	// is no longer ACTIVE, or a Gate opened while the check was running, leaves
+	// the work RUNNING and a later verification does the completing. Under an
+	// Approval Requirement a PASS is not completion, so it enters REVIEW and
+	// approve applies the same criterion.
+	if result == Pass && goal.Status == GoalActive {
+		switch {
+		case goal.RequireApproval:
+			item.Status = Review
+		case s.CompletionBlock(id) == nil:
+			s.complete(id, now)
+		}
+	}
 	return evidence, nil
-}
-
-// RequestReviewWithRepository moves a WORK_ITEM-policy Work Item with a newly verified PASS
-// to the Human Review boundary. Verification deliberately only records machine
-// evidence and returns the item to RUNNING: an agent may keep working and
-// re-verify without manufacturing a human-only stop after every passing run.
-//
-// A rejection still requires a later verification before it can be submitted
-// again. This preserves the old repair contract: a request cannot turn the
-// same rejected candidate back into REVIEW without new machine evidence.
-func (s *State) RequestReviewWithRepository(id, expectedVerificationID string, repository RepositoryState, now time.Time) error {
-	item := s.item(id)
-	if item == nil {
-		return fmt.Errorf("unknown work item %q", id)
-	}
-	goal := s.goal(item.GoalID)
-	if goal == nil {
-		return fmt.Errorf("work item %q has unknown goal", id)
-	}
-	if goal.ReviewPolicy == ReviewPerGoal {
-		return fmt.Errorf("work item %q uses GOAL review policy; per-Work-Item Human Review does not apply", id)
-	}
-	if item.Status != Running {
-		return fmt.Errorf("work item %q is %s; only RUNNING work can be submitted for review", id, item.Status)
-	}
-	if err := s.gateBlock(id); err != nil {
-		return err
-	}
-	if goal.Status != GoalActive {
-		return fmt.Errorf("work item %q does not belong to an active goal", id)
-	}
-	verification, verified := s.LatestVerification(id)
-	if !verified || verification.Result != Pass {
-		return fmt.Errorf("work item %q has no passing verification to submit for review", id)
-	}
-	if verification.ID != expectedVerificationID {
-		return errors.New("verification changed while preparing review request; retry the request")
-	}
-	if !candidateMatchesRepository(verification, repository) {
-		return fmt.Errorf("work item %q has a stale verified candidate; run forgepilot verify %s%s", id, id, verificationRetrySuffix(verification.Candidate()))
-	}
-	for i := len(s.Evidence) - 1; i >= 0; i-- {
-		evidence := s.Evidence[i]
-		if evidence.WorkItemID != id || evidence.Type != ReviewEvidence {
-			continue
-		}
-		if i > s.latestVerificationIndex(id) {
-			return fmt.Errorf("work item %q needs a new passing verification after its latest human review", id)
-		}
-		break
-	}
-	item.Status, item.UpdatedAt = Review, now
-	return nil
-}
-
-func verificationRetrySuffix(candidate Candidate) string {
-	if candidate.Kind == SnapshotCandidate {
-		return " --snapshot"
-	}
-	return ""
-}
-
-func (s *State) latestVerificationIndex(id string) int {
-	for i := len(s.Evidence) - 1; i >= 0; i-- {
-		if s.Evidence[i].WorkItemID == id && s.Evidence[i].Type == VerificationEvidence {
-			return i
-		}
-	}
-	return -1
 }
 
 func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) error {
@@ -290,7 +229,7 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 			if (record.Result == Interrupted) != (record.ExitCode == nil) {
 				return fmt.Errorf("evidence %q pairs result %q with the wrong exit code", record.ID, record.Result)
 			}
-			if record.Reviewer != "" || record.Note != "" || record.PR != "" {
+			if record.Reviewer != "" || record.Note != "" {
 				return fmt.Errorf("evidence %q is a verification but carries review fields", record.ID)
 			}
 		case ReviewEvidence:
@@ -313,9 +252,6 @@ func validateEvidence(evidence []Evidence, nextID int, items map[string]Item) er
 			}
 			if record.Result == Rejected && strings.TrimSpace(record.Note) == "" {
 				return fmt.Errorf("evidence %q rejects without a reason", record.ID)
-			}
-			if record.PR != "" && !validPRReference(record.PR) {
-				return fmt.Errorf("evidence %q carries a malformed PR reference %q", record.ID, record.PR)
 			}
 		default:
 			return fmt.Errorf("evidence %q has unknown type %q", record.ID, record.Type)
@@ -425,7 +361,6 @@ func (s *State) BeginCandidateVerificationWithRunID(id string, candidate Candida
 		CandidateDigest: candidate.Digest, WorktreePath: worktreePath, LogPath: logPath, StartedAt: now}
 	item.UpdatedAt = now
 	s.NextVerificationRunID++
-	s.refreshDependents(id, nil, now)
 	return nil
 }
 
@@ -447,7 +382,7 @@ func (s *State) ReclaimRun(id, command string, now time.Time) (Evidence, string,
 	// docs/adr/0012-verification-log-outside-state.md.
 	abandoned := item.CurrentRun.WorktreePath
 	logPath := item.CurrentRun.LogPath
-	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, command, nil, Interrupted, nil, now)
+	evidence, err := s.appendEvidence(id, item.CurrentRun.Revision, command, nil, Interrupted, now)
 	if err != nil {
 		return Evidence{}, "", "", false, err
 	}
@@ -488,26 +423,28 @@ func (s *State) LatestReview(id string) (Evidence, bool) {
 	return Evidence{}, false
 }
 
-// RecordReview appends a person's judgement about one exact revision. REJECTED
-// returns the Work Item to RUNNING so the Agent goes straight back to fixing it.
-// APPROVED records the judgement and nothing more here; whether it also completes
-// the work is decided by the completion conditions.
-func (s *State) RecordReview(id, revision string, result Result, reviewer, note, pullRequest string, now time.Time) (Evidence, error) {
-	return s.RecordCandidateReview(id, Candidate{Kind: CommitCandidate, Revision: revision}, result, reviewer, note, pullRequest, now)
+// RecordReview appends a person's judgement about one exact revision.
+func (s *State) RecordReview(id, revision string, result Result, reviewer, note string, now time.Time) (Evidence, error) {
+	return s.RecordCandidateReview(id, Candidate{Kind: CommitCandidate, Revision: revision}, result, reviewer, note, now)
 }
 
 // RecordCandidateReview binds a Human Review to the exact Candidate it judged.
-func (s *State) RecordCandidateReview(id string, candidate Candidate, result Result, reviewer, note, pullRequest string, now time.Time) (Evidence, error) {
-	item := s.item(id)
-	if item == nil {
-		return Evidence{}, fmt.Errorf("unknown work item %q", id)
-	}
+//
+// APPROVED completes the work in the same transaction (unlocking its dependents
+// and completing the Goal if this was the last item), so it is refused rather
+// than recorded when it could not: the Candidate must still be the one that
+// passed verification, and no Gate may be open. REJECTED returns the work to
+// RUNNING so the Agent goes straight back to fixing it; it needs a reason and
+// is not held back by a Gate or by staleness, since stopping work needs no
+// authority that a stale or gated Candidate lacks.
+func (s *State) RecordCandidateReview(id string, candidate Candidate, result Result, reviewer, note string, now time.Time) (Evidence, error) {
 	if result != Approved && result != Rejected {
 		return Evidence{}, fmt.Errorf("%q is not a review result", result)
 	}
 	if err := s.Reviewable(id); err != nil {
 		return Evidence{}, err
 	}
+	item := s.item(id)
 	goal := s.goal(item.GoalID)
 	if err := candidate.validate(); err != nil {
 		return Evidence{}, fmt.Errorf("a review requires a valid candidate: %w", err)
@@ -518,11 +455,18 @@ func (s *State) RecordCandidateReview(id string, candidate Candidate, result Res
 	if result == Rejected && strings.TrimSpace(note) == "" {
 		return Evidence{}, errors.New("rejecting work requires a reason")
 	}
-	// A malformed reference is invalid input, not a review with a bad outcome, so
-	// nothing is appended — the same treatment a revision without a canonical
-	// check gets from verification.
-	if pullRequest != "" && !validPRReference(pullRequest) {
-		return Evidence{}, fmt.Errorf("%q is not a pull request reference; expected owner/name#number", pullRequest)
+	if result == Approved {
+		if err := s.CompletionBlock(id); err != nil {
+			return Evidence{}, err
+		}
+		verification, verified := s.LatestVerification(id)
+		if !verified || verification.Result != Pass {
+			return Evidence{}, fmt.Errorf("work item %q has no passing verification to approve", id)
+		}
+		if !sameCandidate(verification.Candidate(), candidate) {
+			return Evidence{}, fmt.Errorf("work item %q has a stale verified candidate: its PASS %s no longer names the current candidate; run forgepilot verify %s%s",
+				id, verification.ID, id, verificationRetrySuffix(verification.Candidate()))
+		}
 	}
 	evidence := Evidence{
 		ID:              s.takeEvidenceID(),
@@ -537,7 +481,6 @@ func (s *State) RecordCandidateReview(id string, candidate Candidate, result Res
 		Result:          result,
 		Reviewer:        reviewer,
 		Note:            note,
-		PR:              pullRequest,
 		CreatedAt:       now,
 	}
 	s.Evidence = append(s.Evidence, evidence)
@@ -545,18 +488,32 @@ func (s *State) RecordCandidateReview(id string, candidate Candidate, result Res
 		item.Status, item.UpdatedAt = Running, now
 		return evidence, nil
 	}
-	// The approval is recorded either way. Whether it also completes the work is
-	// decided here, in the same transaction, by conditions rather than by a
-	// command anyone could issue.
-	if len(s.CompletionBlockers(id)) == 0 {
-		s.complete(id, now)
-	}
+	s.complete(id, now)
 	return evidence, nil
 }
 
+// sameCandidate reports whether two Candidates name the same code: a COMMIT by
+// its revision, a SNAPSHOT by the digest of its tree.
+func sameCandidate(left, right Candidate) bool {
+	if left.Kind != right.Kind {
+		return false
+	}
+	if left.Kind == SnapshotCandidate {
+		return left.Digest == right.Digest
+	}
+	return left.Revision == right.Revision
+}
+
+func verificationRetrySuffix(candidate Candidate) string {
+	if candidate.Kind == SnapshotCandidate {
+		return " --snapshot"
+	}
+	return ""
+}
+
 // Reviewable checks the durable boundary before a caller resolves repository or
-// reviewer facts. Goal-level policy cannot be turned into a Work Item review by
-// satisfying adapter preconditions first.
+// reviewer facts. A Goal without an Approval Requirement has no review to give,
+// and that cannot be changed by satisfying adapter preconditions first.
 func (s *State) Reviewable(id string) error {
 	item := s.item(id)
 	if item == nil {
@@ -566,21 +523,38 @@ func (s *State) Reviewable(id string) error {
 	if goal == nil {
 		return fmt.Errorf("work item %q has unknown goal", id)
 	}
-	if goal.ReviewPolicy == ReviewPerGoal {
-		return fmt.Errorf("work item %q uses GOAL review policy; per-Work-Item Human Review does not apply", id)
+	if !goal.RequireApproval {
+		return fmt.Errorf("goal %q does not require approval: its work completes when verification passes, so there is nothing to review", goal.ID)
 	}
 	// Only verified work is up for review: reviewing anything else would let a
 	// judgement stand in for a check that never ran.
 	if item.Status != Review {
 		return fmt.Errorf("work item %q is %s; only REVIEW work can be reviewed", id, item.Status)
 	}
+	if goal.Status != GoalActive {
+		return fmt.Errorf("work item %q does not belong to an active goal", id)
+	}
 	return nil
 }
 
+// VerifiedCandidate is the Candidate a rejection is recorded against: the one
+// the latest PASS verified, provided that PASS is still the one the caller saw.
+// It asks nothing about the workspace, so a stale Candidate can be rejected.
+func (s *State) VerifiedCandidate(id, expectedVerificationID string) (Candidate, error) {
+	latest, ok := s.LatestVerification(id)
+	if !ok || latest.Result != Pass {
+		return Candidate{}, fmt.Errorf("work item %q has no passing verification to review", id)
+	}
+	if latest.ID != expectedVerificationID {
+		return Candidate{}, errors.New("verification changed while preparing review; retry the review")
+	}
+	return latest.Candidate(), nil
+}
+
 // ResolveReviewCandidate applies the distinct review targeting contracts. A
-// COMMIT review keeps the legacy clean-HEAD target supplied by the caller. A
-// SNAPSHOT review may only reuse the latest verified immutable snapshot when
-// the current workspace digest still matches it.
+// COMMIT review keeps the clean-HEAD target supplied by the caller. A SNAPSHOT
+// review may only reuse the latest verified immutable snapshot when the current
+// workspace digest still matches it.
 func (s *State) ResolveReviewCandidate(id, expectedVerificationID, currentRevision, currentDigest string) (Candidate, error) {
 	latest, ok := s.LatestVerification(id)
 	if ok && latest.ID != expectedVerificationID {
@@ -594,35 +568,9 @@ func (s *State) ResolveReviewCandidate(id, expectedVerificationID, currentRevisi
 		return Candidate{}, fmt.Errorf("latest verification has unknown candidate kind %q", latest.CandidateKind)
 	}
 	if latest.CandidateDigest != currentDigest {
-		return Candidate{}, fmt.Errorf("workspace no longer matches verified snapshot; run forgepilot verify %s --snapshot", id)
+		return Candidate{}, fmt.Errorf("verified snapshot is stale: the workspace no longer matches it; run forgepilot verify %s --snapshot", id)
 	}
 	return latest.Candidate(), nil
-}
-
-// prReference is the single accepted form of a PR Reference. Accepting only one
-// form keeps two records that name the same pull request written the same way;
-// a URL and a shorthand for one pull request would be two strings nothing could
-// compare. The number rejects zero and leading zeros so that one pull request
-// has exactly one spelling, and each segment must start with an alphanumeric so
-// that "." and ".." cannot pose as an owner or a repository.
-//
-// Case is preserved and compared as written. Two spellings of one pull request
-// therefore remain possible, since GitHub treats owner and repository names
-// case-insensitively — a known trade-off, taken because the alternative rejects
-// the value a user copied straight off the pull request page.
-var prReference = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*#[1-9][0-9]*$`)
-
-// maxPRReferenceLength bounds what may be written into the state snapshot. No
-// real reference comes close; the limit exists so that nothing unbounded reaches
-// durable storage.
-const maxPRReferenceLength = 255
-
-// validPRReference reports whether a PR Reference is well formed. Well formed is
-// all this product checks: whether the pull request exists, is open, or has that
-// HEAD is a question about GitHub, and ForgePilot does not ask GitHub anything
-// (ADR-0010). The shape is not GitHub's own naming rules either.
-func validPRReference(reference string) bool {
-	return len(reference) <= maxPRReferenceLength && prReference.MatchString(reference)
 }
 
 // takeEvidenceID hands out the next ID on the single sequence both kinds of

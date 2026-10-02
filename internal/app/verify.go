@@ -80,9 +80,6 @@ type VerifyResult struct {
 	Status            work.Status
 	Candidate         work.Candidate
 	LogPath           string
-	// RefreshWarning records that Evidence was preserved but dependency
-	// readiness could not be refreshed from repository facts afterwards.
-	RefreshWarning error
 	// Interrupted marks a run that ended without producing a result.
 	Interrupted bool
 	// Cleanup records that a managed process group could not be confirmed
@@ -402,77 +399,56 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 
 	var evidence work.Evidence
 	var status work.Status
-	var factsErr error
+	var completion []string
 	updateErr := storage.Update(root, func(state *work.State) error {
 		if err := ensureVerificationVerdictUnchanged(state, id, verdictBefore); err != nil {
 			return err
 		}
 		var recordErr error
-		repositoryState, err := CandidateFacts(ctx, state, root)
-		factsErr = err
-		if err != nil {
-			evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, options.now())
-		} else {
-			evidence, recordErr = state.RecordVerificationWithRepository(id, candidate.Revision, repository.CanonicalCommand, exitCode, repositoryState, options.now())
-		}
+		// The PASS decides the Work Item's whole outcome here, in this one
+		// transaction: DONE (with its dependents unlocked and, for the last item,
+		// the Goal completed) or REVIEW, depending on the Goal's Approval
+		// Requirement.
+		evidence, recordErr = state.RecordVerification(id, candidate.Revision, repository.CanonicalCommand, exitCode, options.now())
 		if recordErr == nil {
 			status = state.WorkItemStatus(id)
+			completion = CompletionLines(state, id)
+			// A PASS that left the work RUNNING was recorded but could not
+			// complete it; say why rather than leave a PASS that looks ignored.
+			if evidence.Result == work.Pass && status == work.Running {
+				if blockErr := state.CompletionBlock(id); blockErr != nil {
+					completion = append(completion, fmt.Sprintf("PASS recorded but %s was not completed: %v; verify again once that is resolved", id, blockErr))
+				}
+			}
 		}
 		return recordErr
 	})
-	// Asked before the transaction's own verdict, and on both of its paths.
-	// Whether Evidence was saved and whether something is still running in this
-	// workspace are two different facts, and only one of them is about storage:
-	// the group was observed while the callback read repository facts, so it
-	// exists whether or not the write that followed landed. Returning the
-	// transaction error first is how it used to disappear — the caller then saw
-	// a result with no Cleanup and the workspace looked clear. Recorded exactly once, here, at the same location CandidateFacts
-	// actually ran in. See docs/adr/0022-pending-cleanup-outlives-the-process.md.
-	if unsettled := unsettledPart(factsErr); unsettled != nil {
-		result.note(UnresolvedGit, root, unsettled)
-	}
 	if updateErr != nil {
 		// Nothing below may run: the Evidence the callback built exists only in
 		// memory, and claiming a transaction that failed produced a result would
 		// invent exactly the kind of outcome a refusal is careful not to. The
 		// operational error travels unwrapped so errors.Is and errors.As still
-		// recognise it; what was added above travels with it on the result, where
-		// the caller looks for it — and where the deferred cleanup above reads it,
-		// so the checkout is kept rather than tidied away.
+		// recognise it.
 		return result, updateErr
 	}
 	result.Evidence, result.HasEvidence, result.Status = evidence, true, status
-	// Failing to refresh dependency readiness is a warning: the Evidence stands
-	// and a rerun repairs it. Failing to confirm a process group started while
-	// reading those facts is not — the next step must not begin, whatever the
-	// Evidence says, which is what the note above already recorded.
-	result.RefreshWarning = factsErr
 	// Non-PASS output no longer floods stdout: the log just printed above is
 	// where it lives now. See docs/adr/0012-verification-log-outside-state.md.
 	if _, err = fmt.Fprintf(output, "%s %s at %s\n%s %s\n", evidence.ID, evidence.Result, evidence.Revision, id, status); err != nil {
 		return result, err
 	}
-	if factsErr != nil {
-		_, err = fmt.Fprintf(output, "warning: dependency readiness was not refreshed: %v; Evidence was preserved; repair repository access and rerun %s\n", factsErr, VerificationRetryCommand(id, candidate))
+	for _, line := range completion {
+		if _, err = fmt.Fprintln(output, line); err != nil {
+			return result, err
+		}
 	}
-	return result, err
-}
-
-// VerificationRetryCommand names the command that would rerun this exact
-// verification, so a warning can tell the user what to do rather than only what
-// went wrong.
-func VerificationRetryCommand(id string, candidate work.Candidate) string {
-	command := fmt.Sprintf("forgepilot verify %s", id)
-	if candidate.Kind == work.SnapshotCandidate {
-		command += " --snapshot"
-	}
-	return command
+	return result, nil
 }
 
 // verdictFingerprint captures the facts this verification is about to decide:
 // the Work Item's own status and its latest Verification Evidence. Nothing else belongs in
 // it. A digest of the whole state file would be simpler and wrong — a person
-// running `goal block` or `gate resolve` in another terminal writes state
+// running `goal cancel` or `gate resolve` in another terminal writes state
 // legitimately while a check runs, and ADR-0010's transaction lock is
 // deliberately not held across it, so a byte comparison would refuse a run that
 // nobody tampered with and lose Evidence that was honestly earned.
@@ -486,17 +462,16 @@ func verdictFingerprint(root, id string) (string, error) {
 
 // verificationVerdictFingerprint is the complete state that can affect the
 // target verification's recorded result: its Work Item (including CurrentRun),
-// owning Goal's repository and review policy, and latest Verification Evidence.
+// owning Goal's repository and Approval Requirement, and latest Verification Evidence.
 // It deliberately excludes mutable Goal lifecycle fields, sibling Work Items,
 // other Goals and Gates so a legitimate governance write does not discard an
 // honestly earned verification result.
 func verificationVerdictFingerprint(state *work.State, id string) (string, error) {
 	latest, ok := state.LatestVerification(id)
 	type goalInputs struct {
-		ID               string                `json:"id"`
-		Repository       string                `json:"repository"`
-		ReviewPolicy     work.ReviewPolicy     `json:"review_policy"`
-		CompletionPolicy work.CompletionPolicy `json:"completion_policy"`
+		ID              string `json:"id"`
+		Repository      string `json:"repository"`
+		RequireApproval bool   `json:"require_approval"`
 	}
 	verdict := struct {
 		Item     *work.Item     `json:"item,omitempty"`
@@ -512,7 +487,7 @@ func verificationVerdictFingerprint(state *work.State, id string) (string, error
 		for goalIndex := range state.Goals {
 			if state.Goals[goalIndex].ID == item.GoalID {
 				goal := state.Goals[goalIndex]
-				verdict.Goal = &goalInputs{ID: goal.ID, Repository: goal.Repository, ReviewPolicy: goal.ReviewPolicy, CompletionPolicy: goal.CompletionPolicy}
+				verdict.Goal = &goalInputs{ID: goal.ID, Repository: goal.Repository, RequireApproval: goal.RequireApproval}
 				break
 			}
 		}

@@ -189,8 +189,8 @@ func (r PlanImport) Changed() bool { return r.GoalCreated || len(r.Added) > 0 }
 // meaning), and only ACTIVE Goals accept a plan. New nodes may depend on new or
 // existing nodes, including DONE ones. The plan's story paths must already have
 // been validated and normalized by the caller; repository is the root a new Goal
-// belongs to, and facts decide whether new nodes start READY.
-func (s *State) ImportGoalPlan(plan GoalPlan, repository string, facts RepositoryState, now time.Time) (PlanImport, error) {
+// belongs to.
+func (s *State) ImportGoalPlan(plan GoalPlan, repository string, now time.Time) (PlanImport, error) {
 	if err := plan.Validate(); err != nil {
 		return PlanImport{}, err
 	}
@@ -214,18 +214,14 @@ func (s *State) ImportGoalPlan(plan GoalPlan, repository string, facts Repositor
 			continue
 		}
 		status := Ready
-		if !s.dependenciesSatisfiedAt(node.DependsOn, &facts) {
+		if !s.dependenciesDone(node.DependsOn) {
 			status = Pending
 		}
 		added = append(added, Item{ID: node.ID, GoalID: plan.Goal.ID, StoryRef: node.Story, Status: status, DependsOn: append([]string{}, node.DependsOn...), CreatedAt: now, UpdatedAt: now})
 	}
 	result := PlanImport{Added: added}
 	if goal == nil {
-		policy := ReviewPerGoal
-		if plan.Goal.RequireApproval {
-			policy = ReviewPerWorkItem
-		}
-		s.Goals = append(s.Goals, Goal{ID: plan.Goal.ID, Title: plan.Goal.Title, Description: plan.Goal.Description, Repository: repository, Status: GoalActive, ReviewPolicy: policy, CompletionPolicy: completionPolicyForReviewPolicy(policy), CreatedAt: now, UpdatedAt: now})
+		s.Goals = append(s.Goals, Goal{ID: plan.Goal.ID, Title: plan.Goal.Title, Description: plan.Goal.Description, Repository: repository, RequireApproval: plan.Goal.RequireApproval, Status: GoalActive, CreatedAt: now, UpdatedAt: now})
 		result.GoalCreated = true
 	} else if len(added) > 0 {
 		s.goal(plan.Goal.ID).UpdatedAt = now
@@ -245,8 +241,8 @@ func (s *State) checkReimport(goal Goal, plan GoalPlan) error {
 	if goal.Description != plan.Goal.Description {
 		return fmt.Errorf("goal.description: %q differs from the imported goal's %q", plan.Goal.Description, goal.Description)
 	}
-	if requireApproval := goal.ReviewPolicy == ReviewPerWorkItem; requireApproval != plan.Goal.RequireApproval {
-		return fmt.Errorf("goal.require_approval: %t differs from the imported goal's %t", plan.Goal.RequireApproval, requireApproval)
+	if goal.RequireApproval != plan.Goal.RequireApproval {
+		return fmt.Errorf("goal.require_approval: %t differs from the imported goal's %t", plan.Goal.RequireApproval, goal.RequireApproval)
 	}
 	planned := make(map[string]PlanNode, len(plan.Nodes))
 	for _, node := range plan.Nodes {

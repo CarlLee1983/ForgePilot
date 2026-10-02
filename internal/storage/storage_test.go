@@ -19,7 +19,7 @@ func importGoal(state *work.State, root, id string) error {
 		Goal:  work.PlanGoal{ID: id, Title: "Goal " + id},
 		Nodes: []work.PlanNode{{ID: id + "-node", Story: "specs/stories/" + id}},
 	}
-	_, err := state.ImportGoalPlan(plan, root, work.RepositoryState{}, time.Now().UTC())
+	_, err := state.ImportGoalPlan(plan, root, time.Now().UTC())
 	return err
 }
 
@@ -72,7 +72,7 @@ func TestInitRetryAndFailedWritePreserveState(t *testing.T) {
 // below is this document with only the version changed, and the test first
 // loads it unchanged: a fixture that fails for any other reason (an unknown
 // field, a missing counter) would "reject" without testing the version at all.
-const currentShape = `{"schema_version":%d,"next_evidence_id":1,"next_gate_id":1,"next_verification_run_id":1,"next_goal_completion_evidence_id":1,"goals":[],"work_items":[],"evidence":[],"goal_completion_evidence":[],"gates":[]}`
+const currentShape = `{"schema_version":%d,"next_evidence_id":1,"next_gate_id":1,"next_verification_run_id":1,"goals":[],"work_items":[],"evidence":[],"gates":[]}`
 
 func stateWithVersion(version int) string { return fmt.Sprintf(currentShape, version) }
 
@@ -115,7 +115,7 @@ func TestLoadRejectsCorruptOlderAndNewerState(t *testing.T) {
 
 	// A real v18 document carries fields this shape does not know. The refusal
 	// must still be about the version, not "unknown field".
-	write(`{"schema_version":18,"next_work_id":2,"next_evidence_id":1,"next_gate_id":1,"next_verification_run_id":1,"next_goal_completion_evidence_id":1,"goals":[{"id":"g","execution":{}}],"work_items":[{"id":"WI-001","external_ref":"x"}],"evidence":[],"goal_completion_evidence":[],"gates":[]}`)
+	write(`{"schema_version":18,"next_work_id":2,"next_evidence_id":1,"next_gate_id":1,"next_verification_run_id":1,"goals":[{"id":"g","execution":{}}],"work_items":[{"id":"WI-001","external_ref":"x"}],"evidence":[],"gates":[]}`)
 	_, err = Load(root)
 	if err == nil || !strings.Contains(err.Error(), "schema version 18") || strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("v18 document: %v; want a schema-version refusal", err)
