@@ -19,6 +19,65 @@ trial，不宣稱正式導入或 macOS execution trust。Apple signing、notariz
 留作未來獨立工作；具體邊界見 [architecture.md](architecture.md#distribution-and-onboarding-boundary)、
 ADR-0024、ADR-0025、ADR-0030 與 ADR-0033。
 
+## ADR-0040 目標 CLI 契約
+
+> **本段描述目標，不是現況。** [ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md) 把 ForgePilot 收斂為被動的 DAG 帳本；程式碼在 GitHub issue #68 系列票完成前仍含下方「移除」清單中的舊指令與旗標。本文件其餘各 milestone 與階段段落（M1–M5、P0／P1、Goal-level Review Policy、Runner MVP、FP-53／56／58／59 等）的契約表是**歷史紀錄**，與本段衝突時以本段為準；後續每張票以本段的指令與旗標命名為準，先改契約表，再實作。
+
+### 指令集
+
+| 指令 | 輸入與成功結果 |
+|---|---|
+| `init` | 在 Git repository 建立 `.forgepilot/` 與空 state |
+| `goal import <plan-path>` | 讀 Goal Plan，一次建立 Goal 與整張 DAG；任何驗證失敗整份不寫入。重新匯入規則見下 |
+| `goal cancel <goal-id> --reason <text>` | Goal 由 ACTIVE 轉為 CANCELLED，不再出現在 `next` |
+| `next [--json]` | 純讀；回傳唯一一個建議動作與理由。`--json` 為穩定的機器可讀形狀 |
+| `start <work-id>` | READY 工作轉為 RUNNING；已有一件 RUNNING 或 VERIFYING、或工作有未解除 Gate 時拒絕 |
+| `verify <work-id> [--snapshot]` | 先回收孤兒 run，再在 detached worktree 對確切 Candidate（預設 commit，`--snapshot` 為未 commit 工作樹的 snapshot）跑 `make verify`，寫入 Evidence |
+| `gate open --work <work-id> --question <text> --option <text> --option <text> [--reason <text>]` | 開一個 Gate 擋住該工作；`--option` 可重複，至少兩個 |
+| `gate resolve <gate-id> --option <text> [--note <text>] [--by <name>]` | 選定選項並記錄自述決策者 |
+| `gate cancel <gate-id> --reason <text> [--by <name>]` | 撤銷不再需要的 Gate |
+| `review approve <work-id> [--note <text>] [--by <name>]` | 僅適用 Goal 要求 Approval 時的 REVIEW 工作；Candidate 未 stale 且無未解除 Gate 才 DONE |
+| `review reject <work-id> --reason <text> [--by <name>]` | REVIEW 工作回到 RUNNING |
+| `status [--goal <goal-id>] [--work <work-id>] [--json]` | 列出節點、狀態、讀取時計算的 readiness、最新 Evidence 與未解除 Gate，並對每件未完成工作說明為何不能前進 |
+
+生命週期（持久化狀態：未開始、`RUNNING`、`VERIFYING`、`REVIEW`、`DONE`；PENDING／READY 是讀取時依依賴是否全 DONE 的投影，不保存）：
+
+- `verify` PASS 且 Goal 無 Approval Requirement：DONE，同一交易解鎖下游；若為 Goal 最後一件，同一交易 Goal 轉 COMPLETED。
+- `verify` PASS 且 Goal 要求 Approval：進 REVIEW，等 `review approve`；stale 時 `next` 建議重新 `verify`。
+- `verify` FAIL 或 INTERRUPTED：回到 RUNNING。
+- 同一 workspace 最多一件 RUNNING 或 VERIFYING；REVIEW 不佔位。
+- 沒有完成指令；DONE 是終態且不判 stale（ADR-0006、ADR-0008）。
+- Goal 狀態只有 ACTIVE、COMPLETED、CANCELLED；阻擋由 Gate 表達（ADR-0007）。
+
+### Goal Plan 格式
+
+JSON，以標準函式庫解析，拒絕未知欄位：
+
+```json
+{
+  "goal": { "id": "billing-sync", "title": "...", "description": "...", "require_approval": false },
+  "nodes": [
+    { "id": "schema", "story": "specs/stories/schema", "depends_on": [] },
+    { "id": "sync-job", "story": "specs/stories/sync-job", "depends_on": ["schema"] }
+  ]
+}
+```
+
+- Goal ID 與節點 ID 同一字元規則：英數開頭，英數、`.`、`_`、`-`，長度上限 64。節點 ID 即 Work Item ID，在 workspace 內唯一。
+- `description` 選填；`require_approval` 選填，預設 `false`。
+- 節點順序是多個 READY 時推薦順序的 tie-break。
+- 依賴只能指向同一 Goal 的節點。
+- 匯入拒絕：有環、指向不存在節點、自我依賴、重複依賴、重複節點 ID，以及不存在、路徑穿越或 symlink 逃逸的 Story 路徑。錯誤訊息指出節點與欄位。
+- 重新匯入同一 Goal：Goal 的 `id`、`title`、`description`、`require_approval` 必須與既有相同；既有節點的 `story` 與 `depends_on` 必須逐字相同；只接受新節點，新節點可依賴新舊節點（含已 DONE 者）；完全相同為無變化的成功；終態 Goal（COMPLETED、CANCELLED）拒絕；整份原子寫入。
+
+### 移除
+
+下列指令與旗標在目標契約中不存在，理由與取代關係見 ADR-0040：
+
+- 指令：`goal create`、`goal block`、`goal unblock`、`goal complete`、`goal preflight`、`work add`、`work list`、`reconcile`、`migrate`、`run` 全組、`execution` 全組、`review request`。
+- 旗標：`--pr`、`--review-policy`、`--external-ref`。
+- `goal import` 取代 `goal create` 與 `work add`；`status` 取代 `work list`。
+
 ## Milestones
 
 | 階段 | 範圍 | Exit criteria |
