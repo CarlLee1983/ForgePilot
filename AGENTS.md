@@ -82,9 +82,9 @@ Commit 格式 `<type>: [ <scope> ] <subject>`，scope 用 milestone 代號（`m4
 
 ## 驗證
 
-**驗證分級：** 修改文件／靜態頁面、圖、Go／Makefile、release／onboarding／skill scripts 前，先讀 [development plan 的變更面驗證矩陣](docs/development-plan.md#變更面驗證矩陣)，執行該變更面直接需要的檢查並回報未跑的完整 gate 與理由。
+**驗證分級：** 修改文件／靜態頁面、圖、Go／Makefile 前，先讀 [development plan 的變更面驗證矩陣](docs/development-plan.md#變更面驗證矩陣)，執行該變更面直接需要的檢查並回報未跑的完整 gate 與理由。
 
-`make verify` 是這個專案自己的 canonical full gate（格式、`go vet`、`go test ./...`、CLI build 與 release／onboarding／skill regressions），也是它對受管理專案要求的同一個命令。`go test -race -count=1 ./...` 是 integration／final acceptance 的 race gate；兩者在 Story、release、整合或 Human final acceptance 明定時必跑，不以 focused check 取代。
+`make verify` 是這個專案自己的 canonical full gate（格式、`go vet`、`go test ./...`、與 CLI build），也是它對受管理專案要求的同一個命令。`go test -race -count=1 ./...` 是 integration／final acceptance 的 race gate；兩者在 Story、release、整合或 Human final acceptance 明定時必跑，不以 focused check 取代。
 
 **開工前自己重跑一次受影響的檢查。** 任何文件裡寫的「上次通過了」都是紀錄，不是現在的結果。
 
