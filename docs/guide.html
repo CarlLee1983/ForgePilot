@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="ForgePilot 是 AI 輔助開發的 engineering control plane。它不寫程式，只負責在證據不足的時候擋下「做完了」這句話，不管說的是 agent 還是你自己。">
+<meta name="description" content="ForgePilot 是被動的 DAG 帳本。它不寫程式也不跑迴圈，只負責在證據不足的時候擋下「做完了」這句話，不管說的是 agent 還是你自己。">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <title>ForgePilot，讓「做完了」這句話變貴</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -351,8 +351,6 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
 </style>
 </head>
 <body>
-<div role="note" class="adr0040-notice" style="margin:0;padding:12px 20px;background:#fff4d6;color:#4a3600;border-bottom:2px solid #d99a00;font:500 14px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center;position:relative;z-index:1000;">本頁描述 ADR-0040 收斂前的產品，部分指令已移除；現行指令見 <a href="../README.md" style="color:#7a4b00;text-decoration:underline;">README</a> 與 <a href="development-plan.md#cli-契約" style="color:#7a4b00;text-decoration:underline;">docs/development-plan.md 的 CLI 契約</a>。</div>
-
 <!-- 精緻北歐水波晨光 (純 CSS 微動態) -->
 <div class="ambient-scene" aria-hidden="true">
   <div class="ambient-glow-top"></div>
@@ -388,7 +386,7 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
     </a>
     <span class="spacer"></span>
     <a href="#eli5" class="hide-sm">最簡單的講法</a>
-    <a href="#gates" class="hide-sm">四道關卡</a>
+    <a href="#gates" class="hide-sm">完成條件</a>
     <a href="#agent" class="hide-sm">跟 agent 一起用</a>
     <a href="#how">怎麼用</a>
     <a href="learn/handbook.html">手冊</a>
@@ -398,9 +396,9 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
 
 <header class="hero">
   <div class="wrap">
-    <p class="eyebrow">Engineering Control Plane</p>
+    <p class="eyebrow">Passive DAG Ledger</p>
     <h1>讓<em>「做完了」</em>這句話變貴</h1>
-    <p class="lede">ForgePilot 不寫程式，也不取代你的 coding agent。證據不夠的時候，它不讓任何人宣告工作完成，包括 agent，也包括你自己。</p>
+    <p class="lede">ForgePilot 不寫程式，不啟動也不取代你的 coding agent。證據不夠的時候，它不讓任何人宣告工作完成，包括 agent，也包括你自己。</p>
     <div class="cta">
       <a class="btn primary" href="#eli5"><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg>先聽最簡單的講法</a>
       <a class="btn" href="learn/handbook.html"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>完整使用手冊</a>
@@ -416,10 +414,10 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
       <h2>用五歲小孩聽得懂的方式講一次</h2>
     </div>
     <div class="body-text">
-      <p>想像一條走廊，走到底就是「這件事做完了」。走廊上有四道關卡，每一關都要交出一樣東西才過得去，而那樣東西不能自己寫。</p>
+      <p>想像一條走廊，走到底就是「這件事做完了」。走廊上有幾道關卡，每一關都要交出一樣東西才過得去，而那樣東西不能自己寫。</p>
       <p>沒有這條走廊的時候，事情長這樣。你請一個很會寫程式的幫手做一件事，它做完跟你說「好了」。你問它測試過嗎，它說測過了。你信了，把它接到下一件事上。三天後你才發現，它測的是三個版本以前的程式碼。</p>
       <p class="dim">它沒有騙人。「做完了」這句話誰都能說，說的時候<strong>不需要附上任何東西</strong>，所以它幾乎不用付出什麼。</p>
-      <div class="pull">ForgePilot 做的事，就是讓這句話說出口之前得先交出四樣東西。</div>
+      <div class="pull">ForgePilot 做的事，就是讓這句話說出口之前得先交出證據。</div>
       <p>它自己不寫程式，也不判斷程式碼好不好，那些是你和你的 agent 的事。它站在關卡旁邊清點東西，少了什麼就<strong>直接說出少的是什麼</strong>。</p>
       <p>聽起來很煩。一個從來不擋人的流程，跟沒有流程差不多。</p>
     </div>
@@ -430,20 +428,14 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
   <div class="wrap">
     <div class="section-head">
       <span class="num">02</span>
-      <h2>四道關卡，少一道就走不到底</h2>
+      <h2>完成條件，少一個就走不到底</h2>
     </div>
     <div class="grid two">
       <div class="cell">
-        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-seal"/></svg>
-        <h3>有人真的看過並且同意</h3>
-        <p>要有一筆明確記下來的人工審查，寫著誰在什麼時候同意了什麼。沒人反對不算同意。</p>
-        <span class="tag">Human Review</span>
-      </div>
-      <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-hash"/></svg>
         <h3>測試通過的，是你正在看的那一版</h3>
-        <p>每次驗證都綁死一個 immutable Candidate：既有 commit 或 working-tree snapshot。之後 Candidate 不再代表目前內容時，那次驗證就不算數了，工作重新卡住。</p>
-        <span class="tag">Evidence · exact revision</span>
+        <p>每次驗證都綁死一個 immutable Candidate：既有 commit 或 working-tree snapshot，由 repository 自己的 <code>make verify</code> 在隔離的 checkout 裡跑。驗證通過才算數，而且結果誰都不能改寫。</p>
+        <span class="tag">Evidence · exact Candidate</span>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-ask"/></svg>
@@ -454,12 +446,18 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"/></svg>
         <h3>這個目標本身還在進行中</h3>
-        <p>目標被暫停的時候，底下的工作連驗證都不給跑，直到有人把它解除。</p>
+        <p>目標被取消的時候，底下的工作連驗證都不給開始，也不能再匯入新的節點。</p>
         <span class="tag">Goal</span>
+      </div>
+      <div class="cell">
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-seal"/></svg>
+        <h3>（選用）有人真的看過並且同意</h3>
+        <p>Goal 在匯入時可以要求 Approval：驗證通過後工作先進 REVIEW，要有一筆明確記下來的人工審查，寫著誰在什麼時候同意了哪一個 Candidate。沒人反對不算同意。</p>
+        <span class="tag">Approval Requirement</span>
       </div>
     </div>
     <div class="body-text" style="margin-top:34px">
-      <p class="dim">四樣東西同時齊了，工作才進入 DONE。同一個瞬間，等著它的下一件工作變成可以開始，中間沒有「A 完成了但 B 還沒被通知」的空檔。</p>
+      <p class="dim">條件同時齊了，工作才進入 DONE。同一個瞬間，等著它的下一件工作變成可以開始，最後一件 DONE 時整個 Goal 也自動完成，中間沒有「A 完成了但 B 還沒被通知」的空檔。</p>
     </div>
   </div>
 </section>
@@ -474,7 +472,7 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
       <p>把寫程式的工作交給 agent 之後，有兩件事會同時發生。它做得比你快，而且它也比你更容易說出「做完了」。</p>
       <p>它手上同時握著三個角色，自己挑要做哪一件事，自己寫，自己宣布完成。這三件事只要有一件出錯，你通常要等到很後面才會發現。</p>
       <div class="pull">agent 可以寫程式，但不能發給自己通行證。</div>
-      <p>ForgePilot 把那三個角色拆開。哪一件事現在可以做，由佇列決定；程式碼由 agent 寫；算不算完成，由證據和人決定。agent 從頭到尾只被允許做中間那一段。</p>
+      <p>ForgePilot 把那三個角色拆開。哪一件事現在可以做，由帳本的 <code>next</code> 決定；程式碼由 agent 寫；算不算完成，由證據（和需要人判斷時的人）決定。迴圈由 agent 自己跑，ForgePilot 不啟動它，只在每一步回答「下一個合法動作是什麼」。</p>
     </div>
 
     <figure>
@@ -504,7 +502,7 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
         <text class="d-t small" x="119" y="85" text-anchor="middle">定目標，做決定</text>
 
         <text class="d-t" x="350" y="63" text-anchor="middle">ForgePilot</text>
-        <text class="d-t small" x="350" y="85" text-anchor="middle">派工、擋人、記錄</text>
+        <text class="d-t small" x="350" y="85" text-anchor="middle">判定、擋人、記錄</text>
 
         <text class="d-t" x="581" y="63" text-anchor="middle">agent</text>
         <text class="d-t small" x="581" y="85" text-anchor="middle">讀 Story，寫程式</text>
@@ -529,11 +527,11 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
         </g>
 
         <text class="d-lab" x="231" y="58" text-anchor="middle">目標</text>
-        <text class="d-lab" x="462" y="56" text-anchor="middle">派工</text>
+        <text class="d-lab" x="462" y="56" text-anchor="middle">next</text>
         <text class="d-lab" x="595" y="175" text-anchor="start">commit</text>
         <text class="d-lab" x="469" y="264" text-anchor="middle">跑</text>
         <text class="d-lab on" x="338" y="175" text-anchor="end">證據回填</text>
-        <text class="d-lab stop" x="210" y="190" text-anchor="middle">卡住了就回到你</text>
+        <text class="d-lab stop" x="210" y="190" text-anchor="middle">Gate：卡住了就回到你</text>
       </svg>
       <figcaption>agent 只在右半邊活動。左邊那條虛線是它自己走不完的部分，需要人決定的時候，工作會停下來等你。</figcaption>
     </figure>
@@ -572,7 +570,7 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
           <text x="180" y="146" text-anchor="middle">start</text>
           <text x="300" y="146" text-anchor="middle">寫程式</text>
           <text x="420" y="146" text-anchor="middle">verify</text>
-          <text x="540" y="146" text-anchor="middle">review</text>
+          <text x="540" y="146" text-anchor="middle">gate / review</text>
           <text x="650" y="146" text-anchor="middle">DONE</text>
         </g>
         <g class="d-lab">
@@ -580,8 +578,8 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
           <text x="180" y="166" text-anchor="middle">認領</text>
           <text x="300" y="166" text-anchor="middle">commit / snapshot</text>
           <text x="420" y="166" text-anchor="middle">產生證據</text>
-          <text x="540" y="166" text-anchor="middle">同意或退回</text>
-          <text x="650" y="166" text-anchor="middle">下游解鎖</text>
+          <text x="540" y="166" text-anchor="middle">人決定（需要時）</text>
+          <text x="650" y="166" text-anchor="middle">PASS 即完成</text>
         </g>
 
         <g class="d-line stopline">
@@ -590,44 +588,45 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
         </g>
         <g class="d-lab stop">
           <text x="420" y="44" text-anchor="middle">commit mode 要乾淨</text>
-          <text x="540" y="44" text-anchor="middle">agent 到不了這裡</text>
+          <text x="540" y="44" text-anchor="middle">人決定</text>
         </g>
       </svg>
-      <figcaption>綠點是人和佇列的位置。agent 走到 verify 就交出主導權，剩下兩步不該由它代跑。</figcaption>
+      <figcaption>綠點是人和帳本的位置。agent 走到 verify 就交出主導權：過不過由 <code>make verify</code> 決定；遇到 Gate 或要求 Approval 的 Goal，下一步是人的，不該由它代跑。</figcaption>
     </figure>
 
     <div class="body-text" style="margin-top:46px">
-      <p>這樣一來，agent 每次開工都得先問一次佇列，它拿到的是一件依賴已經清乾淨、確實輪到它的工作。做完之後它能做的最後一件事是跑驗證，把結果留下來。</p>
+      <p>這樣一來，agent 每一輪都得先問一次 <code>next</code>，它拿到的是一件依賴已經清乾淨、確實輪到它的工作。做完之後它能做的最後一件事是跑驗證，把結果留下來；PASS 就是完成。</p>
       <p>你要看的東西也跟著變少。不必回頭審每一次對話，只要看 <code>status</code> 上有沒有卡住的工作，以及卡住的原因是哪一個。</p>
-      <p class="dim">同一份佇列可以同時給好幾個 agent 用。狀態檔有程序鎖，兩個 agent 不會同時認領到同一件工作。</p>
+      <p class="dim">同一個 workspace 同時最多一件 RUNNING 或 VERIFYING，<code>next</code> 也只給一個動作，所以換 session 或換 agent 都能從帳本接手，不會有兩個 agent 各自認領不同的工作互相踩。</p>
     </div>
 
     <h3 style="margin-top:52px">怎麼把 agent 接上去</h3>
     <div class="body-text">
-      <p>ForgePilot 沒有 agent 外掛，也不去攔截誰在跑什麼。它就是一個 CLI，所以接法是把規則寫進 agent 每次都會讀的那份指示檔，<code>CLAUDE.md</code>、<code>AGENTS.md</code> 或你的工具用的那一份都行。四條就夠了，規則本身建議用英文寫，指令與 flag 都是英文，混著中文敘述反而多一層轉換。</p>
+      <p>ForgePilot 沒有 agent 外掛，也不去攔截誰在跑什麼。它就是一個 CLI，所以接法有兩種：把 repository 的 <code>skills/claude-code/forgepilot/</code>（Codex 是 <code>skills/codex/forgepilot/</code>）手動複製進 agent 的 skill 目錄，讓它照 <code>next → start → 實作 → verify</code> 推進；或把規則寫進 agent 每次都會讀的那份指示檔，<code>CLAUDE.md</code>、<code>AGENTS.md</code> 或你的工具用的那一份都行。四條就夠了，規則本身建議用英文寫，指令與 flag 都是英文，混著中文敘述反而多一層轉換。</p>
     </div>
 
     <div class="term" style="margin-top:22px">
       <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;貼進 AGENTS.md</div>
 <pre><span class="o">## How work is picked up in this repo
 
-1. Before starting anything, run `forgepilot next` and work only
-   on the item it names. If it prints none, stop and ask a human.
-   Never pick your own next task.
+1. Every round starts with `forgepilot next --json`. Act only on
+   the `action` it returns, then ask again. If it says WAIT or NONE,
+   stop and tell a human. Never pick your own next task.
 2. Claim it with `forgepilot start &lt;work-id&gt;`. Do not skip this.
 3. Never report "done". When you believe the work is finished, run
-   `forgepilot verify &lt;work-id&gt;` and paste the output verbatim.
-   The evidence speaks for the work; your summary does not.
+   `forgepilot verify &lt;work-id&gt;` (or `--snapshot` for uncommitted
+   work) and paste the output verbatim. The evidence speaks for the
+   work; your summary does not.
 4. When a decision is not yours to make, run `forgepilot gate open`
    with the question and the options, then stop and wait. Never
    pick an option and carry on.
 
-`review approve` is run by a human, never by you.</span></pre>
+`gate resolve` and `review approve` are human decisions, never yours.</span></pre>
     </div>
 
     <div class="body-text" style="margin-top:26px">
       <p>第四條最容易被忽略，它也是這套東西真正改變的地方。agent 卡住的時候原本會自己選一條路走下去，現在它把問題留在佇列上，你下次看 <code>status</code> 就會看到。</p>
-      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件，agent 就算跑了 approve，只要最新 PASS 與 approval 沒有綁同一個 Candidate revision，或還有 Gate 開著，工作照樣不會進 DONE，而且那筆審查會用它的 git 身分留在記錄裡，跑不掉。</p>
+      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>gate resolve</code> 與 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件：DONE 只會是 <code>verify</code> 在確切 Candidate 上 PASS 的結果，沒有任何指令能直接寫入；approve 就算被跑了，最新 PASS 不是目前的 Candidate、或還有 Gate 開著，工作照樣不會進 DONE，而且那筆決定會用它的 git 身分標示為「自述」留在記錄裡，跑不掉。</p>
       <p>接下來的事跟你手動用一模一樣，<a href="#start">安裝與 init</a> 之後把上面四條貼進去就能開始。</p>
     </div>
   </div>
@@ -641,26 +640,27 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
     </div>
     <div class="split">
       <div class="body-text">
-        <p>最容易讓人愣住的是這種情況。測試明明過了，你也按了同意，工作卻沒有完成。</p>
-        <p>因為在那兩件事之間，你又改了一行程式碼。通過測試的是舊的那一版，你同意的是新的那一版，兩邊對不上。</p>
-        <p>ForgePilot 不會默默吞掉你的同意，也不會假裝沒事讓它過。它<strong>把審查記下來</strong>，因為那件事真的發生過，然後把兩個版本編號並排印給你看。</p>
-        <p class="dim">再跑一次驗證，兩邊對齊，就過了。</p>
+        <p>最容易讓人愣住的是這種情況。在要求 Approval 的 Goal 裡，測試明明過了，你正要按同意，工作卻不讓你完成。</p>
+        <p>因為在那兩件事之間，又有人 commit 了一次。通過測試的是舊的那一版，你要同意的是新的那一版，兩邊對不上。</p>
+        <p>ForgePilot 不會假裝沒事讓它過。它拒絕這次 approve，明說 PASS 已不是目前的 Candidate，並把該跑的指令印給你；<code>next</code> 同時會建議 <code>REVERIFY</code>。</p>
+        <p class="dim">再跑一次驗證，兩邊對齊，就過了。已經 DONE 的工作不會被這樣追溯，stale 只對等待審查的工作有意義。</p>
       </div>
       <div class="term">
         <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;實際輸出</div>
-<pre><span class="c">forgepilot review approve WI-002</span>
-<span class="o">EV-007 APPROVED at 96f3e0b2eef1</span>
-<span class="o">WI-002 REVIEW</span>
-<span class="no">Not complete: the latest PASS is at
-revision 26be05c98447 but the
-approval is at 96f3e0b2eef1</span>
+<pre><span class="c">forgepilot review approve audit-log</span>
+<span class="no">forgepilot: review approve audit-log: work item
+"audit-log" has a stale verified candidate:
+its PASS EV-005 no longer names the current
+candidate; run forgepilot verify audit-log</span>
 
-<span class="c">forgepilot verify WI-002</span>
-<span class="ok">EV-009 PASS at 96f3e0b2eef1</span>
+<span class="c">forgepilot verify audit-log</span>
+<span class="ok">EV-006 PASS at 23c40dc8c511</span>
+<span class="o">audit-log REVIEW</span>
 
-<span class="c">forgepilot review approve WI-002</span>
-<span class="o">EV-010 APPROVED at 96f3e0b2eef1</span>
-<span class="ok">WI-002 DONE</span></pre>
+<span class="c">forgepilot review approve audit-log</span>
+<span class="o">EV-007 APPROVED at 23c40dc8c511</span>
+<span class="ok">audit-log DONE</span>
+<span class="ok">Goal audit COMPLETED</span></pre>
       </div>
     </div>
   </div>
@@ -680,7 +680,7 @@ approval is at 96f3e0b2eef1</span>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-flag"/></svg>
         <h3>你</h3>
-        <p>決定要做什麼、什麼時候算完成。設 Goal、掛工作、回答 Gate 上的問題、做最後的 review。</p>
+        <p>決定要做什麼、什麼時候算完成。把拆好的工單交成一份 Goal Plan、回答 Gate 上的問題，要求 Approval 的 Goal 還要做最後的 review。</p>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-book"/></svg>
@@ -690,31 +690,31 @@ approval is at 96f3e0b2eef1</span>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-bot"/></svg>
         <h3>agent</h3>
-        <p>讀 Story，照著規範寫程式並 commit。它不挑工作，也不宣布完成。</p>
+        <p>跑迴圈：問 <code>next</code>、讀 Story、照著規範寫程式、呼叫 <code>verify</code>。它不挑工作，也不宣布完成。</p>
       </div>
       <div class="cell">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-gate"/></svg>
         <h3>ForgePilot</h3>
-        <p>派工、擋人、記錄。真正去跑驗證並把結果綁在 immutable Candidate 上的是它，但跑什麼內容不由它決定。</p>
+        <p>判定下一步、擋人、記錄。真正去跑驗證並把結果綁在 immutable Candidate 上的是它，但跑什麼內容不由它決定。</p>
       </div>
     </div>
 
     <div class="body-text" style="margin-top:40px">
-      <p><strong>前置規範與 Graph 形成。</strong> 這套流程在我們的實務中稱為 <em>Graph Engineering</em>：上游由 PraxisBound 完成嚴格的 <code>ADR → Spec → Story</code> 拆分，確定架構決定與 Acceptance Criteria。隨後 ForgePilot 接入，<code>goal create</code> 建立目標，並透過 <code>work add --depends-on</code> 將 Stories 掛載為一張具備嚴格拓撲的 Work Item 有向無環圖（DAG）。依賴未滿足的工作初始即為 <code>PENDING</code>，消除任何猜測與順序混亂。</p>
+      <p><strong>前置規範與 Graph 形成。</strong> 這套流程在我們的實務中稱為 <em>Graph Engineering</em>：上游由 PraxisBound 完成嚴格的 <code>ADR → Spec → Story</code> 拆分，確定架構決定與 Acceptance Criteria。隨後 ForgePilot 接入：拆好的工單寫成一份 Goal Plan（JSON，節點 ID 即 Work Item ID、每個節點指向一份 Story 並宣告 <code>depends_on</code>），<code>goal import</code> 一次建立 Goal 與整張有向無環圖（DAG）。計畫有環、依賴未知或 Story 路徑不存在，整份都不寫入；依賴未滿足的工作讀取時就是 <code>PENDING</code>，消除任何猜測與順序混亂。</p>
 
-      <p><strong>agent 問下一件。</strong> 它跑 <code>next</code>，拿到的是依賴已經清乾淨、確實輪到的那一件，然後 <code>start</code> 認領。它不自己挑，也挑不到還卡著依賴的工作。</p>
+      <p><strong>agent 問下一件。</strong> 它跑 <code>next</code>，拿到的是依賴已經清乾淨、確實輪到的那一件，然後 <code>start</code> 認領。它不自己挑，也挑不到還卡著依賴的工作；同一時間只有一件工作能佔著位置。</p>
 
-      <p><strong>寫程式，選擇 Candidate。</strong> 有兩條合法路徑：先 commit，再用 <code>verify</code> 驗證乾淨工作樹的 HEAD；或用 <code>verify WI-001 --snapshot</code> 把目前 working tree 固定成 immutable snapshot 後驗證。前者的工作樹只要還有未提交內容（含未追蹤檔案）就會拒絕，而且不寫 Evidence；那是無法驗證，不是驗證失敗。</p>
+      <p><strong>寫程式，選擇 Candidate。</strong> 有兩條合法路徑：先 commit，再用 <code>verify</code> 驗證乾淨工作樹的 HEAD；或用 <code>verify &lt;work-id&gt; --snapshot</code> 把目前 working tree 固定成 immutable snapshot 後驗證。前者的工作樹只要還有未提交內容（含未追蹤檔案）就會拒絕，而且不寫 Evidence；那是無法驗證，不是驗證失敗。</p>
 
-      <p><strong>單點實作與隔離驗證。</strong> Agent 實作後只跑交接指定的 focused checks；它回報完成不等於 PASS。接著由明確的 <code>verify</code>，或 Runner 在 <code>implementation_finished</code> 後的 verification orchestration，選定 Candidate：commit mode 在隔離 worktree 驗證 HEAD；snapshot mode 先把 working tree 固定成 immutable snapshot，再在隔離 checkout 執行 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 PraxisBound 的工程契約決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS 或 FAIL 連同 Candidate revision 記成 Evidence。預設 WORK_ITEM policy 的 PASS 進 REVIEW，Human <code>review approve</code> 讓工作成為 DONE 後才解鎖下游；GOAL policy 的 PASS 則成為 VERIFIED 並推進依賴，所有 current verification 通過且沒有 OPEN Gate 時由 Runner 自動完成 Goal。FAIL 才進入明確有界的 Repair。</p>
+      <p><strong>隔離驗證，PASS 即完成。</strong> Agent 實作後呼叫 <code>verify</code>：commit mode 在隔離 worktree 驗證 HEAD；snapshot mode 先把 working tree 固定成 immutable snapshot，再在隔離 checkout 執行 repo 自己 Makefile 的 <code>verify</code> target。跑的內容由 PraxisBound 的工程契約與 repo 決定，ForgePilot 不定義驗證，也不讀程式碼判斷對錯，它只負責真的跑一次，把 PASS、FAIL 或 INTERRUPTED 連同 Candidate revision 記成 Evidence。預設的 Goal 在 PASS 的那一刻工作就是 DONE；FAIL 則留在 RUNNING，<code>next</code> 轉為 <code>REPAIR</code>，讀 log、修好再驗證。</p>
 
-      <p><strong>人看過才算完成。</strong> 你 <code>review approve</code>，四項條件同時成立的話，工作在那一刻進 DONE，等著它的下游在同一次交易裡變成可以開始。條件不齊就只記下審查，並告訴你差什麼。</p>
+      <p><strong>需要人的時候才有人。</strong> 如果 Goal 要求 Approval，PASS 先進 REVIEW，你 <code>review approve</code>，工作才在那一刻進 DONE；Candidate 在這之間變了就會被拒絕，要重新驗證。不要求 Approval 的 Goal 沒有這一步，沒有任何指令能替工作直接寫入 DONE。</p>
 
-      <p><strong>拓撲驅動到全圖完成。</strong> agent 再問一次 <code>next</code>，推進下一個已解鎖節點。ForgePilot 始終握有順序與合法性仲裁權，持續驅動推進方向，直到整個 Graph 的所有任務全數綠燈完成。中間任何時候它遇到不該自己決定的事，<code>gate open</code> 把問題留在佇列上停住，等你回答。</p>
+      <p><strong>拓撲推進到全圖完成。</strong> agent 再問一次 <code>next</code>，推進下一個已解鎖節點。ForgePilot 始終握有順序與合法性的判定權，直到整個 Graph 的所有節點 DONE、Goal 自動完成，<code>next</code> 回報 <code>GOAL_ALREADY_COMPLETED</code>，迴圈結束。中間任何時候遇到不該自己決定的事，<code>gate open</code> 把問題留在帳本上停住，等你回答。</p>
     </div>
 
     <div class="body-text" style="margin-top:34px">
-      <p>兩個最常被記反的地方。<strong>不帶 flag 的 verify 要先 commit；要保留 working tree 就用 <code>verify --snapshot</code></strong>。<strong>verify 通過不等於完成</strong>，那只是進了 REVIEW，還要人點頭。</p>
+      <p>兩個最常被記反的地方。<strong>不帶 flag 的 verify 要先 commit；要保留 working tree 就用 <code>verify --snapshot</code></strong>。<strong>PASS 就是完成</strong>，沒有另一道「宣告完成」的手續；只有要求 Approval 的 Goal，PASS 才會先停在 REVIEW 等人點頭。</p>
       <p class="dim">全部是本機的命令列，不需要伺服器，也不需要帳號。狀態存在你 repo 裡的一個 JSON 檔，由程序鎖保護，多個終端機或多個 agent 同時用不會打架。</p>
     </div>
 
@@ -725,20 +725,20 @@ approval is at 96f3e0b2eef1</span>
         <p>在 repo 裡建立狀態檔。它會動到 <code>.gitignore</code>；若接著走 commit mode，先把它 commit。要驗證尚未提交內容時可改用 <code>verify --snapshot</code>。</p>
       </div>
       <div class="stepline">
-        <span class="k">goal / work add</span>
-        <p>宣告一個要跨多次工作才推得動的目標，把工作掛上去，順手寫清楚誰依賴誰。<strong>依賴還沒完成的工作，一建立就是等待狀態</strong>，不用你自己記。</p>
+        <span class="k">goal import</span>
+        <p>用一份 Goal Plan 一次宣告目標與整張 DAG，寫清楚誰依賴誰。<strong>依賴還沒完成的工作讀取時就是等待狀態</strong>，不用你自己記；補單時改計畫檔再匯入，只能新增節點。</p>
       </div>
       <div class="stepline">
         <span class="k">next</span>
-        <p>問它現在該做哪一件。這是純查詢，不會偷偷把工作認領給你，而且它會<strong>說出為什麼選中這一件</strong>。</p>
+        <p>問它現在該做哪一件。這是純查詢，只給一個動作，不會偷偷把工作認領給你，而且它會<strong>說出為什麼選中這一件</strong>。</p>
       </div>
       <div class="stepline">
         <span class="k">start</span>
-        <p>開始。這時候你或你的 agent 才真正去寫程式，ForgePilot 在這一段完全不插手。</p>
+        <p>開始，工作成為 RUNNING 並佔住位置。這時候你或你的 agent 才真正去寫程式，ForgePilot 在這一段完全不插手。</p>
       </div>
       <div class="stepline">
         <span class="k">verify</span>
-        <p>它在一個<strong>隔離的工作區</strong>裡，對確切 Candidate 跑<strong>那個 repo 自己 Makefile 裡的 <code>verify</code> target</strong>。不帶 flag 時 Candidate 是乾淨 HEAD；<code>--snapshot</code> 時是由目前 working tree 固定的 immutable snapshot。連 Makefile 存不存在都是在那份 checkout 裡判斷的，被 gitignore 掉的 Makefile 騙不過它。結果連同 Candidate revision 一起存起來。</p>
+        <p>它在一個<strong>隔離的工作區</strong>裡，對確切 Candidate 跑<strong>那個 repo 自己 Makefile 裡的 <code>verify</code> target</strong>。不帶 flag 時 Candidate 是乾淨 HEAD；<code>--snapshot</code> 時是由目前 working tree 固定的 immutable snapshot。連 Makefile 存不存在都是在那份 checkout 裡判斷的，被 gitignore 掉的 Makefile 騙不過它。結果連同 Candidate revision 一起存起來，PASS 就是 DONE。</p>
       </div>
       <div class="stepline">
         <span class="k">gate</span>
@@ -746,11 +746,11 @@ approval is at 96f3e0b2eef1</span>
       </div>
       <div class="stepline">
         <span class="k">review</span>
-        <p>人看過之後同意或退回，理由留在檔案裡。四樣東西齊了就完成，同時解鎖下游；不齊就把審查記下來，並告訴你還差什麼。</p>
+        <p>只用於要求 Approval 的 Goal：人看過之後同意或退回，理由留在檔案裡。條件齊了就完成並解鎖下游；Candidate 已 stale 就拒絕並告訴你該重新 verify。</p>
       </div>
       <div class="stepline">
         <span class="k">status</span>
-        <p>把所有東西攤開。<strong>沒有驗證、沒有審查都會被明講出來</strong>，不會用留白帶過。沉默的缺席會被讀成沒問題的結果。</p>
+        <p>把所有東西攤開。<strong>沒有驗證、沒有審查都會被明講出來</strong>，而且對每件未完成的工作說明為什麼不能前進，不會用留白帶過。沉默的缺席會被讀成沒問題的結果。</p>
       </div>
     </div>
   </div>
@@ -765,8 +765,8 @@ approval is at 96f3e0b2eef1</span>
     <div class="split">
       <div>
         <ul class="plain no-list">
-          <li><svg class="icon" aria-hidden="true"><use href="#i-bot"/></svg><span><b>不寫程式，也不取代你的 agent。</b>寫程式的還是它們，ForgePilot 只決定哪件事現在可以動，以及它算不算完成。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-offline"/></svg><span><b>不發出任何網路請求。</b>連你標註的 pull request 都不去查證，它只檢查格式，不假裝自己驗過了。</span></li>
+          <li><svg class="icon" aria-hidden="true"><use href="#i-bot"/></svg><span><b>不寫程式，也不啟動你的 agent。</b>寫程式、跑迴圈的還是它們，ForgePilot 只判定哪件事現在可以動，以及它算不算完成。</span></li>
+          <li><svg class="icon" aria-hidden="true"><use href="#i-offline"/></svg><span><b>不發出任何網路請求。</b>除了 Git 與你的 <code>make verify</code>，它不啟動任何程序，也不持有任何憑證。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-block"/></svg><span><b>不驗證身分。</b>審查者的名字來自你的 git 設定，所以每次都明白印上「自稱」兩個字，免得誰把它當成簽章。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg><span><b>完成之後不能反悔。</b>DONE 是終點，沒有重開。要再動就開一件新工作，把歷史留著。</span></li>
         </ul>
@@ -774,7 +774,7 @@ approval is at 96f3e0b2eef1</span>
       <div>
         <ul class="plain yes">
           <li><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg><span><b>狀態是一個檔案。</b>程序鎖加上原子替換，跨終端機、跨 session、關掉再開都讀得回同一份事實。</span></li>
-          <li><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg><span><b>驗證的內容由你定義。</b>它固定跑 <code>make verify</code>，內容是那個 repo 自己 Makefile 寫的，ForgePilot 只負責在乾淨且隔離的環境裡執行並如實記錄。</span></li>
+          <li><svg class="icon" aria-hidden="true"><use href="#i-term"/></svg><span><b>驗證的內容由你定義。</b>它固定跑 <code>make verify</code>，內容與 toolchain 版本都是那個 repo 自己決定的，ForgePilot 只負責在乾淨且隔離的環境裡執行並如實記錄。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-stack"/></svg><span><b>記錄只增不改。</b>通過、退回、被中斷的驗證都並排留著，「測試沒過」跟「人不接受」是兩件不同的事。</span></li>
           <li><svg class="icon" aria-hidden="true"><use href="#i-map"/></svg><span><b>每個不易反轉的決定都寫成 ADR，</b>附上它在什麼條件下會失效。你可以不同意，但不會找不到理由。</span></li>
         </ul>
@@ -791,7 +791,7 @@ approval is at 96f3e0b2eef1</span>
     </div>
     <div class="split">
       <div class="body-text">
-        <p>需要 Go 1.25 以上。目前只宣稱支援 macOS 的本機檔案系統，因為程序鎖用的是作業系統的 <code>flock</code>，其他平台還沒實際驗證過。</p>
+        <p>需要 Go 1.25.5 以上，用 <code>go install</code> 安裝（收斂後尚未發行新 tag，先用 <code>@main</code>），沒有外部相依。目前只宣稱支援 macOS 的本機檔案系統，因為程序鎖用的是作業系統的 <code>flock</code>，其他平台還沒實際驗證過。</p>
         <p>裝好之後，<a href="learn/handbook.html">使用手冊</a>會帶你從 <code>init</code> 一路走到 <code>DONE</code>，包含每一個會擋住你的地方。裡面所有輸出都是真的跑出來貼上去的，不是寫出來的範例。</p>
         <div class="cta" style="margin-top:26px">
           <a class="btn primary" href="learn/handbook.html"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>讀使用手冊</a>
@@ -800,16 +800,17 @@ approval is at 96f3e0b2eef1</span>
       </div>
       <div class="term">
         <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;安裝</div>
-<pre><span class="c"># 正式導入：貼上版本固定的 onboarding prompt</span>
-<span class="c"># Agent 先展示完整 commit SHA 與所有動作</span>
-<span class="c"># 等待明確授權，再 source-build</span>
+<pre><span class="c">go install github.com/CarlLee1983/\
+    ForgePilot/cmd/forgepilot@main</span>
 
 <span class="c">cd your-project</span>
 <span class="c">forgepilot init</span>
 <span class="ok">Initialized ForgePilot in /your/project</span>
 
 <span class="c">git add .gitignore &amp;&amp; git commit \
-    -m "chore: adopt forgepilot"</span></pre>
+    -m "chore: ignore ForgePilot state"</span>
+<span class="c">forgepilot goal import plans/my-goal.json</span>
+<span class="c">forgepilot next</span></pre>
       </div>
     </div>
   </div>
@@ -826,7 +827,7 @@ approval is at 96f3e0b2eef1</span>
       <a href="https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md">詞彙</a>
       <a href="https://github.com/CarlLee1983/ForgePilot">GitHub</a>
     </div>
-    <p>ForgePilot 服務 AI 輔助的軟體工程，管理工作佇列、狀態、人工決策與驗證證據，讓工程工作能跨 agent 與 session 延續。它不取代 PraxisBound，也不取代你的 coding agent。</p>
+    <p>ForgePilot 是 AI 輔助軟體工程的被動 DAG 帳本，保存工作狀態、人工決策與驗證證據，讓工程工作能跨 agent 與 session 延續。它不取代 PraxisBound，也不啟動或取代你的 coding agent。</p>
     <p>文件與實際行為不符時以程式碼為準。每一條流程在 <code>integration_test.go</code> 都有一個以獨立 process 對真實 git repository 執行的測試。</p>
   </div>
 </footer>

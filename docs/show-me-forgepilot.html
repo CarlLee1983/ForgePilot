@@ -249,8 +249,6 @@
 </style>
 </head>
 <body>
-<div role="note" class="adr0040-notice" style="margin:0;padding:12px 20px;background:#fff4d6;color:#4a3600;border-bottom:2px solid #d99a00;font:500 14px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center;position:relative;z-index:1000;">本頁描述 ADR-0040 收斂前的產品，部分指令已移除；現行指令見 <a href="../README.md" style="color:#7a4b00;text-decoration:underline;">README</a> 與 <a href="development-plan.md#cli-契約" style="color:#7a4b00;text-decoration:underline;">docs/development-plan.md 的 CLI 契約</a>。</div>
-
 <!-- 微動態自然水波光暈 -->
 <div class="ambient-scene" aria-hidden="true">
   <div class="ambient-glow-top"></div>
@@ -277,32 +275,37 @@
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">ForgePilot · Engineering Control Plane</p>
-  <h1>它不寫程式。<br>它決定什麼可以開始、什麼算完成。</h1>
-  <p class="lede">一個只用 Go 標準函式庫的本機 CLI，管理工程工作的可執行性、進度，以及每一個判斷的證據。M1–M4 已全部實作。</p>
+  <p class="eyebrow">ForgePilot · Passive DAG Ledger</p>
+  <h1>它不寫程式，也不跑迴圈。<br>它決定什麼可以開始、什麼算完成。</h1>
+  <p class="lede">一個只用 Go 標準函式庫的本機 CLI。工單拆分完成後，外部 Agent 依它的建議把一張 DAG 上的工作全部做完；它保存每一步的證據，並擋住不該推進的工作。</p>
 </header>
 
 <h2>問題</h2>
 
 <p>Agent 輔助的工程有一個特定的失效模式：狀態活在對話裡。哪件事可以開始、哪件事在等誰的判斷、某次「測試通過了」是在哪一版通過的——這些都留在某次 session 的上下文中，換一個 session 就沒了。</p>
 
-<p>後果不是效率問題，是可信度問題。Agent 面對規格歧義時最容易做的事，是自己選一個然後繼續往下寫；而「跑過測試了」如果沒有綁定確切的 commit，它就只是一句話。</p>
+<p>後果不是效率問題，是可信度問題。Agent 面對規格歧義時最容易做的事，是自己選一個然後繼續往下寫；而「跑過測試了」如果沒有綁定確切的 Candidate，它就只是一句話。</p>
 
 <div class="callout">
   <span class="label">ForgePilot 的位置</span>
-  <p>它不產生 Story、不用 LLM 判斷 PASS、不決定架構、不 merge 也不 release。工程要求由 PraxisBound 定義，正確性由 repository 自己的 <code>make verify</code> 判斷，該由人決定的事由人決定。ForgePilot 只負責把這些事實記下來，並且擋住不該推進的工作。</p>
+  <p>它不啟動 Agent、不產生 Story、不拆單、不用 LLM 判斷 PASS、不決定架構、不 merge 也不 release。迴圈由外部 Agent 跑；工程要求由 PraxisBound 定義，正確性由 repository 自己的 <code>make verify</code> 判斷，該由人決定的事由人決定。ForgePilot 只負責判定下一個合法動作、把事實記下來，並擋住不該推進的工作。</p>
 </div>
 
 <h2>核心概念</h2>
 
 <div class="terms">
   <div class="term">
+    <div class="name">Goal Plan</div>
+    <p class="body">工單拆分後交給 ForgePilot 匯入的一份 JSON：一個 Goal、它的節點、每個節點參照的 Story 與節點間依賴。<code>goal import</code> 一次建立整張 DAG；ForgePilot 只保證它是合法 DAG、Story 路徑存在，拆得對不對是上游與人的責任。</p>
+    <p class="avoid"><b>不是</b>可隨意改寫的工作清單：再次匯入只能新增節點。</p>
+  </div>
+  <div class="term">
     <div class="name">Goal</div>
-    <p class="body">需要跨多次工程工作推進的長期目標。有 ACTIVE / BLOCKED / COMPLETED / CANCELLED 四個狀態，COMPLETED 必須人手動宣告且要求底下全部工作皆已完成。</p>
+    <p class="body">由一份 Goal Plan 建立、跨多件工作推進的目標。有 ACTIVE / COMPLETED / CANCELLED 三個狀態；最後一件工作 DONE 時自動 COMPLETED，放棄則用 <code>goal cancel</code>。</p>
   </div>
   <div class="term">
     <div class="name">Work Item</div>
-    <p class="body">歸屬一個 Goal、參照一個 PraxisBound Story 的工作單位，有自己的狀態與依賴。它只保存 <code>story_ref</code>，不複製 Story 的需求。</p>
+    <p class="body">Goal Plan 中的一個節點，以節點 ID 識別，參照一個 PraxisBound Story，有自己的狀態與依賴。它只保存 <code>story_ref</code>，不複製 Story 的需求。PENDING／READY 是讀取時依依賴計算的，不保存。</p>
     <p class="avoid"><b>不是</b>另一種獨立的 Task 物件，也不是 Story 的副本。</p>
   </div>
   <div class="term">
@@ -311,62 +314,68 @@
     <p class="avoid"><b>不是</b>驗證失敗，也不是逾時就自動同意。</p>
   </div>
   <div class="term">
-    <div class="name">Evidence</div>
-    <p class="body">綁定一件工作與一個確切 Candidate revision 的紀錄，只新增不修改；Candidate 可以是既有 commit 或 working-tree snapshot。兩種：Verification（PASS / FAIL / INTERRUPTED）與 Human Review（APPROVED / REJECTED），共用同一條時間軸。</p>
-    <p class="avoid"><b>不是</b>完成宣告，也不是 Agent 的自評。</p>
+    <div class="name">Candidate</div>
+    <p class="body">Verification 所針對的 immutable code identity：已 commit 的 HEAD，或用 <code>--snapshot</code> 從未 commit 工作樹固定下來的 snapshot。不需要 WIP commit，也不改動你的 branch 與 index。</p>
+    <p class="avoid"><b>不是</b>branch、工作樹本身，也不是 Work Item 的狀態。</p>
   </div>
   <div class="term">
-    <div class="name">Human Review</div>
-    <p class="body">人對某個確切 revision 記錄的判斷。M4 起可以額外指明它發生在哪個 pull request 上。</p>
-    <p class="avoid"><b>不是</b>Verification PASS，也不是 merge 授權。</p>
+    <div class="name">Evidence</div>
+    <p class="body">綁定一件工作與一個確切 Candidate 的紀錄，只新增不修改。Verification（PASS / FAIL / INTERRUPTED）一定有；Human Review（APPROVED / REJECTED）只在 Goal 要求 Approval 時出現，兩者共用同一條時間軸。</p>
+    <p class="avoid"><b>不是</b>完成宣告，也不是 Agent 的自評。</p>
   </div>
 </div>
 
 <h2>完成是條件的結果，不是一個指令</h2>
 
-<p>產品裡沒有 <code>done</code>，沒有 <code>complete &lt;work-id&gt;</code>，也沒有測試專用的捷徑。DONE 只會在 <code>review approve</code> 記錄審查的同一次交易內、四項條件同時成立時發生：</p>
+<p>產品裡沒有 <code>done</code>，沒有 <code>complete &lt;work-id&gt;</code>，也沒有測試專用的捷徑。DONE 只會是 <code>verify</code> 在確切 Candidate 上 PASS 的結果，並與解鎖下游落在同一次交易內：</p>
 
-<pre><code>forgepilot review approve WI-001
-  ├─ 記錄 APPROVED Evidence          ← 一定會發生，先審後驗是正當流程
-  └─ CompletionBlockers(WI-001) 是空的嗎？
-       ├─ 同一 revision 的最新 Verification 是 PASS
-       ├─ 最新 Human Review 是 APPROVED
-       ├─ 沒有未解除的 Gate
-       └─ Goal 是 ACTIVE
-     ── 全部成立 ─▶ DONE + RefreshReady()   同一次交易，下游立刻 READY
-     ── 有一項不成立 ─▶ 停在 REVIEW，status 說出差的是什麼</code></pre>
+<pre><code>forgepilot verify schema
+  ├─ 在隔離的 detached worktree，對確切的 Candidate 跑 make verify
+  ├─ 記錄 Evidence                ← 一定會發生：PASS / FAIL / INTERRUPTED
+  └─ 結果是 PASS，且沒有未解除的 Gate、Goal 是 ACTIVE 嗎？
+       ├─ Goal 不要求 Approval ─▶ DONE，下游立刻 READY（同一次交易）
+       │                           最後一件 DONE ─▶ Goal 自動 COMPLETED
+       ├─ Goal 要求 Approval  ─▶ REVIEW，等人 review approve 才 DONE
+       └─ FAIL / INTERRUPTED  ─▶ 退回 RUNNING，next 給 REPAIR / RECOVER</code></pre>
 
-<p class="muted">最後一行不是客套。因為沒有完成指令，<code>status</code> 是使用者唯一能得知「為什麼還沒完成」的地方，所以它<strong>不能對未完成的原因沉默</strong>——這條被測試釘住。</p>
+<p class="muted">沒有完成指令，所以 <code>status</code> 是使用者唯一能得知「為什麼還沒完成」的地方：它對每件未完成工作都說明為何不能前進（依賴、Gate、等待 approval、佔位、Goal 已結束），<strong>不能對未完成的原因沉默</strong>——這條被測試釘住。</p>
 
-<h2>四個 milestone</h2>
+<h2>外部 Agent 的迴圈</h2>
 
 <div class="rail">
   <div class="ms">
-    <div class="tag">M1</div>
+    <div class="tag">1</div>
     <div>
-      <h4>Durable Engineering Queue</h4>
-      <p>Goal、Work Item、依賴、狀態轉移、deterministic 的 next-work selection，以及受程序鎖保護的原子 JSON state。跨 process 保存一致。</p>
+      <h4>匯入一份 Goal Plan</h4>
+      <p><code>forgepilot goal import plans/x.json</code> 一次建立 Goal 與整張 DAG。計畫有任何一處錯，整份都不寫入。補單時改計畫檔再匯入，只能新增節點。</p>
     </div>
   </div>
   <div class="ms">
-    <div class="tag">M2</div>
+    <div class="tag">2</div>
     <div>
-      <h4>Verification Evidence</h4>
-      <p>M2 在隔離的 detached worktree 對乾淨 HEAD 執行受管理專案自己的 <code>make verify</code>，結果存成綁定該 revision 的 Evidence。P0-001 再加入 <code>--snapshot</code>，把 working tree 固定成 Candidate 後走同一條驗證路徑。新 Candidate 不沿用舊的 PASS。</p>
+      <h4>問 next，只給一個動作</h4>
+      <p><code>next</code> 是純查詢：START、RESUME、REPAIR、RECOVER、REVERIFY、WAIT 之一，附理由。同一 workspace 同時最多一件 RUNNING 或 VERIFYING，所以不會同時推薦兩件工作。</p>
     </div>
   </div>
   <div class="ms">
-    <div class="tag">M3</div>
+    <div class="tag">3</div>
     <div>
-      <h4>Human Gate &amp; Review</h4>
-      <p>Gate 擋住需要人判斷的工作，Human Review 記錄 APPROVED / REJECTED，完成與下游解鎖落在同一次交易內。佇列第一次真的會前進。</p>
+      <h4>start、實作、verify</h4>
+      <p>Agent 讀 Story 實作，<code>verify</code> 在隔離 worktree 對確切 Candidate 跑受管理專案的 <code>make verify</code>。PASS 即 DONE（要求 Approval 的 Goal 則進 REVIEW）。FAIL 時讀 log 修復再 verify。</p>
     </div>
   </div>
   <div class="ms">
-    <div class="tag">M4</div>
+    <div class="tag">4</div>
     <div>
-      <h4>PR exact-head review</h4>
-      <p>Human Review 可以額外攜帶 <code>owner/name#number</code>，讓日後回頭讀這筆紀錄的人找得到當時的討論。刻意的小增量：沒有新增任何狀態機行為。</p>
+      <h4>需要人判斷時開 Gate 並停下</h4>
+      <p>架構取捨、範圍變更、規格歧義——Agent 不自己選一個繼續，而是 <code>gate open</code> 擋住該工作。換 session 的 Agent 由 <code>next</code> / <code>status</code> 得知正在等人。</p>
+    </div>
+  </div>
+  <div class="ms">
+    <div class="tag">5</div>
+    <div>
+      <h4>回到 2，直到 Goal COMPLETED</h4>
+      <p>每一輪都重新問 <code>next</code>，不自己維護清單。最後一件 DONE 時 Goal 自動完成，<code>next</code> 回報 <code>GOAL_ALREADY_COMPLETED</code>，迴圈結束。</p>
     </div>
   </div>
 </div>
@@ -375,6 +384,11 @@
 
 <div class="decisions">
   <div class="d">
+    <span class="adr">ADR-0040</span>
+    <h4>驅動者在外部，ForgePilot 是被動的帳本</h4>
+    <p>Claude Code 之類的 Agent 已是合格的迴圈執行者；ForgePilot 不可取代的是合法動作判定與不可偽造的完成條件。它不啟動 coding CLI、不管理安裝版本，除了 Git 與 <code>make verify</code> 之外不啟動任何程序。</p>
+  </div>
+  <div class="d">
     <span class="adr">ADR-0007</span>
     <h4>阻擋不佔用狀態欄</h4>
     <p>沒有 <code>WAITING_HUMAN</code>，Work Item 也沒有 <code>BLOCKED</code>。狀態描述工作在生命週期的位置，Gate 是另一個維度的條件。兩處各表達一次同一事實，就會需要「記住進入阻擋前是什麼狀態」這種只為修補覆寫而存在的欄位。</p>
@@ -382,7 +396,7 @@
   <div class="d">
     <span class="adr">ADR-0006</span>
     <h4>DONE 是終態，沒有 reopen</h4>
-    <p>它記錄的是已經發生的事，後續 commit 不使其失效。需要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄。也因此 DONE 的工作不標示 stale——那個提示對它不對應任何行動。</p>
+    <p>它記錄的是已經發生的事，後續 commit 不使其失效。需要重做就在計畫檔新增一個節點，讓「為什麼重做」有地方被記錄。也因此 DONE 的工作不標示 stale——那個提示對它不對應任何行動。</p>
   </div>
   <div class="d">
     <span class="adr">ADR-0005</span>
@@ -396,8 +410,8 @@
   </div>
   <div class="d">
     <span class="adr">ADR-0010</span>
-    <h4>不主動發出網路請求</h4>
-    <p>不自行 HTTP，也不 spawn <code>gh</code>。PR 是使用者輸入的識別字串，只驗格式。代價是標錯不會被偵測；換來的是這個工具在沒有網路、沒有 token、GitHub 掛掉時照樣可用，而 Evidence 的結果集合不必為「遠端不可用」再開一個值。</p>
+    <h4>完全離線</h4>
+    <p>不自行 HTTP，也不 spawn <code>gh</code>。這個工具在沒有網路、沒有 token、GitHub 掛掉時照樣可用，而 Evidence 的結果集合不必為「遠端不可用」再開一個值。</p>
   </div>
   <div class="d">
     <span class="adr">ADR-0001</span>
@@ -412,26 +426,25 @@
 <table>
   <thead><tr><th>指令</th><th>做什麼</th></tr></thead>
   <tbody>
-    <tr><td><code>init</code> / <code>migrate</code></td><td>在 repository root 建立 <code>.forgepilot/</code>；升級 state schema（備份後升級，不自動發生）</td></tr>
-    <tr><td><code>goal</code></td><td>create / block / unblock / complete / cancel</td></tr>
-    <tr><td><code>work add</code></td><td>新增 Work Item，指定 Story 與依賴</td></tr>
-    <tr><td><code>next</code> / <code>start</code></td><td>純查詢下一件可執行的工作；把 READY 推進到 RUNNING</td></tr>
-    <tr><td><code>verify [--snapshot]</code></td><td>對乾淨 HEAD，或 immutable working-tree snapshot，在隔離 worktree 跑 <code>make verify</code>，記錄 Evidence</td></tr>
+    <tr><td><code>init</code></td><td>在 repository root 建立 <code>.forgepilot/</code></td></tr>
+    <tr><td><code>goal import</code> / <code>goal cancel</code></td><td>由 Goal Plan 一次建立 Goal 與整張 DAG（重新匯入只能新增節點）；放棄一個 Goal</td></tr>
+    <tr><td><code>next [--json]</code> / <code>start</code></td><td>純查詢唯一的下一個合法動作；把 READY 推進到 RUNNING</td></tr>
+    <tr><td><code>verify [--snapshot]</code></td><td>對乾淨 HEAD，或 immutable working-tree snapshot，在隔離 worktree 跑 <code>make verify</code>，記錄 Evidence；PASS 即 DONE</td></tr>
     <tr><td><code>gate</code></td><td>open / resolve / cancel——提出、決定或撤銷一個需要人判斷的問題</td></tr>
-    <tr><td><code>review</code></td><td>approve / reject；approve 在條件成立時完成工作並解鎖下游</td></tr>
-    <tr><td><code>status</code></td><td>整份佇列，包含未解除的 Gate 數、最新 Evidence 與未完成的原因</td></tr>
+    <tr><td><code>review</code></td><td>approve / reject；僅適用要求 Approval 的 Goal</td></tr>
+    <tr><td><code>status</code></td><td>每個 Goal 的節點、最新 Evidence、未解除的 Gate 與每件未完成工作為何不能前進</td></tr>
   </tbody>
 </table>
 </div>
 
 <div class="callout not">
   <span class="label">刻意不做</span>
-  <p>Web UI、雲端服務、資料庫、daemon、multi-agent scheduler、Agent spawning、plugin framework、network API、自動 merge 或 release。以及任何能直接寫入 DONE 的路徑。</p>
+  <p>Web UI、雲端服務、資料庫、daemon、啟動 coding agent 的 Runner、平行執行、plugin framework、network API、自動 merge 或 release，以及任何能直接寫入 DONE 的路徑。</p>
 </div>
 
 <footer>
   <p>Go 1.25.5，只用標準函式庫。初始支援平台是 macOS 的本機檔案系統——程序鎖使用 OS <code>flock</code>，其他平台尚未驗證行為相同，因此不宣稱支援。</p>
-  <p>細節見 <a href="architecture.md">architecture.md</a>、<a href="../CONTEXT.md">CONTEXT.md</a>、<a href="adr/README.md">11 份 ADR</a> 與 <a href="diagrams/README.md">四張架構圖</a>。</p>
+  <p>細節見 <a href="architecture.md">architecture.md</a>、<a href="../CONTEXT.md">CONTEXT.md</a>、<a href="adr/README.md">ADR</a> 與 <a href="diagrams/README.md">四張架構圖</a>。</p>
 </footer>
 
 </div>

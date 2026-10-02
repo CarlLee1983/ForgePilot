@@ -277,8 +277,6 @@
 </style>
 </head>
 <body>
-<div role="note" class="adr0040-notice" style="margin:0;padding:12px 20px;background:#fff4d6;color:#4a3600;border-bottom:2px solid #d99a00;font:500 14px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center;position:relative;z-index:1000;">本頁描述 ADR-0040 收斂前的產品，部分指令已移除；現行指令見 <a href="../README.md" style="color:#7a4b00;text-decoration:underline;">README</a> 與 <a href="development-plan.md#cli-契約" style="color:#7a4b00;text-decoration:underline;">docs/development-plan.md 的 CLI 契約</a>。</div>
-
 <!-- 微動態自然水波光暈 -->
 <div class="ambient-scene" aria-hidden="true">
   <div class="ambient-glow-top"></div>
@@ -307,11 +305,11 @@
 <header>
   <p class="eyebrow">ForgePilot · Architecture &amp; State Internals</p>
   <h1>底層原理與狀態管理架構手冊</h1>
-  <p class="lede">ForgePilot 是一套純標準庫構建的本機工程狀態機與決策證據引擎。它不寫業務程式碼、不用資料庫、不跑背景服務，而是透過嚴格的 POSIX 檔案鎖與純函數狀態機，讓「做完了」這句話真正具備不可篡改的法律約束力。</p>
+  <p class="lede">ForgePilot 是一套純標準庫構建的本機被動 DAG 帳本。它不寫業務程式碼、不用資料庫、不跑背景服務、不啟動 Agent，而是透過 POSIX 檔案鎖與純函數狀態機，讓「做完了」這句話綁定一個確切的 Candidate 與一筆不可竄改的 Evidence。</p>
 </header>
 
 <h2><span class="idx">01</span> 分層邊界與單向依賴</h2>
-<p>系統由四個高內聚 Package 組成。核心原則是：<strong>「所有外圍 I/O 與 Subprocess 隔離在外，純領域狀態機不依賴任何外部介面」</strong>。</p>
+<p>系統由幾個高內聚 Package 組成。核心原則是：<strong>「所有外圍 I/O 與 Subprocess 隔離在外，純領域狀態機不依賴任何外部介面」</strong>。</p>
 
 <div class="arch-diagram">
   <div class="arch-layer top">
@@ -319,32 +317,46 @@
       <span>1. CLI 表現層 (internal/cli)</span>
       <span class="tag-badge">Glue &amp; Presentation</span>
     </div>
-    <p class="arch-desc">負責 flag 解析、人類閱讀終端排版、錯誤碼對應。自身絕不判定狀態轉移合法性，只負責將參數與外部事實傳入儲存與領域層。</p>
+    <p class="arch-desc">負責 flag 解析、人類閱讀終端排版、錯誤碼對應。自身絕不判定狀態轉移合法性，只負責將參數與外部事實傳入下層。</p>
   </div>
 
   <div class="arch-layer middle">
     <div class="arch-sub">
       <div class="arch-title">
-        <span>2. Storage 交易層 (internal/storage)</span>
+        <span>2. Orchestration 層 (internal/app)</span>
+        <span class="tag-badge">verify &amp; goal import</span>
+      </div>
+      <p class="arch-desc"><code>verify</code> 與 <code>goal import</code> 的流程只有這一份，<code>internal/cli/verify.go</code> 是薄殼。唯一可以同時碰 <code>work</code>、<code>storage</code>、<code>repository</code> 的地方。</p>
+    </div>
+    <div class="arch-sub">
+      <div class="arch-title">
+        <span>3. Storage 交易層 (internal/storage)</span>
         <span class="tag-badge">FLock + Snapshot</span>
       </div>
       <p class="arch-desc">專案唯一的持久化引擎。負責跨行程 OS 檔案鎖、單一 JSON 快照反序列化、驗證與原子落地替換。</p>
     </div>
     <div class="arch-sub">
       <div class="arch-title">
-        <span>3. Repository 轉接層 (internal/repository)</span>
+        <span>4. Repository 轉接層 (internal/repository)</span>
         <span class="tag-badge">Git &amp; Worktrees</span>
       </div>
-      <p class="arch-desc">全專案<strong>唯一允許呼叫 Git 的地方</strong>。負責 Candidate Snapshot 擷取、隔離臨時工作樹建立、Runtime 工具鏈版本解析。</p>
+      <p class="arch-desc">全專案<strong>唯一允許呼叫 Git 的地方</strong>。負責 Story 路徑檢查、Candidate Snapshot 擷取、隔離臨時工作樹建立，以及啟動 canonical <code>make verify</code>。</p>
+    </div>
+    <div class="arch-sub">
+      <div class="arch-title">
+        <span>5. 程序層 (internal/process)</span>
+        <span class="tag-badge">Process Groups</span>
+      </div>
+      <p class="arch-desc"><code>make verify</code> 會 fork；程序群組的啟動、有界停止與停止確認放在這裡，只終止 leader 會讓真正的工作繼續跑。</p>
     </div>
   </div>
 
   <div class="arch-layer bottom">
     <div class="arch-title">
-      <span>4. 純領域核心 (internal/work)</span>
+      <span>6. 純領域核心 (internal/work)</span>
       <span class="tag-badge">Pure State Machine</span>
     </div>
-    <p class="arch-desc">純領域邏輯。<strong>零 Interface、零檔案讀寫、零 Git、零 Process 呼叫</strong>。所有外部事實（當前時間 <code>now</code>、測試 Exit Code）均以純值傳入，保證 100% 確定性可測。</p>
+    <p class="arch-desc">純領域邏輯：Goal Plan 驗證、狀態轉移、readiness、<code>next</code> 判定。<strong>零 Interface、零檔案讀寫、零 Git、零 Process 呼叫</strong>。所有外部事實（當前時間 <code>now</code>、測試 Exit Code）均以純值傳入，保證 100% 確定性可測。</p>
   </div>
 </div>
 
@@ -352,11 +364,11 @@
 
 <div class="callout">
   <span class="label">無資料庫架構</span>
-  <p>ForgePilot 不使用 SQLite，也不使用任何嵌入式 Key-Value Store。所有 Goal、Work Item、Evidence 與 Gate，皆序列化保存在專案根目錄的單一物理檔案：<code>.forgepilot/state.json</code>。</p>
+  <p>ForgePilot 不使用 SQLite，也不使用任何嵌入式 Key-Value Store。所有 Goal、Work Item、Evidence 與 Gate，皆序列化保存在專案根目錄的單一物理檔案：<code>.forgepilot/state.json</code>。目前的 schema 版本是 19；它只讀 19，沒有 migration 框架。</p>
 </div>
 
 <h3>交易寫入流程（storage.Update）</h3>
-<p>當執行任何狀態修改指令（<code>start</code>, <code>verify</code>, <code>gate open</code>, <code>review approve</code>）時，底層嚴格走以下 8 步原子交易：</p>
+<p>當執行任何狀態修改指令（<code>goal import</code>, <code>start</code>, <code>verify</code>, <code>gate open</code>, <code>review approve</code>）時，底層嚴格走以下 8 步原子交易：</p>
 
 <div class="steps">
   <div class="step-item">
@@ -370,14 +382,14 @@
     <div class="step-num">2</div>
     <div class="step-content">
       <h5>反序列化載入記憶體</h5>
-      <p>讀取 <code>state.json</code>，透過 <code>json.NewDecoder</code> 嚴格解析進 <code>work.State</code> 記憶體結構體，並檢查 <code>SchemaVersion</code>。</p>
+      <p>讀取 <code>state.json</code>，透過 <code>json.NewDecoder</code> 嚴格解析進 <code>work.State</code> 記憶體結構體（拒絕未知欄位），並檢查 <code>SchemaVersion</code>。</p>
     </div>
   </div>
   <div class="step-item">
     <div class="step-num">3</div>
     <div class="step-content">
       <h5>執行純邏輯閉包</h5>
-      <p>執行傳入的 <code>operation(&amp;state)</code> 函式。進行狀態檢查、轉移、Evidence 記錄，以及依賴連鎖解鎖。</p>
+      <p>執行傳入的 <code>operation(&amp;state)</code> 函式。進行狀態檢查、轉移、Evidence 記錄，以及 Goal 的自動完成。</p>
     </div>
   </div>
   <div class="step-item">
@@ -417,37 +429,42 @@
   </div>
 </div>
 
-<h2><span class="idx">03</span> 工作狀態機與五道不可繞過的完成防線</h2>
+<h2><span class="idx">03</span> 工作狀態機與不可繞過的完成條件</h2>
 
-<p>Work Item 的生命週期由 6 個離散狀態組成：</p>
-<pre><code>PENDING ──(依賴滿足)──▶ READY ──(start)──▶ RUNNING ──(verify)──▶ VERIFYING
-                                                                     │
-                                                       (PASS 產出 Evidence)
-                                                                     ▼
-DONE ◀──(review approve, 條件全足)── REVIEW ◀────────────────────────┘</code></pre>
+<p>Work Item 持久化的狀態只有五個：<code>NOT_STARTED</code>、<code>RUNNING</code>、<code>VERIFYING</code>、<code>REVIEW</code>、<code>DONE</code>。你在 <code>status</code> 看到的 <code>PENDING</code> / <code>READY</code> 是讀取時依「依賴是否全部 DONE」算出的投影，從不保存，所以沒有 <code>reconcile</code>，也沒有需要被補寫的欄位。</p>
+<pre><code>PENDING --(deps DONE)--> READY --start--> RUNNING --verify--> VERIFYING
+                                             ^                    |
+                                             +- FAIL/INTERRUPTED -+
+                                                                  | PASS
+  approval not required:  DONE <----------------------------------+
+  approval required:      REVIEW <--------------------------------+
+                          |-- approve --> DONE
+                          +-- reject  --> RUNNING</code></pre>
 
 <h3>為什麼沒有 <code>forgepilot done</code> 指令？</h3>
-<p>在 ForgePilot 中，<strong>DONE 永遠不能由任何人手動直接設置（ADR-0008）</strong>。它只能是在 <code>review approve</code> 執行時，由狀態機底層 <code>CompletionBlockers(id)</code> 檢查通過後的推論結果：</p>
+<p>在 ForgePilot 中，<strong>DONE 永遠不能由任何人手動直接設置（ADR-0008 仍成立的部分）</strong>。它只能是 <code>verify</code> PASS（或要求 Approval 時的 <code>review approve</code>）在同一次受鎖交易內通過狀態機檢查後的結果：</p>
 
 <div class="card" style="margin-bottom: 20px;">
-  <h4>CompletionBlockers 檢查清單</h4>
+  <h4>進入 DONE 的條件</h4>
   <ul style="margin: 0; padding-left: 20px; font-size: 14.5px; color: var(--ink);">
-    <li><strong>1. 最新審查必須通過：</strong><code>LatestReview(id).Result == APPROVED</code></li>
-    <li><strong>2. 最新驗證必須通過：</strong><code>LatestVerification(id).Result == PASS</code></li>
-    <li><strong>3. 雙向版本 SHA 精確錨定：</strong><code>Verification.Revision == Review.Revision</code>（測試 PASS 的 commit 與人審查的 commit 必須一模一樣）</li>
-    <li><strong>4. 零未解除 Gate：</strong><code>OpenGateCount(id) == 0</code>（所有決策關卡都必須為 RESOLVED）</li>
-    <li><strong>5. 目標有效性：</strong>所屬 Goal 必須處於 <code>ACTIVE</code> 狀態</li>
+    <li><strong>1. 確切 Candidate 上的驗證通過：</strong>最新 Verification 為 <code>PASS</code>，且綁定的就是目前的 Candidate</li>
+    <li><strong>2. 零未解除 Gate：</strong>該工作沒有 <code>OPEN</code> 的 Gate（所有決策關卡都必須為 RESOLVED 或 CANCELLED）</li>
+    <li><strong>3. 目標有效性：</strong>所屬 Goal 必須處於 <code>ACTIVE</code> 狀態</li>
+    <li><strong>4. （選用）人工核准：</strong>Goal 以 <code>require_approval</code> 匯入時，PASS 先進 <code>REVIEW</code>，<code>review approve</code> 在記錄 APPROVED 的同一次交易內再檢查 1–3，才轉為 DONE</li>
   </ul>
 </div>
 
-<h3>同交易連鎖解鎖（Cascade Ready）</h3>
-<p>當一件工作晉升為 <code>DONE</code>，底層在<strong>同一個記憶體結構與同一筆 storage 寫入交易</strong>中呼叫 <code>s.RefreshReady(now)</code>：</p>
+<h3>同交易解鎖與 Goal 自動完成</h3>
+<p>當一件工作晉升為 <code>DONE</code>，底層在<strong>同一個記憶體結構與同一筆 storage 寫入交易</strong>中檢查它所屬的 Goal 是否已全部 DONE：</p>
 <pre><code>func (s *State) complete(id string, now time.Time) {
     item := s.item(id)
     item.Status, item.UpdatedAt = Done, now
-    s.RefreshReady(now) // 重新走訪 DAG，所有依賴皆 DONE 的 PENDING 節點立即翻轉成 READY
+    s.completeGoalIfFinished(item.GoalID, now) // 全部節點 DONE 時，Goal 在同一筆交易轉為 COMPLETED
 }</code></pre>
-<p class="muted">這徹底解決了「A 工作已完成，但 B 工作在另一個行程讀取時仍顯示為等待」的中間競爭狀態。</p>
+<p class="muted">下游的 READY 不必寫入：它在每次讀取時由「依賴是否全部 DONE」算出，所以 A 一寫成 DONE，B 的 READY 就已經成立。這徹底解決了「A 工作已完成，但 B 工作在另一個行程讀取時仍顯示為等待」的中間競爭狀態。</p>
+
+<h3><code>next</code>：只回傳一個合法動作</h3>
+<p><code>next</code> 是 domain state 加上目前 repository facts 的純讀 projection，不持久化，也從不替 Agent 執行建議。判定順序固定：先看佔住 workspace 的工作（<code>REPAIR</code> / <code>RESUME</code> / <code>RECOVER</code> / <code>WAIT</code>），再看 stale 的 REVIEW 工作（<code>REVERIFY</code>），再看最早的 READY 且無未解除 Gate 的工作（<code>START</code>），最後才是等人（<code>WAIT</code>）或已結束（<code>GOAL_ALREADY_COMPLETED</code> / <code>GOAL_CANCELLED</code> / <code>NONE</code>）。有佔位時跳過 <code>REVERIFY</code> 與 <code>START</code>，因為它們推薦的 transition 會被單一佔位規則拒絕。</p>
 
 <h2><span class="idx">04</span> 驗證隔離與 Candidate Snapshot 原理</h2>
 
@@ -465,21 +482,21 @@ DONE ◀──(review approve, 條件全足)── REVIEW ◀──────�
     <div class="step-num">B</div>
     <div class="step-content">
       <h5>建立獨立的 Detached Worktree</h5>
-      <p>在 <code>.forgepilot/worktrees/run-*</code> 建立隔離的臨時工作樹，完全獨立於使用者編輯器與 shell 環境。</p>
+      <p>在 <code>.forgepilot/worktrees/&lt;work-id&gt;-&lt;short-sha&gt;</code> 建立隔離的臨時工作樹，完全獨立於使用者編輯器與 shell 環境。受驗專案的 <code>make verify</code> 因此必須能在全新 checkout 上執行。</p>
     </div>
   </div>
   <div class="step-item">
     <div class="step-num">C</div>
     <div class="step-content">
-      <h5>確定性運行時探索 (Deterministic Runtime Resolution)</h5>
-      <p>從 Candidate 內的 <code>.node-version</code>, <code>go.mod</code> 等檔案解析宣告的版本要求，於本機已安裝的工具鏈中找到精確匹配者，防止 caller shell 的 PATH 造成測試污染。</p>
+      <h5>由專案自己固定 toolchain</h5>
+      <p>ForgePilot 不解析 <code>.node-version</code>、<code>go.mod</code> 這類 runtime 宣告，也不管理工具鏈版本；檢查繼承呼叫者的環境，toolchain 版本由受管理專案的 <code>make verify</code> 自己固定。</p>
     </div>
   </div>
   <div class="step-item">
     <div class="step-num">D</div>
     <div class="step-content">
       <h5>執行 canonical make verify 並即時串流</h5>
-      <p>執行專案標準驗證指令，stdout/stderr 即時落地至 <code>.forgepilot/logs/&lt;run-id&gt;.log</code>（ADR-0012），測試完畢後立即回收臨時工作樹，並將 PASS/FAIL 結果固化成不可變的 Evidence。</p>
+      <p>執行專案標準驗證指令，stdout/stderr 即時落地至 <code>.forgepilot/logs/</code>（以 run 為鍵，ADR-0012），測試完畢後立即回收臨時工作樹，並將 PASS/FAIL/INTERRUPTED 結果固化成不可變的 Evidence。一次 <code>verify</code> 只為觸發它的那件工作留下 Evidence。</p>
     </div>
   </div>
 </div>
@@ -499,17 +516,17 @@ DONE ◀──(review approve, 條件全足)── REVIEW ◀──────�
       <tr>
         <td><strong>程式碼產出</strong></td>
         <td>固定候選版本（Commit / Snapshot SHA）</td>
-        <td>不寫業務程式碼、不替代工程師或 AI Agent 思考</td>
+        <td>不寫業務程式碼、不啟動 Agent、不替代工程師或 AI Agent 思考</td>
       </tr>
       <tr>
         <td><strong>需求與規格</strong></td>
-        <td>只儲存 <code>story_ref</code> 路徑指針與依賴關係</td>
-        <td>不定義規格細節，規格完全委派給外部 PraxisBound</td>
+        <td>只儲存 <code>story_ref</code> 路徑指針與依賴關係；由 Goal Plan 匯入整張 DAG</td>
+        <td>不定義規格細節，也不拆單；規格完全委派給外部 PraxisBound</td>
       </tr>
       <tr>
         <td><strong>驗證執行</strong></td>
         <td>在隔離 Worktree 執行專案自身的 <code>make verify</code> 並留痕</td>
-        <td>不自行猜測驗證指令，測試失敗不自動修復程式碼</td>
+        <td>不自行猜測驗證指令、不解析 runtime，測試失敗不自動修復程式碼</td>
       </tr>
       <tr>
         <td><strong>決策與關卡</strong></td>
@@ -518,12 +535,12 @@ DONE ◀──(review approve, 條件全足)── REVIEW ◀──────�
       </tr>
       <tr>
         <td><strong>外部整合</strong></td>
-        <td>PR Reference（<code>owner/repo#123</code>）作為審查標註</td>
-        <td><strong>零網路請求（ADR-0010）</strong>，不呼叫 GitHub API 查證 PR</td>
+        <td>完全離線；除 Git 與 <code>make verify</code> 外不啟動任何程序</td>
+        <td><strong>零網路請求（ADR-0010）</strong>，不呼叫 GitHub API，也沒有 PR 欄位</td>
       </tr>
       <tr>
         <td><strong>狀態終態</strong></td>
-        <td>條件全部滿足時自動推至 DONE，並解鎖下游</td>
+        <td>條件滿足時推至 DONE，並解鎖下游、完成 Goal</td>
         <td><strong>DONE 絕不允許 Reopen（ADR-0006）</strong>，不代執行 Git Merge / Push</td>
       </tr>
     </tbody>
@@ -531,7 +548,7 @@ DONE ◀──(review approve, 條件全足)── REVIEW ◀──────�
 </div>
 
 <footer>
-  <span>ForgePilot Documentation · M1–M5 + P0/P1 Fully Implemented</span>
+  <span>ForgePilot Documentation · ADR-0040 Passive DAG Ledger</span>
   <span>Local File: docs/show-me-internals.html</span>
 </footer>
 
