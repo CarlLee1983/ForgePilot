@@ -1,5 +1,7 @@
 # Story: FP-60 expose one pure progress projection and read-only consumers
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 Preflight, status, dry-run, durable handoff, and the first read-only TUI present the same typed,

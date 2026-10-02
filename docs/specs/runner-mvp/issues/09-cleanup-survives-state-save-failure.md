@@ -1,5 +1,7 @@
 # 09 — 已觀察到的未確認程序不因存檔失敗而消失
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 [08](08-recovery-closure.md) 之後的第四輪 dogfood 修正，範圍是**一條複合失敗路徑**。
 不重新設計 Runner、storage 或 lifecycle，不擴充任何執行控制能力，沒有新的架構決定，
 因此沒有新的 ADR——[ADR-0022](../../../adr/0022-pending-cleanup-outlives-the-process.md)

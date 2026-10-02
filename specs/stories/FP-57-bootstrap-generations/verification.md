@@ -1,5 +1,7 @@
 # FP-57 Verification
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Result
 
 **PASS** — 2026-09-24. Bootstrap has executable install, upgrade, prune,

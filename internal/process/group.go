@@ -1,13 +1,12 @@
-// Package process runs and stops the process groups ForgePilot owns. It exists
-// because two callers need exactly the same three guarantees and neither may
-// have its own version of them: a child is started in its own process group, a
-// group is stopped within a bounded time, and the stop is confirmed rather than
-// assumed. `make verify` forks and a coding CLI forks, so signalling only the
-// process ForgePilot launched leaves the real work running.
+// Package process runs and stops the process groups ForgePilot owns: the
+// subprocesses internal/repository starts, which are its Git commands and the
+// canonical `make verify` check of a verification. Each child is started in its
+// own process group, a group is stopped within a bounded time, and the stop is
+// confirmed rather than assumed. `make verify` forks, so signalling only the
+// process ForgePilot launched would leave the real work running.
 //
-// See docs/adr/0020-worker-ownership-is-fail-closed.md. Nothing here decides
-// ownership: callers establish that a group is theirs before asking for it to
-// be stopped.
+// Nothing here decides ownership: callers establish that a group is theirs
+// before asking for it to be stopped.
 package process
 
 import (

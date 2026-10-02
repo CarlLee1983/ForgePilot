@@ -1,5 +1,7 @@
 # Story: FP-32 固定版本 installer 的信任查驗與版本化安裝
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 沒有 Go 的 macOS 開發者能先檢閱一份固定版本的 shell installer，再讓它依自己的 Mac 架構取得

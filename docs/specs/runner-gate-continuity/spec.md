@@ -1,5 +1,7 @@
 # Runner resolved-Gate continuity
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Outcome
 
 一個 Agent Session 以 `needs_human` 停止並建立 Gate、由人 resolve 後，resume 的新 session 必須直接取得 durable Human Decision；依賴該工作的下游 session 也必須取得相同決策。合法的人工作答不消耗 technical retry budget，但仍受整個 run 的 step、duration 與 artifact bounds 約束。

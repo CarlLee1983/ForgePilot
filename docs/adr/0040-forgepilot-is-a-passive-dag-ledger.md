@@ -9,9 +9,11 @@ ForgePilot 的定位收斂為：工單拆分完成後，讓外部 Agent 依拓�
 Evidence，並在節點完成的同一次交易內解鎖下游。它不啟動 coding CLI、不管理安裝版本，
 除了 Git 與受管理 repository 的 canonical `make verify` 之外不啟動任何程序，也不發出網路請求。
 
-**文件狀態：** 2026-10-02 的 `grill-with-docs` 兩輪 Q1–Q12 均獲使用者「照建議」確認，
-共識摘要已獲明確確認。這是已定案、實作中的收斂：Runner、supervised execution 與 Story readiness review 已移除
-（`Goal.Execution` 資料模型暫留以相容 schema 18，schema 19 斷代時刪除）；其餘被移除的能力在實作完成前仍存在於程式碼中。
+**文件狀態：** 已實作。2026-10-02 的 `grill-with-docs` 兩輪 Q1–Q12 均獲使用者「照建議」確認，同日分段落地並合併：
+#78（CLI 契約表）、#79（移除自管分發）、#80（移除 Runner、supervised execution 與 Story readiness）、
+#81（移除 runtime resolution 與 verification fan-out）、#82（schema 19 斷代與 `goal import`）、
+#83（PASS 即 DONE、Approval Requirement、Goal 自動完成）、#84（讀取時計算 readiness、單一佔位、`next` 重寫）。
+文件、skill 與圖的收尾見 GitHub issue #76；三個採用 repository 的遷移見 #77。
 
 ## 依據
 

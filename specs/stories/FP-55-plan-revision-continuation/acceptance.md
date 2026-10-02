@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [x] AC-001: `execution revise` previews and atomically commits an explicitly approved additive reviewed revision while preserving prior nodes, Story references, edges, Evidence, authorization history, and cumulative consumption.

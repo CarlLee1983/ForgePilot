@@ -1,5 +1,7 @@
 # 06 — 停止訊號、程序清理與總期限的執行控制
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 Runner MVP 交付後的 dogfood 修正。不重新設計 Runner，不加新能力：補上三個「執行控制」的漏洞，
 讓 Runner 在 **Agent session 與正式 verification 兩段執行期間**都能正確處理停止訊號、
 子程序生命週期、單次 timeout 與整個 run 的總期限。

@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [x] AC-001: 以一個完整 commit SHA 執行建置入口一次，產生 darwin/arm64 與 darwin/amd64 兩份資產。

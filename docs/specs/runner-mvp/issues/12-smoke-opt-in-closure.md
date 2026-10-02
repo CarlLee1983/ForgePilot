@@ -1,5 +1,7 @@
 # 12 — 真實 Codex smoke 的啟用條件，以及守住它的回歸測試
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 [11](11-real-codex-smoke-acceptance.md) 留下一個沒有被測試守住的判斷。
 啟用真實 Codex smoke 的檢查寫成「非空即啟用」：
 

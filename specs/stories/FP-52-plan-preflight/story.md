@@ -1,5 +1,7 @@
 # Story: FP-52 reviewed Goal Plan pure preflight
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 Operators can inspect a supplied reviewed Goal Plan before adoption and receive a

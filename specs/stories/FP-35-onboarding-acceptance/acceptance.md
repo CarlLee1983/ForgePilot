@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [x] AC-001: 預設 CI 對共通 onboarding 流程與 Codex／Claude Code adapter 執行一次完整的離線 fake/spy 逐步導入情境：root test-only harness 安裝並驗證 actual #34 adapters，消費 #33 `source-built-plan.sh --format actions` 的 NUL records，過程中不開啟模型登入、也不開啟網路 agent session。

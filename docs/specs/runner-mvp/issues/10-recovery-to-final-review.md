@@ -1,5 +1,7 @@
 # 10 — 複合故障恢復之後，同一個 run 走到 Goal 最終人工審查
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 [09](09-cleanup-survives-state-save-failure.md) 驗收的是**阻擋成立**：
 facts refresh 回報未確認程序群組、同一次交易的 `state.json` 存檔失敗，
 Runner 仍保存 unresolved Pending 並停在 `RECOVERY_BLOCKED`，各種重啟入口都被擋住。

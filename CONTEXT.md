@@ -2,7 +2,7 @@
 
 ForgePilot 是被動的 DAG 帳本：工單拆分完成後，讓外部 Agent 依拓撲順序推進工作，並保存每一步的驗證證據與人工決策；工程要求本身由 PraxisBound 定義。
 
-本詞彙表描述 [ADR-0040](docs/adr/0040-forgepilot-is-a-passive-dag-ledger.md) 定案後的語言。收斂實作完成前，程式碼仍含已移除的詞（Runner、VERIFIED、Review Policy、Execution Authorization 等）；它們以 ADR-0040 為準，不再是領域語言。
+本詞彙表描述 [ADR-0040](docs/adr/0040-forgepilot-is-a-passive-dag-ledger.md) 收斂後的語言。Runner、Agent Session、VERIFIED、Review Policy、Completion Policy、Execution Authorization、External Work Reference、PR Reference 等舊詞已移除，不是領域語言。
 
 ## Language
 
@@ -23,7 +23,10 @@ _Avoid_：ForgePilot requirement、Work Item 的需求副本
 **Readiness**：Work Item 是否所有依賴都已 DONE 的判斷，PENDING 或 READY。每次讀取時由目前 state 計算，不保存。READY 不表示可以忽略該工作自己的 Gate。
 _Avoid_：可以開始工作的保證、Gate 已解除、第二份狀態來源
 
-**Actionable Work**：屬於 ACTIVE Goal、READY 且沒有未解除 Gate 的工作。同一時間最多一件工作 RUNNING。
+**佔位**：同一 workspace 只有一個的執行位置，由 RUNNING 或 VERIFYING 的工作持有（含 verifier 已消失的孤兒 VERIFYING，直到 `verify` 回收它）。REVIEW 不佔位，終態 Goal 的工作也不佔位。有佔位時，其他工作不能 `start`，也不能因 `review reject` 或重新 `verify` 回到執行中。
+_Avoid_：claim、lease、Agent session 鎖、平行執行
+
+**Actionable Work**：屬於 ACTIVE Goal、READY 且沒有未解除 Gate 的工作；workspace 有佔位時，`next` 不推薦開始其他工作。
 _Avoid_：RUNNING 工作、所有未完成工作
 
 **Agent**：依 ForgePilot 給出的下一個合法動作，在自己的迴圈中讀 Story、實作並呼叫 ForgePilot 的外部 coding agent。ForgePilot 不啟動它，也不保存它的執行歷程。

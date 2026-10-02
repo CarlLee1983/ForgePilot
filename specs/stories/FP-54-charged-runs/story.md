@@ -1,5 +1,7 @@
 # Story: FP-54 enforce authorization on charged foreground runs
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 Every direct-run and exact-run-resume entry starts work only under the same

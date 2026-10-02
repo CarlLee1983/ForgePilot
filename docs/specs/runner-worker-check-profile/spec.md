@@ -1,5 +1,7 @@
 # Agent Session Check Profile
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Decision status
 
 這份契約已完成 dogfood evidence inventory、三個獨立 interface 方案比較與 Sol/high architecture

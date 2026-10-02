@@ -1,5 +1,7 @@
 # 02: `review approve` / `reject` 的 `--pr`
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 **What to build:** 審查者在核准或打回時指明這次審查發生在哪個 pull request 上。`forgepilot review approve WI-001 --pr owner/name#123` 記下一筆同時帶著 PR Reference 與完整 commit SHA 的 APPROVED Evidence，`review reject` 同樣接受。日後回頭讀這筆紀錄的人，找得到當時的討論在哪裡。
 
 `--pr` 是選填的——不帶就是既有那種純 commit review，本機先審、之後才開 PR 是正當流程。ForgePilot 不去 GitHub 查證那個 PR 存在、是否開著、HEAD 是不是它（ADR-0010）；它只驗格式，而格式非法就是輸入無效，整個指令被拒且不寫入任何東西，不是記一筆 REJECTED。

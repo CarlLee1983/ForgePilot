@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [ ] AC-001: `execution plan` returns a pure versioned preview and token bound to exact request bytes, referenced artifact digests, Goal/workspace, and observed authorization state.

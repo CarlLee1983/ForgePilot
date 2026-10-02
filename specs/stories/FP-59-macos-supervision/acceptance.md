@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [ ] AC-001: After restart, login, or wake, a user-scoped supervisor rechecks authorization, profile,

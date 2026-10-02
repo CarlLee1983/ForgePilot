@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [ ] AC-001: 在受支援的 macOS 15+ arm64 或 amd64 上執行 installer，取得對應架構的固定版本

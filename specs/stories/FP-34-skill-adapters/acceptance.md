@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [x] AC-001: Codex adapter 宣告的安裝路徑符合 Codex 官方文件記載的個人 skill 目錄樣式，adapter 內容只含平台載入位置與呼叫方式。

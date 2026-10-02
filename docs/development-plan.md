@@ -2,26 +2,19 @@
 
 ## 計畫狀態
 
-M1–M5、P0-001 Candidate Snapshot、P0-002 Work Item Status Summary、P0-003 Actionable Next、P1-004 Deterministic Runtime Resolution 與 Goal-level Review Policy 已完成。本文件供後續開發拆分工作、驗收與交接；產品規則見 [architecture.md](architecture.md)。
+ForgePilot 是被動的 DAG 帳本（[ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md)），ADR-0040 的收斂已全部實作：Goal Plan 匯入、schema 19、PASS 即 DONE 與 Approval Requirement、讀取時計算的 readiness、單一佔位、新的 `next`／`status`，以及移除 Runner、supervised execution、自管分發、runtime resolution 與 verification fan-out。roadmap 沒有下一個 milestone，後續工作來自 dogfood，開在 GitHub Issues。產品規則見 [architecture.md](architecture.md)，詞彙見 [CONTEXT.md](../CONTEXT.md)。
+
+本文件由三部分組成：
+
+1. **CLI 契約**——現行指令與旗標的唯一準則；變更時先改契約表，再實作。
+2. **變更面驗證矩陣**與**交付格式**。
+3. **歷史紀錄**——ADR-0040 之前各 milestone 與階段的契約、驗收與實跑紀錄，保留作為「當時決定了什麼、為什麼」的出處，內容不再代表現況。
 
 開發時如採用 PraxisBound，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
-Dogfood Goal FP-28 的導入方向是 prompt-first、fixed-source-version 本機建置：Agent 先以
-inspection-only commands 檢查與展示，逐條顯示完整 commit SHA、commands、路徑與效果；使用者
-授權後才能取得 source、安裝／建置、執行 `make verify` 或切換 entrypoint。既有 Go 是正式前提，
-source-built CLI 通過啟動檢查後才進入 Story 人工檢閱；預設 `WORK_ITEM` Goal／Work Item 建立前
-必須另取 repository write 的明確授權。ADR-0033 已定案 Bootstrap，現在已有 install、upgrade、
-uninstall、prune、status、`generation-v1 current` 與 `retention-v1`；35 個 crash 交易邊界及
-原生 Codex 的同版程序與獨立批准停等驗收已通過。Bootstrap 同版安裝 CLI 與 Codex skill，但不取得
-Repository Onboarding 權限；完整 contract 在
-[docs/specs/source-built-bootstrap.md](specs/source-built-bootstrap.md)。unsigned binary 只可作 maintainer
-trial，不宣稱正式導入或 macOS execution trust。Apple signing、notarization 與 no-Go prebuilt release
-留作未來獨立工作；具體邊界見 [architecture.md](architecture.md#distribution-and-onboarding-boundary)、
-ADR-0024、ADR-0025、ADR-0030 與 ADR-0033。
+## CLI 契約
 
-## ADR-0040 目標 CLI 契約
-
-> **本段描述目標，不是現況。** [ADR-0040](adr/0040-forgepilot-is-a-passive-dag-ledger.md) 把 ForgePilot 收斂為被動的 DAG 帳本；程式碼在 GitHub issue #68 系列票完成前仍含下方「移除」清單中的舊指令與旗標。本文件其餘各 milestone 與階段段落（M1–M5、P0／P1、Goal-level Review Policy、Runner MVP、FP-53／56／58／59 等）的契約表是**歷史紀錄**，與本段衝突時以本段為準；後續每張票以本段的指令與旗標命名為準，先改契約表，再實作。
+> 本段是現行契約，程式碼實際行為以 `forgepilot --help` 為準。flag 命名以本段為準：要改名或新增，先改這張表再實作。下方「歷史紀錄」的契約表與本段衝突時，以本段為準。
 
 ### 指令集
 
@@ -63,20 +56,49 @@ JSON，以標準函式庫解析，拒絕未知欄位：
 }
 ```
 
-- Goal ID 與節點 ID 同一字元規則：英數開頭，英數、`.`、`_`、`-`，長度上限 64。節點 ID 即 Work Item ID，在 workspace 內唯一。
-- `description` 選填；`require_approval` 選填，預設 `false`。
+- Goal ID 與節點 ID 同一字元規則：英數開頭，英數、`.`、`_`、`-`，長度上限 64；因為 Work Item ID 會被嵌進 snapshot ref，還必須是合法的 Git ref component（不含 `..`、不以 `.` 或 `.lock` 結尾）。節點 ID 即 Work Item ID，在 workspace 內唯一。
+- `goal.id`、`goal.title` 必填，至少一個節點；`description` 選填；`require_approval` 選填，預設 `false`。
 - 節點順序是多個 READY 時推薦順序的 tie-break。
 - 依賴只能指向同一 Goal 的節點。
 - 匯入拒絕：有環、指向不存在節點、自我依賴、重複依賴、重複節點 ID，以及不存在、路徑穿越或 symlink 逃逸的 Story 路徑。錯誤訊息指出節點與欄位。
-- 重新匯入同一 Goal：Goal 的 `id`、`title`、`description`、`require_approval` 必須與既有相同；既有節點的 `story` 與 `depends_on` 必須逐字相同；只接受新節點，新節點可依賴新舊節點（含已 DONE 者）；完全相同為無變化的成功；終態 Goal（COMPLETED、CANCELLED）拒絕；整份原子寫入。
+- 重新匯入同一 Goal：Goal 的 `id`、`title`、`description`、`require_approval` 必須與既有相同；計畫必須列出每個既有節點（漏列即拒絕，計畫永遠是整張 DAG），其 `story` 必須逐字相同、`depends_on` 以集合比較相同（重排不算改動，重複仍拒絕），且不重新檢查既有節點的 Story 是否存在，避免已完成而後來被搬走的 Story 凍結整個 Goal；只接受新節點，新節點可依賴新舊節點（含已 DONE 者）；完全相同為無變化的成功；終態 Goal（COMPLETED、CANCELLED）拒絕；整份原子寫入。
 
 ### 移除
 
-下列指令與旗標在目標契約中不存在，理由與取代關係見 ADR-0040：
+下列指令與旗標已不存在（`--help` 不列出，呼叫時回報未知指令），理由與取代關係見 ADR-0040：
 
 - 指令：`goal create`、`goal block`、`goal unblock`、`goal complete`、`goal preflight`、`work add`、`work list`、`reconcile`、`migrate`、`run` 全組、`execution` 全組、`review request`。
 - 旗標：`--pr`、`--review-policy`、`--external-ref`。
 - `goal import` 取代 `goal create` 與 `work add`；`status` 取代 `work list`。
+
+## 變更面驗證矩陣
+
+先讀 Story／acceptance contract：其中明定的 checks 一律優先。未指定時，依下表選擇能直接觀察變更的最小檢查；full gate 是 integration、Human final acceptance，或變更本身觸及其組成時的必要條件，而不是所有文字修改的預設。
+
+| 變更面 | 每次變更的檢查 | 升格為 full gate 的條件 |
+|---|---|---|
+| 非執行文件（Markdown、README、Agent skill、一般 HTML／CSS） | `git diff --check`；核對已改引用、指令與相對 `href`／`src`；HTML／CSS 於本機瀏覽器開啟已改頁面，確認版面與已改連結可用 | Story／acceptance 明定、整合交付，或同次改動也觸及其他列 |
+| `docs/diagrams/` 的圖規格與產物 | 依 [圖的重新產生程序](diagrams/README.md#怎麼重新產生) render 與 visual-check | 同上 |
+| Go、module metadata、Makefile 或 canonical verification 行為 | `make verify` | integration／Human final acceptance 時另跑 `go test -race -count=1 ./...`；Story 也可明定 race gate |
+
+報告每一項實跑命令、結果，以及沒有跑的 full gate 與理由。不得把未跑的必要 check 寫成 PASS；若必需 check 被阻擋，交付仍是 partial。這份矩陣不改變 ForgePilot 對受管理 repository 的 canonical `make verify` contract。
+
+## 每階段交付格式
+
+開發者完成後提供：
+
+1. **Implementation Summary**：實際完成的行為與 milestone。
+2. **Architecture Decisions**：本階段定案事項與理由。
+3. **Files Changed**：實際變更檔案。
+4. **Verification Result**：執行命令、PASS／FAIL／not run 與原因。
+5. **Deferred Work**：仍未實作的後續功能。
+6. **Risks / Open Questions**：未解風險、操作限制與下一階段前置決策。
+
+只有 acceptance criteria 與 required checks 實際通過才能宣告 milestone 完成；文件或測試 fixture 不代表產品能力已實作。
+
+## 歷史紀錄
+
+> **以下各段是 ADR-0040 之前的歷史紀錄，不代表現況。** 其中的指令與能力——`goal create|block|unblock|complete|preflight`、`work add|list`、`reconcile`、`migrate`、`run`、`execution`、`review request`、`--pr`、`--review-policy`、`--external-ref`、Review／Completion Policy、`VERIFIED`、runtime resolution、verification fan-out、Runner、supervised execution、Bootstrap 與 onboarding——都已移除；schema 升版鏈也已由 schema 19 取代。與上方「CLI 契約」衝突時以契約為準。各段保留是為了留下當時的決定與驗收出處。
 
 ## Milestones
 
@@ -246,7 +268,7 @@ init
 
 ### M2
 
-開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m2-開工前定案已完成) 與 `docs/adr/0001`–`0004`。剩下的是實作。
+開工前定案事項已全部完成，記錄於 architecture.md 當時的「M2 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0001`–`0004`。剩下的是實作。
 
 M2 新增兩個指令，不新增其他：
 
@@ -279,7 +301,7 @@ Integration fixture 加入 Makefile 與真實 commit。驗收：WORK_ITEM PASS�
 
 ### M3
 
-開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m3-開工前定案已完成) 與 `docs/adr/0005`–`0008`。實作已完成，切片與驗收見 [specs/m3-human-gate-and-review/](specs/m3-human-gate-and-review/) 底下的七張 ticket。
+開工前定案事項已全部完成，記錄於 architecture.md 當時的「M3 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0005`–`0008`。實作已完成，切片與驗收見 [specs/m3-human-gate-and-review/](specs/m3-human-gate-and-review/) 底下的七張 ticket。
 
 其中兩項原本列為必須定案的問題是被消滅而非回答：移除 `WAITING_HUMAN` 之後不存在「恢復規則」，移除 Work Item 的 `BLOCKED` 之後不存在「BLOCKED recovery」。
 
@@ -322,7 +344,7 @@ Schema 升至 v3：新增 Gate 集合與其 ID 配發計數，Evidence 加入 re
 
 ### M4
 
-開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m4-開工前定案已完成) 與 `docs/adr/0010`–`0011`。實作規格見 [specs/m4-pr-exact-head-review/](specs/m4-pr-exact-head-review/)。
+開工前定案事項已全部完成，記錄於 architecture.md 當時的「M4 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0010`–`0011`。實作規格見 [specs/m4-pr-exact-head-review/](specs/m4-pr-exact-head-review/)。
 
 原本列為必須定案的「PR metadata 來源、授權與 read-only integration 邊界」三問，答案是同一個：不從外部取得。ForgePilot 不主動發出網路請求（[ADR-0010](adr/0010-no-outbound-network-requests.md)），PR Reference 是使用者輸入的識別字串，因此沒有來源可談、沒有授權要處理，也沒有 integration 邊界要劃。
 
@@ -361,7 +383,7 @@ Schema 升至 v4：Evidence 加入選填的 `pr`。沿用既有升級契約—�
 
 ### M5
 
-開工前定案事項記錄於 [architecture.md](architecture.md#m5-開工前定案已完成) 與 [ADR-0012](adr/0012-verification-log-outside-state.md)（verification log）；review 拒絕訊息的修正沒有架構層級的取捨，決定直接記在下方。
+開工前定案事項記錄於 architecture.md 當時的「M5 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 [ADR-0012](adr/0012-verification-log-outside-state.md)（verification log）；review 拒絕訊息的修正沒有架構層級的取捨，決定直接記在下方。
 
 M5 收斂兩件獨立的工作，同屬 M5 但彼此不共用程式碼：
 
@@ -539,31 +561,6 @@ v11 HUMAN migration acceptance：`TestMigrateV11PreservesCompletedHumanGoalWithL
 | `forgepilot goal preflight --request <path> --json` | 讀取 repository-relative JSON request、Goal Plan Manifest、Plan Coverage Review，以及 Manifest 綁定的 declaration、sources 與 readiness bytes；輸出 `forgepilot.goal-preflight/v1` projection、綁定事實、完整 DAG／Work Item 對應與診斷，不寫入 state 或啟動 subprocess |
 
 Request 使用 `forgepilot.goal-preflight-request/v1`，必須明確提供 `goalId`、`manifestPath`、`coverageReviewPath`，以及 `nodeMappings` 的 Plan Node Reference/Work Item ID 對應。來源、declaration 與 readiness paths／digests 直接依 PraxisBound Manifest 驗證；declaration 按 v1 schema 驗證（最多 1 MiB、JSON depth 32），其 plan identity 與 DAG 必須符合 Manifest。Review 必須綁定 Manifest 原始 bytes、相同來源與 coverage-index identity，且明確聲明 `approved`。所有路徑都必須留在 repository 內且不得經過 symlink；缺少或多出的欄位、重複 JSON key、無效 UTF-8 與不正確的 artifact binding 都以 fail-closed JSON 診斷回報。每項 fact 明確標示 `observed`、`unprobed` 或 `unavailable`。SHA-256 以原始檔案 bytes 計算；preflight 不解析 Story Markdown、不推論需求覆蓋，也不查詢 Git、runtime、程序存活或 next action。詳見 README 的 Goal Plan preflight 使用範例與 FP-52 acceptance。
-
-## 變更面驗證矩陣
-
-先讀 Story／acceptance／release contract：其中明定的 checks 一律優先。未指定時，依下表選擇能直接觀察變更的最小檢查；full gate 是 integration、release、Human final acceptance，或變更本身觸及其組成時的必要條件，而不是所有文字修改的預設。
-
-| 變更面 | 每次變更的檢查 | 升格為 full gate 的條件 |
-|---|---|---|
-| 非執行文件（Markdown、README、一般 HTML／CSS） | `git diff --check`；核對已改引用、指令與相對 `href`／`src`；HTML／CSS 於本機瀏覽器開啟已改頁面，確認版面與已改連結可用 | Story／acceptance 明定、release／整合交付，或同次改動也觸及其他列 |
-| `docs/diagrams/` 的圖規格與產物 | 依 [圖的重新產生程序](diagrams/README.md#怎麼重新產生) render 與 visual-check | 同上 |
-| Go、module metadata、Makefile 或 canonical verification 行為 | `make verify` | integration／Human final acceptance 時另跑 `go test -race -count=1 ./...`；Story 也可明定 race gate |
-
-報告每一項實跑命令、結果，以及沒有跑的 full gate 與理由。不得把未跑的必要 check 寫成 PASS；若必需 check 被阻擋，交付仍是 partial。這份矩陣不改變 ForgePilot 對受管理 repository 的 canonical `make verify` contract。
-
-## 每階段交付格式
-
-開發者完成後提供：
-
-1. **Implementation Summary**：實際完成的行為與 milestone。
-2. **Architecture Decisions**：本階段定案事項與理由。
-3. **Files Changed**：實際變更檔案。
-4. **Verification Result**：執行命令、PASS／FAIL／not run 與原因。
-5. **Deferred Work**：仍未實作的後續功能。
-6. **Risks / Open Questions**：未解風險、操作限制與下一階段前置決策。
-
-只有 acceptance criteria 與 required checks 實際通過才能宣告 milestone 完成；文件或測試 fixture 不代表產品能力已實作。
 
 ## Readiness Recovery 與 GOAL-policy 重驗排序
 

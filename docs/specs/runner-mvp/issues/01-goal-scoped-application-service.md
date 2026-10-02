@@ -1,5 +1,7 @@
 # 01 — Goal-scoped typed application service
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ADR、spec 與 CLI 契約落地，並抽出 CLI 與 Runner 共用的 application service。
 
 ## 交付

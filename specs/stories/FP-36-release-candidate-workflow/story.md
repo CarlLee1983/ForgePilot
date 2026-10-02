@@ -1,5 +1,7 @@
 # Story: FP-36 手動啟動的 Release Candidate workflow 契約
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 維護者能以一個明確的完整 commit SHA 人工啟動一支 Release Candidate workflow，取得

@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [x] AC-001: Bootstrap stages and verifies a complete CLI, helper, and Codex skill/procedure payload;

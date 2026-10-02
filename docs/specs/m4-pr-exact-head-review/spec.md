@@ -1,6 +1,8 @@
 # M4 — PR exact-head review integration
 
-前置決策已全部定案，見 [architecture.md](../../architecture.md#m4-開工前定案已完成) 與 `docs/adr/0010`–`0011`。本文件是實作規格；拆出的工作見 [issues/](issues/)。
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
+前置決策已全部定案，見 architecture.md 當時的「M4 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0010`–`0011`。本文件是實作規格；拆出的工作見 [issues/](issues/)。
 
 ## Problem Statement
 

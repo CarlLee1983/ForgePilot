@@ -14,14 +14,12 @@
         "id": "main-path",
         "label": "主路徑",
         "focus": [
-          "pending",
-          "ready",
+          "notstarted",
           "running",
           "verifying",
-          "review",
           "done"
         ],
-        "note": "從建立到完成的六個狀態，DONE 只能由 review approve 在條件成立時達成。"
+        "note": "預設 Goal：verify PASS 即 DONE，同一交易解鎖下游；最後一件 DONE 時 Goal 自動完成。"
       },
       {
         "id": "loops",
@@ -31,17 +29,17 @@
           "verifying",
           "review"
         ],
-        "note": "FAIL、INTERRUPTED 與 REJECTED 都回到 RUNNING；REVIEW 可再次 verify。"
+        "note": "FAIL、INTERRUPTED 與 REJECTED 都回到 RUNNING；要求 Approval 的 Goal，REVIEW 在 Candidate stale 時可再次 verify。"
       },
       {
         "id": "gate-dimension",
         "label": "Gate 正交維度",
         "focus": [
           "gate",
-          "ready",
-          "review"
+          "review",
+          "notstarted"
         ],
-        "note": "Gate 阻擋推進但不改變狀態，因此不佔用狀態欄。"
+        "note": "Gate 阻擋 start、verify 與 approve，但不改變狀態，因此不佔用狀態欄。"
       }
     ]
   },
@@ -51,8 +49,8 @@
       "label": "狀態"
     },
     {
-      "id": "terminal",
-      "label": "終態"
+      "id": "approval",
+      "label": "要求 Approval 的 Goal"
     },
     {
       "id": "orthogonal",
@@ -61,24 +59,14 @@
   ],
   "states": [
     {
-      "id": "pending",
+      "id": "notstarted",
       "type": "start",
-      "label": "PENDING",
-      "sublabel": "依賴未完成",
+      "label": "NOT_STARTED",
+      "sublabel": "顯示為 PENDING／READY",
       "lane": "main",
       "col": 0,
       "step": "01",
-      "tag": "建立"
-    },
-    {
-      "id": "ready",
-      "type": "active",
-      "label": "READY",
-      "sublabel": "依賴皆 DONE",
-      "lane": "main",
-      "col": 1,
-      "step": "02",
-      "tag": "依賴皆 DONE"
+      "tag": "讀取時計算"
     },
     {
       "id": "running",
@@ -86,8 +74,8 @@
       "label": "RUNNING",
       "sublabel": "start 之後",
       "lane": "main",
-      "col": 2,
-      "step": "03",
+      "col": 1,
+      "step": "02",
       "tag": "start"
     },
     {
@@ -96,40 +84,52 @@
       "label": "VERIFYING",
       "sublabel": "verify 之後",
       "lane": "main",
-      "col": 3,
-      "step": "04",
+      "col": 2,
+      "step": "03",
       "tag": "verify"
-    },
-    {
-      "id": "review",
-      "type": "decision",
-      "label": "REVIEW",
-      "sublabel": "PASS 之後",
-      "lane": "main",
-      "col": 4,
-      "step": "05",
-      "tag": "PASS"
     },
     {
       "id": "done",
       "type": "success",
       "label": "DONE",
-      "sublabel": "approve 且四條件",
-      "lane": "terminal",
-      "col": 2,
-      "tag": "approve"
+      "sublabel": "終態，不判 stale",
+      "lane": "main",
+      "col": 4,
+      "tag": "PASS 或 approve"
+    },
+    {
+      "id": "review",
+      "type": "decision",
+      "label": "REVIEW",
+      "sublabel": "等 review approve",
+      "lane": "approval",
+      "col": 1,
+      "tag": "PASS"
     },
     {
       "id": "gate",
       "type": "external",
       "label": "未解除的 Gate",
-      "sublabel": "OPEN 數大於零",
+      "sublabel": "阻擋 start、verify、approve",
       "lane": "orthogonal",
-      "col": 0,
-      "tag": "ADR-0007"
+      "col": 1,
+      "tag": "ADR-0007",
+      "yOffset": 110
     }
   ],
   "transitions": [
+    {
+      "id": "notstarted-running",
+      "from": "notstarted",
+      "to": "running",
+      "label": "start"
+    },
+    {
+      "id": "running-verifying",
+      "from": "running",
+      "to": "verifying",
+      "label": "verify"
+    },
     {
       "id": "verifying-running",
       "from": "verifying",
@@ -139,38 +139,40 @@
       "route": "top-channel"
     },
     {
-      "id": "review-running",
-      "from": "review",
-      "to": "running",
-      "label": "reject",
-      "variant": "security",
-      "route": "bottom-channel",
-      "labelDx": -120
+      "id": "verifying-review",
+      "from": "verifying",
+      "to": "review",
+      "label": "PASS（要求 Approval）"
+    },
+    {
+      "id": "verifying-done",
+      "from": "verifying",
+      "to": "done",
+      "label": "PASS（預設）",
+      "variant": "emphasis"
     },
     {
       "id": "review-done",
       "from": "review",
       "to": "done",
-      "label": "四項條件成立",
+      "label": "approve",
       "variant": "emphasis",
-      "labelDy": 24
+      "fromSide": "right",
+      "toSide": "bottom"
     },
     {
-      "id": "gate-blocks-start",
-      "from": "gate",
-      "to": "ready",
-      "label": "阻擋 start",
+      "id": "review-running",
+      "from": "review",
+      "to": "running",
+      "label": "reject",
       "variant": "security"
     },
     {
-      "id": "gate-blocks-done",
+      "id": "gate-blocks-approve",
       "from": "gate",
       "to": "review",
-      "label": "阻擋完成",
-      "variant": "security",
-      "channelX": 633,
-      "labelDx": -34,
-      "labelDy": -10
+      "label": "阻擋 approve",
+      "variant": "security"
     }
   ],
   "cards": [
@@ -178,8 +180,8 @@
       "dot": "emerald",
       "title": "主路徑",
       "items": [
-        "六個狀態，沒有 WAITING_HUMAN 也沒有 BLOCKED",
-        "沒有完成指令，DONE 是條件成立的結果（ADR-0008）"
+        "持久化只有五個狀態，PENDING／READY 讀取時才計算",
+        "沒有完成指令：PASS 或 approve 的結果才是 DONE，最後一件 DONE 時 Goal 同交易完成"
       ]
     },
     {
@@ -188,6 +190,14 @@
       "items": [
         "FAIL 與 INTERRUPTED 都退回 RUNNING",
         "INTERRUPTED 是沒有結果，不是失敗"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "單一佔位",
+      "items": [
+        "同一 workspace 最多一件 RUNNING 或 VERIFYING",
+        "REVIEW 不佔位，DONE 解鎖下游"
       ]
     },
     {

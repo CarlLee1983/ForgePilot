@@ -40,12 +40,12 @@
 | [0032](0032-formal-macos-onboarding-is-apple-silicon-only.md) | 正式 macOS onboarding 僅支援 Apple Silicon；Intel trial asset 不構成支援承諾 | superseded by 0040 |
 | [0033](0033-source-built-bootstrap-separates-distribution-from-onboarding.md) | Source-built Bootstrap 同版安裝 CLI 與 Codex skill；Repository Onboarding 仍獨立核准 | superseded by 0040 |
 | [0034](0034-ci-publishes-unsigned-trial-releases.md) | CI 僅將已驗證的 unsigned trial bundle 發佈為經人工核准的 immutable prerelease | superseded by 0040 |
-| [0035](0035-supervised-goal-execution-with-bounded-rollover.md) | 長任務採 upstream 計畫／覆蓋核准、持久化有界授權、固定引擎背景執行與共用唯讀進度（待實作） | superseded by 0040 |
+| [0035](0035-supervised-goal-execution-with-bounded-rollover.md) | 長任務採 upstream 計畫／覆蓋核准、持久化有界授權、固定引擎背景執行與共用唯讀進度 | superseded by 0040 |
 | [0036](0036-explicit-verified-goal-completion.md) | GOAL policy 以 current PASS Evidence 原子完成；其中可選 `HUMAN` 終審分支已由 0037 取代 | superseded by 0040 |
 | [0037](0037-goal-completion-has-no-human-final-review.md) | GOAL completion 不設人工 final-review 分支；符合 current verification 條件即原子完成 | superseded by 0040 |
 | [0038](0038-versioned-bootstrap-generation-retention.md) | Bootstrap generation 綁定 source commit 與 payload digest；版本化 retention protocol 與 installer 共用鎖及狀態 | superseded by 0040 |
 | [0039](0039-per-owner-engine-generation-retention.md) | 每個 current authorization 與 supervised run 各自持有 engine retention marker；revision 先 pause／cleanup／compatibility 再切換 | superseded by 0040 |
-| [0040](0040-forgepilot-is-a-passive-dag-ledger.md) | ForgePilot 是被動的 DAG 帳本：外部 Agent 驅動、Goal Plan 匯入、PASS 即完成、移除 Runner／supervised execution／自管分發（待實作） | accepted |
+| [0040](0040-forgepilot-is-a-passive-dag-ledger.md) | ForgePilot 是被動的 DAG 帳本：外部 Agent 驅動、Goal Plan 匯入、PASS 即完成、移除 Runner／supervised execution／自管分發 | accepted |
 
 ## 什麼時候該加一份
 

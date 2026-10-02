@@ -1,5 +1,7 @@
 # M5 dogfood 摩擦紀錄
 
+> 文中的指令與模型（`goal create`、`work add`、`reconcile` 等）已由 ADR-0040 移除或改寫，以下為歷史紀錄。
+
 **日期**：2026-09-08　**repo**：ForgePilot 自身　**commit**：`47acc92`
 **做法**：M5 交付完成後，用 ForgePilot 自己駕駛這次工作——一個 Goal、兩個 Work Item
 （WI-001 review 訊息、WI-002 verification log），走完 init → goal create → work add →

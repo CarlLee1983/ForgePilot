@@ -1,5 +1,7 @@
 # Whole-DAG Story readiness review
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Decision status
 
 Accepted design. The Human has accepted the source-of-truth decision: PraxisBound owns

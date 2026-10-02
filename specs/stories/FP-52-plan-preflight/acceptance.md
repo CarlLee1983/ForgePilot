@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [x] AC-001: Valid chain, diamond, and fan-in reviewed plans each return one versioned JSON projection containing full topology, source/digest bindings, coverage-approval binding, and Goal registration compatibility.

@@ -1,5 +1,7 @@
 # FP-56 Verification
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Result
 
 **PARTIAL** — 2026-09-22. The control, wait, declaration, and launch-race

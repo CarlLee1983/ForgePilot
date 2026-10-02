@@ -25,7 +25,7 @@
           "snapshot",
           "impossible"
         ],
-        "note": "完成與解鎖若分成兩次交易，中間狀態會被讀到。"
+        "note": "完成、解鎖與 Goal 完成若分成兩次交易，中間狀態會被讀到。"
       }
     ],
     "viewBox": [
@@ -102,7 +102,7 @@
       "col": 3,
       "type": "external",
       "label": "看不到的中間態",
-      "sublabel": "A DONE、B PENDING",
+      "sublabel": "全 DONE、Goal ACTIVE",
       "width": 110
     }
   ],
@@ -152,7 +152,7 @@
       "title": "一致性邊界",
       "items": [
         "四者共用同一次替換（ADR-0001）",
-        "拆成兩次，中間態就會被讀到"
+        "DONE、下游解鎖與 Goal 完成同一次交易；readiness 讀取時計算，不另寫"
       ]
     },
     {

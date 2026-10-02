@@ -1,5 +1,7 @@
 # Story: FP-33 source-built onboarding procedure and short prompt
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 A developer can introduce ForgePilot from one reviewed, full immutable source

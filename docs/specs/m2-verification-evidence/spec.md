@@ -1,6 +1,8 @@
 # M2 — Verification Evidence
 
-前置決策已全部定案，見 [architecture.md](../../architecture.md#m2-開工前定案已完成) 與 `docs/adr/0001`–`0004`。本文件是實作規格；拆出的工作見 [issues/](issues/)。
+> 本 milestone 的核心能力仍存在，但其中部分指令與語意（`migrate`、`goal block`、`review request`、Review Policy 等）已由 ADR-0040 移除或改寫；現行契約見 [development-plan.md](../../development-plan.md)，以下為歷史紀錄。
+
+前置決策已全部定案，見 architecture.md 當時的「M2 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0001`–`0004`。本文件是實作規格；拆出的工作見 [issues/](issues/)。
 
 ## Problem Statement
 

@@ -19,18 +19,18 @@
           "admit",
           "run"
         ],
-        "note": "回收孤兒發生在任何拒絕之前：中斷是已經發生的事實（ADR-0009）。"
+        "note": "回收孤兒發生在任何拒絕之前：中斷是已經發生的事實（ADR-0009）；PASS 的結算與 Evidence 同一交易。"
       },
       {
         "id": "approve-order",
         "label": "approve 的順序",
         "focus": [
           "rcmd",
-          "record",
           "check",
+          "record",
           "finish"
         ],
-        "note": "審查先被記錄，完成與否由四項條件在同一交易內決定（ADR-0008）。"
+        "note": "條件先檢查，不滿足就拒絕而不記錄；記錄、DONE 與解鎖在同一交易內完成（ADR-0008）。"
       }
     ]
   },
@@ -75,7 +75,7 @@
       "col": 2,
       "type": "backend",
       "label": "能否開始",
-      "sublabel": "Gate",
+      "sublabel": "Gate、佔位",
       "width": 52
     },
     {
@@ -83,8 +83,8 @@
       "lane": "verify",
       "col": 3,
       "type": "database",
-      "label": "跑並記錄",
-      "sublabel": "Evidence",
+      "label": "跑並結算",
+      "sublabel": "PASS 即 DONE",
       "width": 52
     },
     {
@@ -97,21 +97,21 @@
       "width": 52
     },
     {
-      "id": "record",
+      "id": "check",
       "lane": "review",
       "col": 1,
-      "type": "database",
-      "label": "記錄審查",
-      "sublabel": "先記錄",
+      "type": "backend",
+      "label": "完成條件",
+      "sublabel": "同一交易",
       "width": 52
     },
     {
-      "id": "check",
+      "id": "record",
       "lane": "review",
       "col": 2,
-      "type": "backend",
-      "label": "四項條件",
-      "sublabel": "同一交易",
+      "type": "database",
+      "label": "記錄審查",
+      "sublabel": "APPROVED",
       "width": 52
     },
     {
@@ -141,18 +141,18 @@
       "to": "run"
     },
     {
-      "id": "rcmd-record",
+      "id": "rcmd-check",
       "from": "rcmd",
-      "to": "record"
-    },
-    {
-      "id": "record-check",
-      "from": "record",
       "to": "check"
     },
     {
-      "id": "check-finish",
+      "id": "check-record",
       "from": "check",
+      "to": "record"
+    },
+    {
+      "id": "record-finish",
+      "from": "record",
       "to": "finish"
     }
   ],
@@ -166,19 +166,19 @@
       ]
     },
     {
-      "dot": "emerald",
-      "title": "沒有完成指令",
+      "dot": "cyan",
+      "title": "PASS 即結算",
       "items": [
-        "approve 先記錄審查，完成是條件的結果",
-        "條件在同一交易內檢查（ADR-0008）"
+        "無 Approval：DONE、解鎖下游，最後一件則 Goal 完成",
+        "有 Approval 進 REVIEW；FAIL 或 INTERRUPTED 退回 RUNNING"
       ]
     },
     {
-      "dot": "cyan",
-      "title": "四項條件",
+      "dot": "emerald",
+      "title": "沒有完成指令",
       "items": [
-        "同一 revision 的最新 PASS 與 APPROVED",
-        "無未解除 Gate，且 Goal 為 ACTIVE"
+        "approve 在同一交易內檢查條件，不滿足就拒絕而不記錄",
+        "Candidate 仍是目前版本、無未解除 Gate、Goal 為 ACTIVE（ADR-0008）"
       ]
     }
   ]

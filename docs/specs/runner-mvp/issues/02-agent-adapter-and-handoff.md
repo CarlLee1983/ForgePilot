@@ -1,5 +1,7 @@
 # 02 — Codex adapter、fake subprocess、交接與結果驗證
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## 交付
 
 - `internal/agent`：`Runtime` 介面、`Request`／`Result`／`Outcome` 型別、結果 schema 驗證。

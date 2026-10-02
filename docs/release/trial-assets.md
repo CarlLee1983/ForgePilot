@@ -1,5 +1,7 @@
 # Unsigned trial assets
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 `scripts/release/build_trial_assets.sh` creates reviewable **unsigned maintainer trial**
 artifacts from one explicitly supplied, lowercase 40-character commit SHA. It
 is a distribution helper outside the ForgePilot governance CLI; it neither
