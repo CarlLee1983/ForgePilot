@@ -179,7 +179,7 @@ func fixture(t *testing.T) (string, string) {
 }
 
 // fixtureWithoutStories is fixture minus specs/stories: a repository that has
-// never adopted PraxisBound, which is the one shape none of the other fixtures
+// never adopted Warrant, which is the one shape none of the other fixtures
 // exercise since they all pre-create the directory.
 func fixtureWithoutStories(t *testing.T) (string, string) {
 	t.Helper()

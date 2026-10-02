@@ -4,16 +4,16 @@
 
 ForgePilot tells your engineering agents what work is actionable next.
 
-PraxisBound defines how that work must be engineered and verified.
+Warrant bounds that work to human-approved Stories and proves completion with your repository's own verification.
 
-ForgePilot does not replace PraxisBound or your coding agent.
+ForgePilot does not replace Warrant or your coding agent.
 
 ```text
 Human
  ↓
 ForgePilot
  ↓
-PraxisBound Story
+Warrant Story
  ↓
 Agent
  ↓
@@ -69,7 +69,7 @@ Skills are installed by copying: copy the repository's `skills/<agent>/forgepilo
 
 ## Usage
 
-From the root of a repository that already has PraxisBound Stories:
+From the root of a repository that already has human-approved [Warrant](https://github.com/CarlLee1983/Warrant) Stories (`specs/stories/<slug>.md`):
 
 ```bash
 forgepilot init
@@ -86,8 +86,8 @@ A Goal and its whole dependency DAG are created from one Goal Plan (JSON). Node 
 {
   "goal": { "id": "dbcli-dba", "title": "DBA Workflow Support", "require_approval": false },
   "nodes": [
-    { "id": "DBCLI-001", "story": "specs/stories/DBCLI-001", "depends_on": [] },
-    { "id": "DBCLI-002", "story": "specs/stories/DBCLI-002", "depends_on": ["DBCLI-001"] }
+    { "id": "DBCLI-001", "story": "specs/stories/DBCLI-001.md", "depends_on": [] },
+    { "id": "DBCLI-002", "story": "specs/stories/DBCLI-002.md", "depends_on": ["DBCLI-001"] }
   ]
 }
 ```

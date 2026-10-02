@@ -1,6 +1,6 @@
 # ForgePilot
 
-ForgePilot 是被動的 DAG 帳本：工單拆分完成後，讓外部 Agent 依拓撲順序推進工作，並保存每一步的驗證證據與人工決策；工程要求本身由 PraxisBound 定義。
+ForgePilot 是被動的 DAG 帳本：工單拆分完成後，讓外部 Agent 依拓撲順序推進工作，並保存每一步的驗證證據與人工決策；工程要求本身由人核准的 Warrant Story 定義。
 
 本詞彙表描述 [ADR-0040](docs/adr/0040-forgepilot-is-a-passive-dag-ledger.md) 收斂後的語言。Runner、Agent Session、VERIFIED、Review Policy、Completion Policy、Execution Authorization、External Work Reference、PR Reference 等舊詞已移除，不是領域語言。
 
@@ -14,10 +14,10 @@ _Avoid_：Story、Work Item
 **Goal Plan**：工單拆分後交給 ForgePilot 匯入的計畫檔，宣告一個 Goal、其節點、每個節點參照的 Story 與節點間依賴。ForgePilot 只保證它構成合法 DAG、Story 路徑存在且位於 `specs/stories/` 底下；拆得對不對是上游與人的責任。再次匯入只能新增節點。
 _Avoid_：Goal Plan Manifest、需求覆蓋證明、可隨意改寫的工作清單
 
-**Work Item**：Goal Plan 中的一個節點，以節點 ID 識別，參照一份 PraxisBound Story，具有自己的狀態與依賴。
+**Work Item**：Goal Plan 中的一個節點，以節點 ID 識別，參照一份 Warrant Story，具有自己的狀態與依賴。
 _Avoid_：Story、Task（作為另一種獨立工作物件）、自動配發的編號
 
-**PraxisBound Story**：由 PraxisBound 管理的工程契約，包含需求、acceptance criteria 與工程指引。ForgePilot 自身借用 PraxisBound 的 Story 目錄格式（`specs/stories/<story-id>/` 下的 `story.md` 與 `acceptance.md`），但不交出治理所有權；`specs/stories/m5-*.md` 是 M5 當時手寫的兩份，保留為刻意的歷史偏離。取捨見 [ADR-0013](docs/adr/0013-forgepilot-self-adoption-of-forgeflow.md)。
+**Warrant Story**：由 [Warrant](https://github.com/CarlLee1983/Warrant) 管理、經人核准的工程契約，是單一檔案 `specs/stories/<slug>.md`，只有 Goal、Out of Scope、Acceptance Criteria 三節；完成由 repository 自己的驗證命令證明。ForgePilot 只驗證 Story 路徑存在且位於 `specs/stories/` 底下，不解析內容、不保存核准狀態。ForgePilot 自身 `specs/stories/` 底下的目錄（PraxisBound 時期的 `story.md`／`acceptance.md`）與兩份 `m5-*.md` 保留為歷史紀錄，不是待辦工作。取捨見 [ADR-0041](docs/adr/0041-upstream-story-system-is-warrant.md)。
 _Avoid_：ForgePilot requirement、Work Item 的需求副本
 
 **Readiness**：Work Item 是否所有依賴都已 DONE 的判斷，PENDING 或 READY。每次讀取時由目前 state 計算，不保存。READY 不表示可以忽略該工作自己的 Gate。

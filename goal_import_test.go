@@ -367,7 +367,7 @@ func TestGoalImportWithoutStoriesDirectoryNamesTheMissingDirectory(t *testing.T)
 	if err == nil {
 		t.Fatalf("unexpectedly succeeded: %s", output)
 	}
-	if !strings.Contains(output, "specs/stories does not exist") || !strings.Contains(output, "ForgePilot expects PraxisBound Story files") || !strings.Contains(output, `node "a"`) {
+	if !strings.Contains(output, "specs/stories does not exist") || !strings.Contains(output, "ForgePilot expects Warrant Story files") || !strings.Contains(output, `node "a"`) {
 		t.Fatalf("output %q does not name the node and the missing directory", output)
 	}
 	if strings.Contains(output, "lstat") {

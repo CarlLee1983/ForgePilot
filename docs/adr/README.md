@@ -18,7 +18,7 @@
 | [0010](0010-no-outbound-network-requests.md) | 不主動發出網路請求——不自行 HTTP，也不 spawn `gh` | accepted（0018 例外隨 0040 失效） |
 | [0011](0011-pr-identity-does-not-gate-completion.md) | PR identity 不參與完成判定與 stale 判定 | superseded by 0040 |
 | [0012](0012-verification-log-outside-state.md) | Verification 輸出串流到 state 之外的 log；Evidence 不保存 path（run-ID lookup 由 0027 修正） | accepted（由 0027 修正 lookup） |
-| [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 借用 PraxisBound 的 Story 目錄格式，不執行 bootstrap、不交出治理所有權 | accepted |
+| [0013](0013-forgepilot-self-adoption-of-forgeflow.md) | ForgePilot 借用 PraxisBound 的 Story 目錄格式，不執行 bootstrap、不交出治理所有權 | superseded by 0041 |
 | [0014](0014-working-tree-snapshot-is-a-candidate.md) | Working tree snapshot 是保留在 ForgePilot ref 下的 Candidate，不是 branch、stash 或 Work Item target | accepted |
 | [0015](0015-runtime-contract-belongs-to-candidate.md) | Runtime Contract 從 Candidate checkout 解析；只固定該次 subprocess environment，actual versions 隨 run 進 Evidence | superseded by 0040 |
 | [0016](0016-goal-level-review-is-policy.md) | Goal-level review 是持久化 policy，不是略過 Human review 的捷徑 | superseded by 0040 |
@@ -46,6 +46,7 @@
 | [0038](0038-versioned-bootstrap-generation-retention.md) | Bootstrap generation 綁定 source commit 與 payload digest；版本化 retention protocol 與 installer 共用鎖及狀態 | superseded by 0040 |
 | [0039](0039-per-owner-engine-generation-retention.md) | 每個 current authorization 與 supervised run 各自持有 engine retention marker；revision 先 pause／cleanup／compatibility 再切換 | superseded by 0040 |
 | [0040](0040-forgepilot-is-a-passive-dag-ledger.md) | ForgePilot 是被動的 DAG 帳本：外部 Agent 驅動、Goal Plan 匯入、PASS 即完成、移除 Runner／supervised execution／自管分發 | accepted |
+| [0041](0041-upstream-story-system-is-warrant.md) | 上游 Story 體系由 Warrant 取代 PraxisBound；`ValidateStory` 不變，既有目錄 Story 保留為歷史紀錄 | accepted |
 
 ## 什麼時候該加一份
 
