@@ -39,7 +39,7 @@ func lifecycleState(t *testing.T, requireApproval bool, nodes ...string) State {
 // Run at the given candidate, returning the Evidence it produced.
 func runVerification(t *testing.T, state *State, id string, candidate Candidate, exitCode int) Evidence {
 	t.Helper()
-	if state.WorkItemStatus(id) == Ready {
+	if readiness, _ := state.Readiness(id); readiness == ReadinessReady {
 		if err := state.Start(id, lifecycleNow); err != nil {
 			t.Fatalf("start %s: %v", id, err)
 		}
@@ -57,9 +57,9 @@ func runVerification(t *testing.T, state *State, id string, candidate Candidate,
 	return evidence
 }
 
-func wantStatus(t *testing.T, state *State, id string, want Status) {
+func wantStatus(t *testing.T, state *State, id string, want string) {
 	t.Helper()
-	if got := state.WorkItemStatus(id); got != want {
+	if got := state.DisplayStatus(id); got != want {
 		t.Fatalf("%s is %s, want %s", id, got, want)
 	}
 }
@@ -74,31 +74,31 @@ func wantGoal(t *testing.T, state *State, want GoalStatus) {
 
 func TestPassWithoutApprovalRequirementCompletesWorkAndUnlocksDownstream(t *testing.T) {
 	state := lifecycleState(t, false, "a", "b<a")
-	wantStatus(t, &state, "b", Pending)
+	wantStatus(t, &state, "b", "PENDING")
 
 	runVerification(t, &state, "a", commitAt(revisionOne), 0)
 
 	// One RecordVerification call is one transaction: everything below was
 	// decided by it, with no further command in between.
-	wantStatus(t, &state, "a", Done)
-	wantStatus(t, &state, "b", Ready)
+	wantStatus(t, &state, "a", string(Done))
+	wantStatus(t, &state, "b", "READY")
 	wantGoal(t, &state, GoalActive)
 
 	runVerification(t, &state, "b", commitAt(revisionOne), 0)
-	wantStatus(t, &state, "b", Done)
+	wantStatus(t, &state, "b", string(Done))
 	wantGoal(t, &state, GoalCompleted)
 }
 
 func TestGoalCompletesOnlyWhenTheLastWorkItemIsDone(t *testing.T) {
 	state := lifecycleState(t, false, "a", "b")
 	runVerification(t, &state, "a", commitAt(revisionOne), 0)
-	wantStatus(t, &state, "a", Done)
-	wantStatus(t, &state, "b", Ready)
+	wantStatus(t, &state, "a", string(Done))
+	wantStatus(t, &state, "b", "READY")
 	wantGoal(t, &state, GoalActive)
 
 	// A failing run on the remaining item is not completion either.
 	runVerification(t, &state, "b", commitAt(revisionOne), 1)
-	wantStatus(t, &state, "b", Running)
+	wantStatus(t, &state, "b", string(Running))
 	wantGoal(t, &state, GoalActive)
 
 	runVerification(t, &state, "b", commitAt(revisionOne), 0)
@@ -119,7 +119,7 @@ func TestFailAndInterruptedReturnToRunningUnderEitherPolicy(t *testing.T) {
 	for _, requireApproval := range []bool{false, true} {
 		state := lifecycleState(t, requireApproval, "a")
 		runVerification(t, &state, "a", commitAt(revisionOne), 1)
-		wantStatus(t, &state, "a", Running)
+		wantStatus(t, &state, "a", string(Running))
 
 		if err := state.BeginCandidateVerification("a", commitAt(revisionOne), "/tmp/worktree", "", lifecycleNow); err != nil {
 			t.Fatal(err)
@@ -128,7 +128,7 @@ func TestFailAndInterruptedReturnToRunningUnderEitherPolicy(t *testing.T) {
 		if err != nil || !found || evidence.Result != Interrupted {
 			t.Fatalf("require_approval=%t: reclaim = %#v, %v, %v", requireApproval, evidence, found, err)
 		}
-		wantStatus(t, &state, "a", Running)
+		wantStatus(t, &state, "a", string(Running))
 		wantGoal(t, &state, GoalActive)
 	}
 }
@@ -136,9 +136,9 @@ func TestFailAndInterruptedReturnToRunningUnderEitherPolicy(t *testing.T) {
 func TestPassWithApprovalRequirementEntersReview(t *testing.T) {
 	state := lifecycleState(t, true, "a", "b<a")
 	runVerification(t, &state, "a", commitAt(revisionOne), 0)
-	wantStatus(t, &state, "a", Review)
+	wantStatus(t, &state, "a", string(Review))
 	// REVIEW is not DONE: nothing downstream moves and the Goal stays open.
-	wantStatus(t, &state, "b", Pending)
+	wantStatus(t, &state, "b", "PENDING")
 	wantGoal(t, &state, GoalActive)
 }
 
@@ -153,17 +153,17 @@ func TestApproveCompletesWorkUnlocksDownstreamAndCompletesGoal(t *testing.T) {
 	if review.Type != ReviewEvidence || review.Result != Approved {
 		t.Fatalf("review evidence = %#v", review)
 	}
-	wantStatus(t, &state, "a", Done)
-	wantStatus(t, &state, "b", Ready)
+	wantStatus(t, &state, "a", string(Done))
+	wantStatus(t, &state, "b", "READY")
 	wantGoal(t, &state, GoalActive)
 
 	runVerification(t, &state, "b", commitAt(revisionOne), 0)
-	wantStatus(t, &state, "b", Review)
+	wantStatus(t, &state, "b", string(Review))
 	wantGoal(t, &state, GoalActive)
 	if _, err := state.RecordReview("b", revisionOne, Approved, "alice", "", lifecycleNow); err != nil {
 		t.Fatal(err)
 	}
-	wantStatus(t, &state, "b", Done)
+	wantStatus(t, &state, "b", string(Done))
 	wantGoal(t, &state, GoalCompleted)
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)
@@ -177,12 +177,12 @@ func TestRejectReturnsToRunningAndNeedsAFreshPassToReenterReview(t *testing.T) {
 	if _, err := state.RecordReview("a", revisionOne, Rejected, "alice", "  ", lifecycleNow); err == nil {
 		t.Fatal("rejected without a reason")
 	}
-	wantStatus(t, &state, "a", Review)
+	wantStatus(t, &state, "a", string(Review))
 
 	if _, err := state.RecordReview("a", revisionOne, Rejected, "alice", "missing a test", lifecycleNow); err != nil {
 		t.Fatal(err)
 	}
-	wantStatus(t, &state, "a", Running)
+	wantStatus(t, &state, "a", string(Running))
 	wantGoal(t, &state, GoalActive)
 	// REVIEW is only reachable through a PASS, so rejection cannot be undone by
 	// approving a RUNNING item.
@@ -191,7 +191,7 @@ func TestRejectReturnsToRunningAndNeedsAFreshPassToReenterReview(t *testing.T) {
 	}
 
 	runVerification(t, &state, "a", commitAt(revisionOne), 0)
-	wantStatus(t, &state, "a", Review)
+	wantStatus(t, &state, "a", string(Review))
 }
 
 func TestApproveIsRefusedWhenTheCandidateIsStaleAndSaysSo(t *testing.T) {
@@ -203,7 +203,7 @@ func TestApproveIsRefusedWhenTheCandidateIsStaleAndSaysSo(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("approve against a newer candidate = %v, want a stale refusal", err)
 	}
-	wantStatus(t, &state, "a", Review)
+	wantStatus(t, &state, "a", string(Review))
 	if len(state.Evidence) != evidenceBefore {
 		t.Fatal("a refused approval still appended Evidence")
 	}
@@ -220,7 +220,7 @@ func TestApproveIsRefusedWhenTheCandidateIsStaleAndSaysSo(t *testing.T) {
 	if _, err := state.RecordCandidateReview("a", snapshot, Approved, "alice", "", lifecycleNow); err != nil {
 		t.Fatalf("approve against the verified snapshot: %v", err)
 	}
-	wantStatus(t, &state, "a", Done)
+	wantStatus(t, &state, "a", string(Done))
 }
 
 func TestStaleReviewCanBeVerifiedAgain(t *testing.T) {
@@ -234,20 +234,20 @@ func TestStaleReviewCanBeVerifiedAgain(t *testing.T) {
 	}
 
 	runVerification(t, &state, "a", commitAt(revisionTwo), 0)
-	wantStatus(t, &state, "a", Review)
+	wantStatus(t, &state, "a", string(Review))
 	if state.CandidateStale("a", revisionTwo, "") {
 		t.Fatal("REVIEW is still stale after verifying the current candidate")
 	}
 	if _, err := state.RecordReview("a", revisionTwo, Approved, "alice", "", lifecycleNow); err != nil {
 		t.Fatal(err)
 	}
-	wantStatus(t, &state, "a", Done)
+	wantStatus(t, &state, "a", string(Done))
 
 	// A re-verification that fails sends REVIEW work back to RUNNING.
 	state = lifecycleState(t, true, "a")
 	runVerification(t, &state, "a", commitAt(revisionOne), 0)
 	runVerification(t, &state, "a", commitAt(revisionTwo), 1)
-	wantStatus(t, &state, "a", Running)
+	wantStatus(t, &state, "a", string(Running))
 }
 
 func TestApproveIsRefusedByAnOpenGateUntilItCloses(t *testing.T) {
@@ -261,14 +261,14 @@ func TestApproveIsRefusedByAnOpenGateUntilItCloses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), gate.ID) {
 		t.Fatalf("approve under an open gate = %v, want a refusal naming %s", err, gate.ID)
 	}
-	wantStatus(t, &state, "a", Review)
+	wantStatus(t, &state, "a", string(Review))
 	if err := state.ResolveGate(gate.ID, "yes", "", "alice", lifecycleNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := state.RecordReview("a", revisionOne, Approved, "alice", "", lifecycleNow); err != nil {
 		t.Fatalf("approve after the gate closed: %v", err)
 	}
-	wantStatus(t, &state, "a", Done)
+	wantStatus(t, &state, "a", string(Done))
 }
 
 func TestReviewIsRefusedWhenTheGoalRequiresNoApproval(t *testing.T) {
@@ -308,7 +308,7 @@ func TestDoneIsTerminalAndNeverStale(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		wantStatus(t, &state, "a", Done)
+		wantStatus(t, &state, "a", string(Done))
 		if state.CandidateStale("a", revisionTwo, "") || state.Stale("a", revisionTwo) {
 			t.Fatalf("require_approval=%t: DONE work was reported stale", requireApproval)
 		}
@@ -321,7 +321,7 @@ func TestDoneIsTerminalAndNeverStale(t *testing.T) {
 		if _, err := state.RecordReview("a", revisionOne, Rejected, "alice", "redo", lifecycleNow); err == nil {
 			t.Fatal("reopened DONE work by rejecting it")
 		}
-		wantStatus(t, &state, "a", Done)
+		wantStatus(t, &state, "a", string(Done))
 	}
 }
 
@@ -342,7 +342,7 @@ func TestPassUnderACancelledGoalRecordsEvidenceWithoutCompleting(t *testing.T) {
 	if err != nil || evidence.Result != Pass {
 		t.Fatalf("record = %#v, %v", evidence, err)
 	}
-	wantStatus(t, &state, "a", Running)
+	wantStatus(t, &state, "a", string(Running))
 	wantGoal(t, &state, GoalCancelled)
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)

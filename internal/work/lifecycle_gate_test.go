@@ -25,8 +25,8 @@ func TestPassWithAGateOpenedMidRunRecordsEvidenceWithoutCompleting(t *testing.T)
 	if err != nil || evidence.Result != Pass {
 		t.Fatalf("record = %#v, %v", evidence, err)
 	}
-	wantStatus(t, &state, "a", Running)
-	wantStatus(t, &state, "b", Pending)
+	wantStatus(t, &state, "a", string(Running))
+	wantStatus(t, &state, "b", "PENDING")
 	wantGoal(t, &state, GoalActive)
 	if err := state.Validate(); err != nil {
 		t.Fatalf("state invalid after a PASS under an open gate: %v", err)
@@ -40,8 +40,8 @@ func TestPassWithAGateOpenedMidRunRecordsEvidenceWithoutCompleting(t *testing.T)
 		t.Fatal(err)
 	}
 	runVerification(t, &state, "a", commitAt(revisionOne), 0)
-	wantStatus(t, &state, "a", Done)
-	wantStatus(t, &state, "b", Ready)
+	wantStatus(t, &state, "a", string(Done))
+	wantStatus(t, &state, "b", "READY")
 }
 
 // Under an Approval Requirement a PASS is not completion, so it enters REVIEW
@@ -60,7 +60,7 @@ func TestPassWithAGateOpenedMidRunStillEntersReviewUnderApproval(t *testing.T) {
 	if _, err := state.RecordVerification("a", revisionOne, "make verify", 0, lifecycleNow); err != nil {
 		t.Fatal(err)
 	}
-	wantStatus(t, &state, "a", Review)
+	wantStatus(t, &state, "a", string(Review))
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestValidateRejectsReviewEvidenceUnderAGoalWithoutApproval(t *testing.T) {
 	if _, err := state.RecordReview("a", revisionOne, Approved, "alice", "", lifecycleNow); err != nil {
 		t.Fatal(err)
 	}
-	wantStatus(t, &state, "a", Done)
+	wantStatus(t, &state, "a", string(Done))
 	if err := state.Validate(); err != nil {
 		t.Fatalf("baseline invalid: %v", err)
 	}
@@ -100,5 +100,5 @@ func TestRejectIsNotRefusedWhenTheCandidateIsStale(t *testing.T) {
 	if review.Revision != revisionOne {
 		t.Fatalf("review names %s, want the verified candidate %s", review.Revision, revisionOne)
 	}
-	wantStatus(t, &state, "a", Running)
+	wantStatus(t, &state, "a", string(Running))
 }

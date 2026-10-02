@@ -278,10 +278,10 @@ func TestApprovalCompletesWorkAndUnlocksDependents(t *testing.T) {
 	}
 	// Every dependency of WI-002 is now DONE, so it is unlocked in the same
 	// transaction. WI-003 still waits on WI-002 and must not be.
-	if got := state.WorkItemStatus("WI-002"); got != Ready {
+	if got := state.DisplayStatus("WI-002"); got != "READY" {
 		t.Fatalf("status of the unlocked dependent = %s, want READY", got)
 	}
-	if got := state.WorkItemStatus("WI-003"); got != Pending {
+	if got := state.DisplayStatus("WI-003"); got != "PENDING" {
 		t.Fatalf("status of the still-blocked dependent = %s, want PENDING", got)
 	}
 	if err := state.Validate(); err != nil {

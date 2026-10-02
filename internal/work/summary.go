@@ -9,6 +9,10 @@ import "fmt"
 type RepositoryState struct {
 	Revision       string
 	SnapshotDigest string
+	// AbandonedRuns names VERIFYING Work Items whose verifier process is gone, so
+	// that next can tell an interrupted verification (which verify reclaims) from
+	// one that is still running. Like the repository facts, the caller gathers it.
+	AbandonedRuns map[string]bool
 }
 
 // Completion describes the one current action a Work Item summary presents. It
@@ -119,7 +123,7 @@ func summaryCompletion(summary WorkItemSummary) Completion {
 	}
 
 	switch summary.Item.Status {
-	case Pending, Ready:
+	case NotStarted:
 		return CompletionNotStarted
 	case Running:
 		return CompletionImplementing

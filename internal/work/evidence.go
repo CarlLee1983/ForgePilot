@@ -97,7 +97,8 @@ func (s *State) Verifiable(id string) error {
 	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
 		return fmt.Errorf("work item %q does not belong to an active goal", id)
 	}
-	return nil
+	// Verifying REVIEW work takes the workspace's execution slot back.
+	return s.occupancyBlock(id)
 }
 
 // CanBeginVerification reports whether a new Verification Run may start. It also
@@ -454,6 +455,13 @@ func (s *State) RecordCandidateReview(id string, candidate Candidate, result Res
 	}
 	if result == Rejected && strings.TrimSpace(note) == "" {
 		return Evidence{}, errors.New("rejecting work requires a reason")
+	}
+	// Rejection puts the work back to RUNNING, which is the slot a single
+	// workspace has one of; REVIEW did not hold it.
+	if result == Rejected {
+		if err := s.occupancyBlock(id); err != nil {
+			return Evidence{}, err
+		}
 	}
 	if result == Approved {
 		if err := s.CompletionBlock(id); err != nil {

@@ -66,14 +66,14 @@ func TestExportedPlansAreAcceptedByGoalImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	statuses := map[string]work.Status{}
+	statuses := map[string]string{}
 	for _, item := range state.WorkItems {
-		statuses[item.ID] = item.Status
+		statuses[item.ID] = state.DisplayStatus(item.ID)
 	}
-	want := map[string]work.Status{
-		"WI-002": work.Ready, "WI-003": work.Pending, // billing: WI-001 was DONE
-		"WI-005": work.Ready, "WI-006": work.Pending, // fast.lane: WI-004 was VERIFIED
-		"WI-007": work.Ready, // paused
+	want := map[string]string{
+		"WI-002": "READY", "WI-003": "PENDING", // billing: WI-001 was DONE
+		"WI-005": "READY", "WI-006": "PENDING", // fast.lane: WI-004 was VERIFIED
+		"WI-007": "READY", // paused
 	}
 	if len(statuses) != len(want) {
 		t.Fatalf("imported work items %v, want exactly %v", statuses, want)

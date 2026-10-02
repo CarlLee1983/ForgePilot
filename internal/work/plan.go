@@ -206,18 +206,12 @@ func (s *State) ImportGoalPlan(plan GoalPlan, repository string, now time.Time) 
 		}
 	}
 
-	// Readiness is decided before anything is appended, so a new node that
-	// depends on another new node is PENDING: nothing new is DONE yet.
 	var added []Item
 	for _, node := range plan.Nodes {
 		if s.item(node.ID) != nil {
 			continue
 		}
-		status := Ready
-		if !s.dependenciesDone(node.DependsOn) {
-			status = Pending
-		}
-		added = append(added, Item{ID: node.ID, GoalID: plan.Goal.ID, StoryRef: node.Story, Status: status, DependsOn: append([]string{}, node.DependsOn...), CreatedAt: now, UpdatedAt: now})
+		added = append(added, Item{ID: node.ID, GoalID: plan.Goal.ID, StoryRef: node.Story, Status: NotStarted, DependsOn: append([]string{}, node.DependsOn...), CreatedAt: now, UpdatedAt: now})
 	}
 	result := PlanImport{Added: added}
 	if goal == nil {

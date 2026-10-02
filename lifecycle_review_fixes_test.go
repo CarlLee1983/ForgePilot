@@ -59,11 +59,11 @@ func TestGateOpenedMidVerificationKeepsThePassWithoutCompleting(t *testing.T) {
 	if latest, ok := state.LatestVerification("WI-001"); !ok || latest.Result != work.Pass {
 		t.Fatalf("the PASS Evidence was lost: %#v, %v", latest, ok)
 	}
-	wantStatuses(t, root, "queue", map[string]work.Status{"WI-001": work.Running}, work.GoalActive)
+	wantStatuses(t, root, "queue", map[string]string{"WI-001": "RUNNING"}, work.GoalActive)
 
 	mustRun(t, binary, root, "gate", "resolve", "GATE-001", "--option", "yes")
 	mustRun(t, binary, root, "verify", "WI-001")
-	wantStatuses(t, root, "queue", map[string]work.Status{"WI-001": work.Done}, work.GoalCompleted)
+	wantStatuses(t, root, "queue", map[string]string{"WI-001": "DONE"}, work.GoalCompleted)
 }
 
 // Rejecting stops work and needs neither a clean worktree nor a current
@@ -92,7 +92,7 @@ func TestRejectIsNotHeldBackByADirtyWorktreeOrAStaleSnapshot(t *testing.T) {
 		addWork(t, binary, root, "queue", "specs/stories/a.md")
 		mustRun(t, binary, root, "start", "WI-001")
 		mustRun(t, binary, root, "verify", "WI-001", "--snapshot")
-		wantStatuses(t, root, "queue", map[string]work.Status{"WI-001": work.Review}, work.GoalActive)
+		wantStatuses(t, root, "queue", map[string]string{"WI-001": "REVIEW"}, work.GoalActive)
 		if err := os.WriteFile(filepath.Join(root, "changed.txt"), []byte("new\n"), 0644); err != nil {
 			t.Fatal(err)
 		}

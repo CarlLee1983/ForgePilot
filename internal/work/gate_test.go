@@ -109,8 +109,8 @@ func TestOpenGatesBlockAdvancementUntilEveryOneIsClosed(t *testing.T) {
 	if err := state.Verifiable("WI-001"); err == nil {
 		t.Fatal("verified work with open gates")
 	}
-	if _, ok := state.Next(); ok {
-		t.Fatal("next selected work with open gates")
+	if action := state.ActionableNext(RepositoryState{}); action.Kind != NextActionWait || action.Item.ID != "" {
+		t.Fatalf("next = %#v, want only a wait for the open Gate", action)
 	}
 
 	// Work on the same Goal that carries no Gate stays selectable: blocking is
@@ -119,9 +119,9 @@ func TestOpenGatesBlockAdvancementUntilEveryOneIsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, ok := state.Next()
-	if !ok || next.ID != third.ID {
-		t.Fatalf("next = %#v, %v, want %s", next, ok, third.ID)
+	next := state.ActionableNext(RepositoryState{})
+	if next.Kind != NextActionStart || next.Item.ID != third.ID {
+		t.Fatalf("next = %#v, want a start of %s", next, third.ID)
 	}
 }
 
@@ -235,9 +235,9 @@ func TestCancelRequiresAReasonAndLiftsTheBlock(t *testing.T) {
 	if state.OpenGateCount("WI-001") != 0 {
 		t.Fatal("closing every gate did not lift the block")
 	}
-	next, ok := state.Next()
-	if !ok || next.ID != "WI-001" {
-		t.Fatalf("next = %#v, %v, want WI-001 once no gate is open", next, ok)
+	next := state.ActionableNext(RepositoryState{})
+	if next.Kind != NextActionStart || next.Item.ID != "WI-001" {
+		t.Fatalf("next = %#v, want WI-001 once no gate is open", next)
 	}
 	if err := state.Start("WI-001", later); err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/CarlLee1983/ForgePilot/internal/app"
 	"github.com/CarlLee1983/ForgePilot/internal/repository"
+	"github.com/CarlLee1983/ForgePilot/internal/storage"
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
@@ -48,8 +49,13 @@ func importGoal(args []string, cwd, root string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Readiness is computed, so it is read from the state the import produced.
+	state, err := storage.Load(root)
+	if err != nil {
+		return err
+	}
 	for _, item := range result.Added {
-		if _, err := fmt.Fprintf(output, "  %s %s %s\n", item.ID, item.Status, item.StoryRef); err != nil {
+		if _, err := fmt.Fprintf(output, "  %s %s %s\n", item.ID, state.DisplayStatus(item.ID), item.StoryRef); err != nil {
 			return err
 		}
 		// Best-effort: the import already succeeded, so a failure to query git

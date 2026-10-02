@@ -22,6 +22,8 @@
 
 這些看起來像疏漏，其實是決定。動手前先讀對應的 ADR。
 
+- **PENDING／READY 不保存，也沒有 `reconcile`。** Work Item 持久化的只有 `NOT_STARTED`、`RUNNING`、`VERIFYING`、`REVIEW`、`DONE`；PENDING／READY 是 `NOT_STARTED` 在讀取時依「所有依賴皆 DONE」算出的投影（`internal/work/readiness.go`），JSON 與 `status` 呈現它但 state 不存。DONE 時解鎖下游不寫下游。state 裡出現 `PENDING`／`READY` 會被 Validate 拒絕。看到「完成工作卻沒更新下游」不是疏漏——ADR-0040
+- **同一 workspace 最多一件 RUNNING 或 VERIFYING，REVIEW 不佔位。** 孤兒 VERIFYING 照樣佔位（`start` 的錯誤訊息提示 `verify` 回收）；`review reject` 與對 REVIEW 工作重新 `verify` 也會把工作放回 RUNNING／VERIFYING，所以同受這條規則約束。已結束 Goal 的工作不佔位，否則取消 Goal 會永久卡住整個 workspace——ADR-0040
 - **Work Item 上沒有 revision 欄位；PR Reference 已整個移除。** revision 只存在於 Evidence。Evidence 與 Work Item 都沒有 PR 欄位、`review` 沒有 `--pr`，那是刻意的：ForgePilot 不保存它無法查證、也沒有任何規則讀取的字串——ADR-0003、ADR-0040（取代 ADR-0011）
 - **Candidate 不存在 Work Item 上。** `COMMIT`／`SNAPSHOT` identity 只隨 `current_run` 與 Evidence 存在；snapshot ref 在 `refs/forgepilot/snapshots/`，不建立 branch、tag 或 WIP commit——ADR-0014
 - **Evidence 上沒有指向 verification 輸出的欄位。** 輸出以 run 為鍵存在 `.forgepilot/logs/` 底下，`current_run` 才有 `LogPath`——ADR-0012
@@ -62,7 +64,7 @@
 - `internal/repository` — **唯一允許碰 Git 的地方**。所有 git 呼叫走檔尾一個未匯出的 `git(root, args...)` helper
 - `internal/storage` — snapshot、交易鎖、decode／validate、原子保存。唯一的回呼形態是 `storage.Update(root, func(*work.State) error)`
 
-Goal、Work Item、Evidence、Gate 共用同一份 JSON snapshot 與同一次受鎖的原子替換。完成一件工作與解鎖其下游必須落在同一次交易內，否則讀取者會看到「A 已 DONE 但 B 仍 PENDING」的中間狀態。
+Goal、Work Item、Evidence、Gate 共用同一份 JSON snapshot 與同一次受鎖的原子替換。完成一件工作與 Goal 的自動完成必須落在同一次交易內，否則讀取者會看到「最後一件已 DONE 但 Goal 仍 ACTIVE」的中間狀態；下游的 readiness 不寫入，讀取時由依賴算出，所以沒有「A 已 DONE 但 B 仍 PENDING」的中間狀態可看。
 
 ## 工作方式
 

@@ -35,10 +35,13 @@ const (
 type Status string
 
 const (
-	Pending   Status = "PENDING"
-	Ready     Status = "READY"
-	Running   Status = "RUNNING"
-	Verifying Status = "VERIFYING"
+	// NotStarted is the one persisted state of work that has not begun. Whether
+	// it is PENDING or READY is not state: it follows from the dependencies at the
+	// moment of reading (see Readiness), so completing a dependency never needs to
+	// write its dependents.
+	NotStarted Status = "NOT_STARTED"
+	Running    Status = "RUNNING"
+	Verifying  Status = "VERIFYING"
 	// Review exists only under a Goal with an Approval Requirement: a PASS on the
 	// current Candidate puts the work here to wait for `review approve`.
 	Review Status = "REVIEW"
@@ -135,51 +138,9 @@ func sameStrings(left, right []string) bool {
 	return len(leftValues) == len(rightValues)
 }
 
-// RefreshReady reconciles PENDING and READY work with the dependency rule: work
-// is READY exactly when every dependency is DONE. It only changes work within an
-// ACTIVE Goal.
-func (s *State) RefreshReady(now time.Time) {
-	for i := range s.WorkItems {
-		s.reconcileReady(&s.WorkItems[i], now)
-	}
-}
-
-func (s *State) refreshDependents(dependencyID string, now time.Time) {
-	for i := range s.WorkItems {
-		for _, id := range s.WorkItems[i].DependsOn {
-			if id == dependencyID {
-				s.reconcileReady(&s.WorkItems[i], now)
-				break
-			}
-		}
-	}
-}
-
-func (s *State) reconcileReady(item *Item, now time.Time) {
-	if item.Status != Pending && item.Status != Ready {
-		return
-	}
-	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
-		return
-	}
-	target := Pending
-	if s.dependenciesDone(item.DependsOn) {
-		target = Ready
-	}
-	if item.Status != target {
-		item.Status, item.UpdatedAt = target, now
-	}
-}
-
-func (s *State) Next() (Item, bool) {
-	for _, item := range s.itemsByCreation() {
-		if item.Status == Ready && s.advanceable(item) {
-			return item, true
-		}
-	}
-	return Item{}, false
-}
-
+// Start moves NOT_STARTED work to RUNNING. It is refused while the work's own
+// dependencies are unfinished, while it has an open Gate, and while another Work
+// Item already occupies the workspace (see Occupant).
 func (s *State) Start(id string, now time.Time) error {
 	item := s.item(id)
 	if item == nil {
@@ -188,14 +149,17 @@ func (s *State) Start(id string, now time.Time) error {
 	if err := s.gateBlock(id); err != nil {
 		return err
 	}
-	if item.Status != Ready {
+	if item.Status != NotStarted {
 		return fmt.Errorf("work item %q is %s, not READY", id, item.Status)
 	}
 	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
 		return fmt.Errorf("work item %q does not belong to an active goal", id)
 	}
-	if !s.dependenciesDone(item.DependsOn) {
-		return fmt.Errorf("work item %q has incomplete dependencies", id)
+	if pending := s.unfinishedDependencies(item.DependsOn); len(pending) > 0 {
+		return fmt.Errorf("work item %q is PENDING: dependencies not DONE: %s", id, strings.Join(pending, ", "))
+	}
+	if err := s.occupancyBlock(id); err != nil {
+		return err
 	}
 	item.Status, item.UpdatedAt = Running, now
 	return nil
@@ -246,7 +210,7 @@ func (s State) Validate() error {
 			return fmt.Errorf("work item %q has unknown goal", item.ID)
 		}
 		switch item.Status {
-		case Pending, Ready, Running, Verifying, Done:
+		case NotStarted, Running, Verifying, Done:
 		case Review:
 			if !goal.RequireApproval {
 				return fmt.Errorf("work item %q is REVIEW but goal %q requires no approval", item.ID, goal.ID)
@@ -272,6 +236,16 @@ func (s State) Validate() error {
 			return fmt.Errorf("duplicate work item %q", item.ID)
 		}
 		items[item.ID] = item
+	}
+	occupied := ""
+	for _, item := range s.WorkItems {
+		if item.Status != Running && item.Status != Verifying || goals[item.GoalID].Status != GoalActive {
+			continue
+		}
+		if occupied != "" {
+			return fmt.Errorf("work items %q and %q are both in progress; a workspace allows one RUNNING or VERIFYING work item", occupied, item.ID)
+		}
+		occupied = item.ID
 	}
 	for _, item := range s.WorkItems {
 		seen := map[string]bool{}
@@ -386,14 +360,15 @@ func (s *State) GoalByID(id string) (Goal, bool) {
 	return *goal, true
 }
 
-// dependenciesDone is the single progression rule: work may start once every
-// dependency is DONE. A passing Verification that is still awaiting approval
-// does not count, because REVIEW is not DONE.
-func (s *State) dependenciesDone(ids []string) bool {
+// unfinishedDependencies names the dependencies that are not DONE, in the
+// order the item lists them. A passing Verification that is still awaiting
+// approval does not count, because REVIEW is not DONE.
+func (s *State) unfinishedDependencies(ids []string) []string {
+	var pending []string
 	for _, id := range ids {
 		if item := s.item(id); item == nil || item.Status != Done {
-			return false
+			pending = append(pending, id)
 		}
 	}
-	return true
+	return pending
 }

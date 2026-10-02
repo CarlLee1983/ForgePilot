@@ -16,6 +16,7 @@ func TestRemovedCommandsAreUnknownAndAbsentFromHelp(t *testing.T) {
 		{"work", "add", "--goal", "queue", "--story", "specs/stories/a.md"},
 		{"work", "list", "--goal", "queue", "--json"},
 		{"migrate"},
+		{"reconcile", "--goal", "queue"},
 	} {
 		output, err := command(binary, root, arguments...)
 		if err == nil || !strings.Contains(output, "unknown") {
@@ -27,7 +28,7 @@ func TestRemovedCommandsAreUnknownAndAbsentFromHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range strings.Split(help, "\n") {
-		for _, removed := range []string{"  run ", "execution", "preflight", "goal create", "work add", "work list", "migrate", "external-ref"} {
+		for _, removed := range []string{"  run ", "execution", "preflight", "goal create", "work add", "work list", "migrate", "external-ref", "reconcile"} {
 			if strings.Contains(line, removed) {
 				t.Errorf("help still mentions %q: %s", removed, line)
 			}
