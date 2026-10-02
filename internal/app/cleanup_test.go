@@ -58,15 +58,15 @@ func newVerifyFixture(t *testing.T, makefile string) verifyFixture {
 	now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
 	var id string
 	if err := storage.Update(root, func(state *work.State) error {
-		if err := state.AddGoal("g", "Goal", "", root, now); err != nil {
+		plan := work.GoalPlan{
+			Goal:  work.PlanGoal{ID: "g", Title: "Goal", RequireApproval: true},
+			Nodes: []work.PlanNode{{ID: "a", Story: "specs/stories/a.md"}},
+		}
+		if _, err := state.ImportGoalPlan(plan, root, work.RepositoryState{}, now); err != nil {
 			return err
 		}
-		item, err := state.AddWork("g", "specs/stories/a.md", nil, now)
-		if err != nil {
-			return err
-		}
-		id = item.ID
-		return state.Start(item.ID, now)
+		id = "a"
+		return state.Start(id, now)
 	}); err != nil {
 		t.Fatal(err)
 	}

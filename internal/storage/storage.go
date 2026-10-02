@@ -97,12 +97,23 @@ func Update(root string, operation func(*work.State) error) error {
 }
 
 func load(directory string) (work.State, error) {
-	file, err := os.Open(statePath(directory))
+	contents, err := os.ReadFile(statePath(directory))
 	if err != nil {
 		return work.State{}, err
 	}
-	defer file.Close()
-	decoder := json.NewDecoder(file)
+	// The version is judged before the strict decode: a state of another schema
+	// carries fields this shape does not know, and "unknown field" would hide the
+	// reason it is refused and what to do about it.
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(contents, &header); err != nil {
+		return work.State{}, fmt.Errorf("read state: %w", err)
+	}
+	if err := work.CheckSchemaVersion(header.SchemaVersion); err != nil {
+		return work.State{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var state work.State
 	if err := decoder.Decode(&state); err != nil {

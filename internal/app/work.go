@@ -9,51 +9,36 @@ import (
 	"github.com/CarlLee1983/ForgePilot/internal/work"
 )
 
-// WorkAddRequest is the typed creation input shared by CLI callers. An empty
-// ExternalRef retains the historical non-idempotent Work Item behavior.
-type WorkAddRequest struct {
-	GoalID       string
-	StoryRef     string
-	Dependencies []string
-	ExternalRef  string
-}
-
-// WorkAddResult says both which Work Item the request names and whether this
-// invocation created it. Created is false only for an exact external-ref retry.
-type WorkAddResult struct {
-	Item    work.Item
-	Created bool
-}
-
-// AddWork validates the repository Story, then makes the same locked decision
-// as the durable write. Existing external refs return before resolving Candidate
-// facts, because a retry does not create or re-evaluate a Work Item.
-func AddWork(ctx context.Context, root string, request WorkAddRequest, now Now) (WorkAddResult, error) {
-	story, err := repository.ValidateStory(root, request.StoryRef)
-	if err != nil {
-		return WorkAddResult{}, err
+// ImportGoalPlan creates a Goal and its whole DAG from a parsed Goal Plan, or
+// appends the plan's new nodes to the Goal it already names. Everything that
+// can be refused without Git or state is refused first (structure, then Story
+// paths against the repository), and the rest is decided inside one locked
+// transaction, so an error anywhere leaves state untouched and two concurrent
+// imports cannot interleave into a half-built DAG.
+func ImportGoalPlan(ctx context.Context, root string, plan work.GoalPlan, now Now) (work.PlanImport, error) {
+	if err := plan.Validate(); err != nil {
+		return work.PlanImport{}, err
 	}
-	result := WorkAddResult{Created: true}
-	err = storage.Update(root, func(state *work.State) error {
-		if request.ExternalRef != "" {
-			if state.HasWorkItemByExternalRef(request.GoalID, request.ExternalRef) {
-				item, created, addErr := state.AddWorkWithRepositoryAndExternalRef(request.GoalID, story, request.Dependencies, request.ExternalRef, work.RepositoryState{}, now.at())
-				result.Item, result.Created = item, created
-				return addErr
-			}
+	// Story paths are normalized before the transaction so that re-imports are
+	// compared with the same spelling the first import stored.
+	nodes := make([]work.PlanNode, len(plan.Nodes))
+	for i, node := range plan.Nodes {
+		story, err := repository.ValidateStory(root, node.Story)
+		if err != nil {
+			return work.PlanImport{}, fmt.Errorf("node %q: story: %w", node.ID, err)
 		}
-		facts, factsErr := CandidateFacts(ctx, state, root)
-		if factsErr != nil {
-			return fmt.Errorf("resolve current Candidate before adding work: %w", factsErr)
+		nodes[i] = work.PlanNode{ID: node.ID, Story: story, DependsOn: node.DependsOn}
+	}
+	plan.Nodes = nodes
+
+	var result work.PlanImport
+	err := storage.Update(root, func(state *work.State) error {
+		facts, err := CandidateFacts(ctx, state, root)
+		if err != nil {
+			return fmt.Errorf("resolve current Candidate before importing: %w", err)
 		}
-		if request.ExternalRef != "" {
-			item, created, addErr := state.AddWorkWithRepositoryAndExternalRef(request.GoalID, story, request.Dependencies, request.ExternalRef, facts, now.at())
-			result.Item, result.Created = item, created
-			return addErr
-		}
-		item, addErr := state.AddWorkWithRepository(request.GoalID, story, request.Dependencies, facts, now.at())
-		result.Item = item
-		return addErr
+		result, err = state.ImportGoalPlan(plan, root, facts, now.at())
+		return err
 	})
 	return result, err
 }

@@ -188,9 +188,6 @@ func validateGoalCompletionEvidence(s State) error {
 		if !ok {
 			return fmt.Errorf("Goal completion evidence %q refers to unknown Goal %q", evidence.ID, evidence.GoalID)
 		}
-		if goal.LegacyCompletion != nil {
-			return fmt.Errorf("Goal %q has both legacy and automatic completion provenance", goal.ID)
-		}
 		if goal.Status != GoalCompleted || goal.ReviewPolicy != ReviewPerGoal || goal.CompletionPolicy != CompletionVerified {
 			return fmt.Errorf("Goal completion evidence %q refers to a Goal without VERIFIED completion policy", evidence.ID)
 		}
@@ -265,9 +262,7 @@ func validateGoalCompletionEvidence(s State) error {
 			return fmt.Errorf("Goal %q has multiple completion evidence records", goal.ID)
 		}
 		if goal.Status == GoalCompleted && goal.CompletionPolicy == CompletionVerified && count != 1 {
-			if goal.LegacyCompletion == nil {
-				return fmt.Errorf("completed Goal %q must have one automatic or legacy completion provenance record", goal.ID)
-			}
+			return fmt.Errorf("completed Goal %q must have one completion provenance record", goal.ID)
 		}
 		if goal.Status != GoalCompleted && count != 0 {
 			return fmt.Errorf("non-completed Goal %q has completion evidence", goal.ID)

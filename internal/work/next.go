@@ -156,10 +156,9 @@ func (s *State) itemsByCreationInGoal(goalID string) []Item {
 			items = append(items, item)
 		}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			return workNumber(items[i].ID) < workNumber(items[j].ID)
-		}
+	// Stable: Work Items imported together share a CreatedAt, and their order in
+	// state.WorkItems is the Goal Plan's node order, which is the tie-break.
+	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].CreatedAt.Before(items[j].CreatedAt)
 	})
 	return items

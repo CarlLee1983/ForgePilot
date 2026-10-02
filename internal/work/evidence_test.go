@@ -42,38 +42,6 @@ func TestV3EvidenceCarriesEmptyReviewFields(t *testing.T) {
 	}
 }
 
-func TestRuntimeValidationAllowsLegacyVerificationButRejectsReviewOrBlankMetadata(t *testing.T) {
-	zero := 0
-	verification := Evidence{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo",
-		WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate,
-		Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-001", CreatedAt: time.Now().UTC()}
-	items := map[string]Item{"WI-001": {ID: "WI-001"}}
-	if err := validateEvidence([]Evidence{verification}, 2, items); err != nil {
-		t.Fatalf("legacy verification without runtime = %v", err)
-	}
-	unsupported := verification
-	unsupported.Runtime = map[string]string{"os": "14.0"}
-	if err := validateEvidence([]Evidence{unsupported}, 2, items); err == nil {
-		t.Fatal("accepted unsupported runtime metadata")
-	}
-	blankValue := verification
-	blankValue.Runtime = map[string]string{"go": "\t"}
-	if err := validateEvidence([]Evidence{blankValue}, 2, items); err == nil {
-		t.Fatal("accepted runtime with blank value")
-	}
-	prerelease := verification
-	prerelease.Runtime = map[string]string{"go": "1.25rc1", "node": "24.0.0-rc.1+build.2", "python": "3.13.0rc1", "rust": "1.86.0-nightly"}
-	if err := validateEvidence([]Evidence{prerelease}, 2, items); err != nil {
-		t.Fatalf("rejected normalized prerelease runtime: %v", err)
-	}
-	review := Evidence{ID: "EV-001", Type: ReviewEvidence, Repository: "/repo", WorkItemID: "WI-001",
-		StoryRef: "specs/stories/a", Revision: "abc123", CandidateKind: CommitCandidate, Result: Approved,
-		Reviewer: "carl@example.com", Runtime: map[string]string{"go": "1.25.5"}, CreatedAt: time.Now().UTC()}
-	if err := validateEvidence([]Evidence{review}, 2, items); err == nil {
-		t.Fatal("accepted review evidence carrying runtime")
-	}
-}
-
 func TestStateValidationRejectsFalseEvidenceRepositoryOrStoryAssociation(t *testing.T) {
 	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 	state := NewState()
@@ -108,75 +76,58 @@ func TestStateValidationRejectsFalseEvidenceRepositoryOrStoryAssociation(t *test
 	}
 }
 
-func TestVerificationRunProvenanceValidationFailsClosed(t *testing.T) {
-	base := sharedRunValidationState()
-	if err := base.Validate(); err != nil {
-		t.Fatalf("valid shared run = %v", err)
-	}
-	provenance := map[string]func(*State){
-		"candidate": func(state *State) { state.Evidence[1].Revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
-		"runtime":   func(state *State) { state.Evidence[1].Runtime = map[string]string{"go": "1.25.6"} },
-		"command":   func(state *State) { state.Evidence[1].Command = "other" },
-		"result":    func(state *State) { state.Evidence[1].Result = Fail },
-		"timestamp": func(state *State) { state.Evidence[1].CreatedAt = state.Evidence[1].CreatedAt.Add(time.Second) },
-	}
-	for name, mutate := range provenance {
-		t.Run(name, func(t *testing.T) {
-			state := sharedRunValidationState()
-			mutate(&state)
-			if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "mixed provenance") {
-				t.Fatalf("validation = %v, want mixed provenance", err)
-			}
-		})
-	}
-	t.Run("duplicate work item", func(t *testing.T) {
-		state := sharedRunValidationState()
-		state.Evidence[1].WorkItemID = "WI-001"
-		state.Evidence[1].StoryRef = "specs/stories/a"
-		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "repeats work item") {
-			t.Fatalf("validation = %v, want duplicate work item refusal", err)
+// A Verification Run ID keys that run's log, so one ID may belong to exactly one
+// run: two Work Items sharing it, or one run being both active and settled,
+// would share a log.
+func TestVerificationRunIDsAreUsedExactlyOnce(t *testing.T) {
+	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	zero := 0
+	build := func() State {
+		return State{
+			SchemaVersion: SchemaVersion, NextEvidenceID: 3, NextGateID: 1, NextVerificationRunID: 3, NextGoalCompletionEvidenceID: 1,
+			Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerGoal, CompletionPolicy: CompletionVerified}},
+			WorkItems: []Item{
+				{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Verified},
+				{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Verified},
+			},
+			Evidence: []Evidence{
+				{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo", WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-001", CreatedAt: now},
+				{ID: "EV-002", Type: VerificationEvidence, Repository: "/repo", WorkItemID: "WI-002", StoryRef: "specs/stories/b", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &zero, Result: Pass, VerificationRunID: "VR-002", CreatedAt: now},
+			},
 		}
-	})
-	t.Run("reused legacy run", func(t *testing.T) {
-		state := sharedRunValidationState()
-		state.Evidence[0].VerificationRunID = "LVR-001"
-		state.Evidence[1].VerificationRunID = "LVR-001"
-		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "legacy verification run ID") {
-			t.Fatalf("validation = %v, want reused legacy run refusal", err)
+	}
+	if err := build().Validate(); err != nil {
+		t.Fatalf("distinct run IDs = %v", err)
+	}
+	t.Run("two work items share a run", func(t *testing.T) {
+		state := build()
+		state.Evidence[1].VerificationRunID = "VR-001"
+		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "used more than once") {
+			t.Fatalf("validation = %v, want a shared-run refusal", err)
 		}
 	})
 	t.Run("active and settled", func(t *testing.T) {
-		state := sharedRunValidationState()
+		state := build()
 		state.WorkItems[0].Status = Verifying
 		state.WorkItems[0].CurrentRun = &Run{VerificationRunID: "VR-001", Revision: state.Evidence[0].Revision, CandidateKind: CommitCandidate}
-		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "both active and settled") {
+		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "used more than once") {
 			t.Fatalf("validation = %v, want active/settled refusal", err)
 		}
 	})
+	t.Run("former legacy run IDs are no longer a thing", func(t *testing.T) {
+		state := build()
+		state.Evidence[0].VerificationRunID = "LVR-001"
+		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "invalid verification run ID") {
+			t.Fatalf("validation = %v, want an invalid run ID refusal", err)
+		}
+	})
 	t.Run("counter reuse", func(t *testing.T) {
-		state := sharedRunValidationState()
-		state.NextVerificationRunID = 1
+		state := build()
+		state.NextVerificationRunID = 2
 		if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "would reuse") {
 			t.Fatalf("validation = %v, want counter refusal", err)
 		}
 	})
-}
-
-func sharedRunValidationState() State {
-	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
-	zero := 0
-	return State{
-		SchemaVersion: SchemaVersion, NextWorkID: 3, NextEvidenceID: 3, NextGateID: 1, NextVerificationRunID: 2, NextGoalCompletionEvidenceID: 1,
-		Goals: []Goal{{ID: "g", Title: "Goal", Repository: "/repo", Status: GoalActive, ReviewPolicy: ReviewPerGoal, CompletionPolicy: CompletionVerified}},
-		WorkItems: []Item{
-			{ID: "WI-001", GoalID: "g", StoryRef: "specs/stories/a", Status: Verified},
-			{ID: "WI-002", GoalID: "g", StoryRef: "specs/stories/b", Status: Verified},
-		},
-		Evidence: []Evidence{
-			{ID: "EV-001", Type: VerificationEvidence, Repository: "/repo", WorkItemID: "WI-001", StoryRef: "specs/stories/a", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &zero, Result: Pass, Runtime: map[string]string{"go": "1.25.5"}, VerificationRunID: "VR-001", CreatedAt: now},
-			{ID: "EV-002", Type: VerificationEvidence, Repository: "/repo", WorkItemID: "WI-002", StoryRef: "specs/stories/b", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CandidateKind: CommitCandidate, Command: "make verify", ExitCode: &zero, Result: Pass, Runtime: map[string]string{"go": "1.25.5"}, VerificationRunID: "VR-001", CreatedAt: now},
-		},
-	}
 }
 
 // reviewFixture returns state with WI-001 explicitly submitted for review,
