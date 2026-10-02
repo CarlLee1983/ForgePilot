@@ -791,7 +791,7 @@ candidate; run forgepilot verify audit-log</span>
     </div>
     <div class="split">
       <div class="body-text">
-        <p>需要 Go 1.25.5 以上，用 <code>go install</code> 安裝（收斂後尚未發行新 tag，先用 <code>@main</code>），沒有外部相依。目前只宣稱支援 macOS 的本機檔案系統，因為程序鎖用的是作業系統的 <code>flock</code>，其他平台還沒實際驗證過。</p>
+        <p>需要 Go 1.25.5 以上，用 <code>go install</code> 安裝，沒有外部相依。目前只宣稱支援 macOS 的本機檔案系統，因為程序鎖用的是作業系統的 <code>flock</code>，其他平台還沒實際驗證過。</p>
         <p>裝好之後，<a href="learn/handbook.html">使用手冊</a>會帶你從 <code>init</code> 一路走到 <code>DONE</code>，包含每一個會擋住你的地方。裡面所有輸出都是真的跑出來貼上去的，不是寫出來的範例。</p>
         <div class="cta" style="margin-top:26px">
           <a class="btn primary" href="learn/handbook.html"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>讀使用手冊</a>
@@ -801,7 +801,7 @@ candidate; run forgepilot verify audit-log</span>
       <div class="term">
         <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;安裝</div>
 <pre><span class="c">go install github.com/CarlLee1983/\
-    ForgePilot/cmd/forgepilot@main</span>
+    ForgePilot/cmd/forgepilot@v0.4.0</span>
 
 <span class="c">cd your-project</span>
 <span class="c">forgepilot init</span>
