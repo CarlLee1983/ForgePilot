@@ -24,10 +24,11 @@
         "label": "外部世界",
         "focus": [
           "repository",
+          "process",
           "git",
           "statejson"
         ],
-        "note": "internal/repository 是唯一碰 Git 與 subprocess 的地方。"
+        "note": "internal/repository 是唯一碰 Git 的地方，且所有子程序都經 internal/process 啟動。"
       }
     ]
   },
@@ -39,11 +40,11 @@
       "sublabel": "程式進入點",
       "pos": [
         440,
-        44
+        30
       ],
       "size": [
         190,
-        56
+        52
       ]
     },
     {
@@ -54,11 +55,25 @@
       "tag": "不決定 transition",
       "pos": [
         440,
-        190
+        128
       ],
       "size": [
         190,
-        64
+        62
+      ]
+    },
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "internal/app",
+      "sublabel": "verify、goal import 的 orchestration",
+      "pos": [
+        440,
+        240
+      ],
+      "size": [
+        190,
+        68
       ]
     },
     {
@@ -68,8 +83,8 @@
       "sublabel": "純狀態機，無 interface",
       "tag": "不碰 I/O",
       "pos": [
-        110,
-        350
+        40,
+        372
       ],
       "size": [
         190,
@@ -82,8 +97,8 @@
       "label": "internal/storage",
       "sublabel": "交易鎖與原子替換",
       "pos": [
-        440,
-        350
+        360,
+        372
       ],
       "size": [
         190,
@@ -97,11 +112,25 @@
       "sublabel": "唯一碰 Git 的地方",
       "tag": "唯一出口",
       "pos": [
-        770,
-        350
+        620,
+        372
       ],
       "size": [
-        200,
+        190,
+        68
+      ]
+    },
+    {
+      "id": "process",
+      "type": "security",
+      "label": "internal/process",
+      "sublabel": "程序群組啟動與有界停止",
+      "pos": [
+        860,
+        372
+      ],
+      "size": [
+        190,
         68
       ]
     },
@@ -111,8 +140,8 @@
       "label": ".forgepilot/state.json",
       "sublabel": "單一 JSON snapshot",
       "pos": [
-        440,
-        516
+        360,
+        520
       ],
       "size": [
         190,
@@ -123,13 +152,13 @@
       "id": "git",
       "type": "external",
       "label": "git / make",
-      "sublabel": "exec.Command 子程序",
+      "sublabel": "子程序，各自獨立的 process group",
       "pos": [
-        770,
-        516
+        860,
+        520
       ],
       "size": [
-        200,
+        190,
         58
       ]
     }
@@ -147,6 +176,7 @@
       "label": "外部世界的唯一通道",
       "wraps": [
         "repository",
+        "process",
         "git"
       ]
     }
@@ -156,49 +186,61 @@
       "id": "cmd-cli",
       "from": "cmd",
       "to": "cli",
-      "label": "argv",
-      "labelDy": 28
+      "label": "argv"
     },
     {
-      "id": "cli-work",
+      "id": "cli-app",
       "from": "cli",
+      "to": "app",
+      "label": "verify／import"
+    },
+    {
+      "id": "app-work",
+      "from": "app",
       "to": "work",
       "label": "純值參數"
     },
     {
-      "id": "cli-storage",
-      "from": "cli",
+      "id": "app-storage",
+      "from": "app",
       "to": "storage",
-      "label": "Update 交易",
-      "labelDy": 28
+      "label": "Update 交易"
     },
     {
-      "id": "cli-repository",
-      "from": "cli",
+      "id": "app-repository",
+      "from": "app",
       "to": "repository",
-      "label": "Head／EnsureClean"
+      "label": "Candidate、worktree"
     },
     {
       "id": "storage-work",
       "from": "storage",
       "to": "work",
-      "label": "decode 與 Validate",
-      "labelDx": 60,
-      "labelDy": -34
+      "label": "decode 與 Validate"
     },
     {
       "id": "storage-statejson",
       "from": "storage",
       "to": "statejson",
-      "label": "受鎖原子替換",
-      "labelDy": 28
+      "label": "受鎖原子替換"
     },
     {
-      "id": "repository-git",
+      "id": "repository-process",
       "from": "repository",
+      "to": "process",
+      "label": "Start"
+    },
+    {
+      "id": "process-git",
+      "from": "process",
       "to": "git",
-      "label": "exec.Command",
-      "labelDy": 28
+      "label": "exec"
+    },
+    {
+      "id": "cli-storage",
+      "from": "cli",
+      "to": "storage",
+      "label": "Load／Update"
     }
   ],
   "cards": [
@@ -207,7 +249,7 @@
       "title": "依賴只往下",
       "items": [
         "cli 串接流程，但不自行判斷 transition 是否合法",
-        "work 與 storage 都不知道 cli 的存在"
+        "work 與 storage 都不知道 cli 的存在；status、review 的讀取路徑 cli 直接用 storage 與 repository"
       ]
     },
     {
@@ -215,15 +257,15 @@
       "title": "沒有 interface",
       "items": [
         "internal/work 與 internal/storage 裡沒有任何 interface 宣告",
-        "時間、exit code、身分都是純值參數"
+        "時間、exit code、Git 事實都是純值參數"
       ]
     },
     {
       "dot": "violet",
       "title": "外部世界只有一個出口",
       "items": [
-        "所有 git 呼叫走 repository 裡一個未匯出的 helper",
-        "把 exec.Command 放進 cli 會是嚴重的分層破壞"
+        "所有 Git 呼叫走 repository 裡一個未匯出的 helper",
+        "子程序一律由 process 啟動，只終止 leader 會讓 make verify 的子程序繼續跑"
       ]
     }
   ]

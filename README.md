@@ -47,7 +47,7 @@ ForgePilot 是被動的 DAG 帳本：工單拆分完成後，外部 coding Agent
 | [Architecture](docs/architecture.md) | 責任邊界、資料模型、生命週期、`next` 規則與持久化 |
 | [Development plan](docs/development-plan.md) | CLI 契約、Goal Plan 格式、變更面驗證矩陣（其下是歷史 milestone 紀錄） |
 | [Decision records](docs/adr/README.md) | 不易反轉的決定與其失效條件 |
-| [架構圖](docs/diagrams/README.md) | 狀態機、分層、交易邊界與 `verify` 順序的視覺化 |
+| [架構圖](docs/diagrams/README.md) | 狀態機、分層、交易邊界與 `verify`／`review approve` 順序的視覺化 |
 | [專案導覽](docs/show-me-forgepilot.html) | 一頁講完問題、核心概念與關鍵決定 |
 | [AGENTS.md](AGENTS.md) | 接手這個 repo 的 Agent 該先知道的事：邊界、地雷與工作方式 |
 

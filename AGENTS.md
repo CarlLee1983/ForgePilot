@@ -14,7 +14,7 @@
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約（**flag 命名以此為準**）與變更面驗證矩陣；其下的「歷史紀錄」是 ADR-0040 之前的 milestone，不代表現況
 5. `docs/specs/` 與 `specs/stories/` — 歷史規格與 ForgePilot 自己的 Story，描述已移除能力者頂部有標示
 
-需要先看懂形狀時，[docs/diagrams/](docs/diagrams/README.md) 有四張圖：狀態機、分層、交易邊界與 `verify` 的順序。
+需要先看懂形狀時，[docs/diagrams/](docs/diagrams/README.md) 有四張圖：狀態機、分層、交易邊界與 `verify`／`review approve` 的順序。
 
 ## 不要「修回去」的事
 
@@ -59,7 +59,7 @@
 ## 分層
 
 - `internal/cli` — 參數、呈現、錯誤映射。不自行決定 transition 合法性
-- `internal/app` — CLI 的 orchestration（`verify`、`goal import`、Candidate facts）。唯一可以同時碰 `work`、`storage`、`repository` 的地方
+- `internal/app` — `verify`、`goal import` 與 Candidate facts 的 orchestration。`verify` 的流程只有這一份，`internal/cli/verify.go` 是薄殼；`status`、`review`、`gate` 的讀取路徑 `internal/cli` 仍直接用 `storage` 與 `repository`
 - `internal/work` — 純狀態機。**沒有任何 interface**，外部事實一律以純值參數傳入（時間是 `now time.Time`，Git 事實是 `RepositoryState`，執行結果是 exit code）。不碰 filesystem、Git 或 subprocess
 - `internal/repository` — **唯一允許碰 Git 的地方**。所有 git 呼叫走檔尾一個未匯出的 `git(root, args...)` helper
 - `internal/storage` — snapshot、交易鎖、Verification flock、decode／validate、原子保存。唯一的回呼形態是 `storage.Update(root, func(*work.State) error)`

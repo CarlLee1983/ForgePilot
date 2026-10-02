@@ -6,7 +6,7 @@
 
 核心名詞只在 [CONTEXT.md](../CONTEXT.md) 定義；CLI 契約只在 [development-plan.md](development-plan.md) 維護，各 milestone 的驗收紀錄也在那裡。已被取代的決定留在 [ADR](adr/README.md)，本文件只寫現行的邊界。
 
-本文件的視覺化見 [diagrams/](diagrams/README.md)：狀態機、分層與依賴方向、交易邊界，以及 `verify` 的順序。圖與本文件衝突時以本文件與程式碼為準。
+本文件的視覺化見 [diagrams/](diagrams/README.md)：狀態機、分層與依賴方向、交易邊界，以及 `verify` 與 `review approve` 的順序。圖與本文件衝突時以本文件與程式碼為準。
 
 ## Authority boundaries
 
@@ -38,7 +38,7 @@ Go 1.25.5、只用標準函式庫、module `github.com/CarlLee1983/ForgePilot`�
 | Package | 責任 |
 |---|---|
 | `internal/cli` | 參數、呈現、錯誤映射；不自行決定 transition 合法性 |
-| `internal/app` | CLI 的 orchestration：唯一可以同時碰 `work`、`storage`、`repository` 的地方；`verify` 的流程只有這一份 |
+| `internal/app` | `verify`、`goal import` 與 Candidate facts 的 orchestration；`verify` 的流程只有這一份（`internal/cli/verify.go` 是薄殼）。`status`、`review`、`gate` 的讀取路徑 `internal/cli` 仍直接用 `storage` 與 `repository` |
 | `internal/work` | 純狀態機：Goal／Work Item／Evidence／Gate、Goal Plan 驗證、transition policy、readiness、`next` 判定。沒有 interface，外部事實以純值參數傳入（時間是 `now`，Git 事實是 `RepositoryState`，執行結果是 exit code） |
 | `internal/repository` | 唯一碰 Git 的地方：Story 路徑檢查、revision、Candidate Snapshot、detached worktree、canonical check 的啟動 |
 | `internal/storage` | state snapshot、交易鎖、decode／validate、原子保存、Verification 的 flock |
