@@ -72,15 +72,11 @@ Runner MVP 這一期的歷史交付邊界、證據對照與已知限制記在 [d
 
 需要 Go 1.25.5 或以上。ForgePilot 只用標準函式庫，沒有外部相依。
 
-正式的 prompt-first onboarding 預定只支援 Apple Silicon Mac，並使用固定完整 commit SHA 的
-source-built 流程；在原生驗收契約完成前不宣稱正式支援，Intel Mac 也不在預定支援範圍內。現在
-不提供浮動版本或一鍵安裝指令。開發者若要在 checkout 中工作，可自行從原始碼建置：
-
 ```bash
-git clone https://github.com/CarlLee1983/ForgePilot.git
-cd ForgePilot
-go build -o forgepilot ./cmd/forgepilot
+go install github.com/CarlLee1983/ForgePilot/cmd/forgepilot@<tag>
 ```
+
+`<tag>` 換成要安裝的發行 tag。Skill 以手動複製安裝：把 repository 的 `skills/<agent>/` 底下的 skill 目錄複製到對應 Agent 的 skill 目錄（Claude Code 為 `~/.claude/skills/`，Codex 為 `~/.agents/skills/`）。`skills/claude-code/` 與 `skills/codex/` 各自對應該 Agent。
 
 初始支援平台只有 macOS 的本機檔案系統——程序鎖使用 OS `flock`，其他平台尚未驗證行為相同，因此不宣稱支援。
 

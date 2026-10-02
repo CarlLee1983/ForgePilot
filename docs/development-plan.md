@@ -549,8 +549,6 @@ Request 使用 `forgepilot.goal-preflight-request/v1`，必須明確提供 `goal
 | 非執行文件（Markdown、README、一般 HTML／CSS） | `git diff --check`；核對已改引用、指令與相對 `href`／`src`；HTML／CSS 於本機瀏覽器開啟已改頁面，確認版面與已改連結可用 | Story／acceptance 明定、release／整合交付，或同次改動也觸及其他列 |
 | `docs/diagrams/` 的圖規格與產物 | 依 [圖的重新產生程序](diagrams/README.md#怎麼重新產生) render 與 visual-check | 同上 |
 | Go、module metadata、Makefile 或 canonical verification 行為 | `make verify` | integration／Human final acceptance 時另跑 `go test -race -count=1 ./...`；Story 也可明定 race gate |
-| `scripts/forgepilot-bootstrap` 與其 test | `sh -n scripts/forgepilot-bootstrap scripts/forgepilot-bootstrap_test.sh scripts/forgepilot-bootstrap_install_test.sh scripts/forgepilot-bootstrap_isolation_test.sh scripts/forgepilot-bootstrap_crash_test.sh`；執行四份對應的 `*_test.sh` | FP-61 integration/final acceptance 另依 Story 執行原生 Apple Silicon disposable-home acceptance；不因純 shell 變更重跑 Go race gate |
-| `scripts/release/`、`.github/workflows/`、`scripts/onboarding/` 或 `scripts/skills/` | 分別跑 `sh scripts/release/build_trial_assets_test.sh`、`sh scripts/release/publish_trial_assets_workflow_test.sh`、`sh scripts/onboarding/onboarding_test.sh`、`sh scripts/skills/check_adapters_test.sh` 與／或 `sh scripts/skills/short_prompt_regression_test.sh` 中受影響者 | release、跨面整合，或同次變更碰到 Go／Makefile 時跑 `make verify`；final acceptance 另跑 race gate |
 
 報告每一項實跑命令、結果，以及沒有跑的 full gate 與理由。不得把未跑的必要 check 寫成 PASS；若必需 check 被阻擋，交付仍是 partial。這份矩陣不改變 ForgePilot 對受管理 repository 的 canonical `make verify` contract。
 
