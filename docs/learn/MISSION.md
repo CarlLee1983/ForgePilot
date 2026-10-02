@@ -1,5 +1,7 @@
 # Mission: 用 ForgePilot 管自己的開發
 
+> **本頁描述 ADR-0040 收斂前的產品，部分指令已移除；現行指令見 [README](../../README.md) 與 [docs/development-plan.md 的 CLI 契約](../development-plan.md#cli-契約)。**
+
 > 教材是一份文件：[handbook.html](handbook.html)，涵蓋 `init` 到 `DONE` 的完整操作。分課的形式已取消。
 
 ## Why
