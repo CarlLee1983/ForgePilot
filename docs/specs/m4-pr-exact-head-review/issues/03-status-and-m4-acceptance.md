@@ -1,5 +1,7 @@
 # 03: `status` 呈現與 M4 端到端驗收
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 **What to build:** 存下來的 PR Reference 有讀出來的地方。`status` 在顯示最新一筆 Human Review 時一併顯示它；那筆審查沒有 PR 就什麼都不印，也不出現任何提示字樣——缺 PR 是合法狀態，不是待辦事項。
 
 以及證明整條路真的通：在真實 Git repository 上，以獨立 process 跑完 PR HEAD 上的驗證、核准、完成，然後讓 HEAD 改變，確認舊的核准保留為歷史但不適用，必須重新驗證與重新核准。這條同時驗到 M4 的三個硬約束欄位與「HEAD 一變就是新的 review target」。

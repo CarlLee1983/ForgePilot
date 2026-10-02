@@ -1,5 +1,7 @@
 # Story: FP-58 pin Worker Profiles to retained engine generations
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 Every implementation and repair launch uses exactly the authorized Worker Profile and immutable

@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [x] AC-001: Direct run and exact-run resume both admit only under the same current authorization and make durable idempotent run/action reservations before an implementation or repair worker launches.

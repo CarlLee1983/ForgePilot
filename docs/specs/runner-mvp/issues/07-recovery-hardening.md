@@ -1,5 +1,7 @@
 # 07 — 取消到得了 Git、等待有上限、清理阻擋跨程序存活
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 [06](06-execution-control.md) 之後的第二輪 dogfood 修正。同樣不重新設計 Runner、不加新能力，
 補上 06 交付後仍然開著的三個缺口。責任分工不變（[ADR-0019](../../../adr/0019-runner-executes-forgepilot-decides.md)）、
 ownership 仍 fail-closed（[ADR-0020](../../../adr/0020-worker-ownership-is-fail-closed.md)）、

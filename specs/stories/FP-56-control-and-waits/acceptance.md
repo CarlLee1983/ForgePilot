@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [ ] AC-001: User stop durably records pause intent before cancellation, retains logs/Evidence/work modifications, and requires explicit resume after process cleanup.

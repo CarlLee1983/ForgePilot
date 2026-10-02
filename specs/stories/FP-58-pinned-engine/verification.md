@@ -1,5 +1,7 @@
 # FP-58 Verification
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Result
 
 **FP-58 acceptance evidence complete** — 2026-09-23, working tree atop `da07983`

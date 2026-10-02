@@ -1,5 +1,7 @@
 # ForgePilot source-built onboarding procedure
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Managed Repository Onboarding
 
 When invoked from the Bootstrap-installed Codex skill, first validate and pin

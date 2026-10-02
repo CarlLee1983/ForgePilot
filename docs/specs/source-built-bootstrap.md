@@ -1,5 +1,7 @@
 # Source-built Bootstrap — accepted implementation contract
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Status and boundary
 
 This is the accepted design contract. `scripts/forgepilot-bootstrap` implements the four plan modes and their approved install, upgrade, prune, and uninstall operations. Disposable-home suites cover the happy paths, isolation boundaries, and interrupted transactions. A real Codex session in an authenticated Apple-Silicon disposable home discovered the managed skill, read the matching generation procedure, and stopped before target writes pending distinct approval. The scoped source-built installation workflow is supported; signing, notarization, and no-Go prebuilt distribution are separate work. The governing decisions are [ADR-0030](../adr/0030-source-built-onboarding-without-apple-developer.md), [ADR-0032](../adr/0032-formal-macos-onboarding-is-apple-silicon-only.md), and [ADR-0033](../adr/0033-source-built-bootstrap-separates-distribution-from-onboarding.md). Existing FP-33 through FP-35 evidence describes the previous coupled procedure and remains historical evidence.

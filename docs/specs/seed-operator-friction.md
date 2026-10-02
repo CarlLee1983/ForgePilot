@@ -1,5 +1,7 @@
 # Seed — 操作摩擦（尚未成為 spec）
 
+> 文中的指令與模型（`goal create`、`work add`、`reconcile` 等）已由 ADR-0040 移除或改寫，以下為歷史紀錄。
+
 這不是 spec，也不是 milestone。它是一份給 `/grill-with-docs` 的起點：把 dbcli
 dogfood 期間實際撞到的三件摩擦，連同已經查證過的程式碼現況與相關 ADR 記下來，
 免得 grill 的第一個小時花在重查我已經查過的東西。

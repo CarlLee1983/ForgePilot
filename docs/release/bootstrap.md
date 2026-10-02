@@ -1,5 +1,7 @@
 # Source-built Bootstrap
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 > **Supported source-built Apple-Silicon path.** The repository contains
 > executable plan, install, upgrade, prune, uninstall, status, generation, and
 > retention paths. Disposable-home tests pass all 35 transaction-boundary

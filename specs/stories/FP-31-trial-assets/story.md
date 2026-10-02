@@ -1,5 +1,7 @@
 # Story: FP-31 可檢閱的雙架構試用資產
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 維護者能從一個明確的完整 commit，以單一可重跑的入口產生 darwin/arm64 與 darwin/amd64 的

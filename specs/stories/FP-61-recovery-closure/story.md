@@ -1,5 +1,7 @@
 # Story: FP-61 close backup, migration, and native acceptance
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 Bounded execution restores only provably matching authorization/accounting state, migrates legacy runs

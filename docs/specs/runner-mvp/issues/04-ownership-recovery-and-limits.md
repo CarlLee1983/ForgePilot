@@ -1,5 +1,7 @@
 # 04 — Ownership、crash recovery、預算、無進展與容量保護
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## 交付
 
 - `storage`：workspace lock 與 run artifact 的原子保存、容量上限。

@@ -1,5 +1,7 @@
 # Story: FP-56 persist stop control and human/external waits
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 Users can safely stop and explicitly resume authorized execution, with durable

@@ -1,5 +1,7 @@
 # 03 — Runner loop、snapshot verification 串接與停止判定
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## 交付
 
 - `internal/runner`：執行迴圈、action 對應、scope fingerprint、停止原因型別。

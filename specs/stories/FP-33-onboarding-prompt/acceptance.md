@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 * [x] The common procedure starts inspection-only and fails closed for a
   non-repository target, uncertain Candidate, absent `make verify`, or ignored
   untracked SNAPSHOT Makefile.

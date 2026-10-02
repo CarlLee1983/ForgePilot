@@ -1,5 +1,7 @@
 # FP-55 Verification
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Result
 
 **PASS for the observed working tree** — 2026-09-22. The committed

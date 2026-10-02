@@ -1,5 +1,7 @@
 # macOS supervision acceptance record
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 This record separates automated evidence from observations that require a native macOS login, reboot, or sleep/wake session. A LaunchAgent is scoped to a logged-in user session. The design does not claim execution while the user is logged out, before login after reboot, or while the Mac is asleep.
 
 ## Automated evidence

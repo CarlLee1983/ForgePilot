@@ -1,5 +1,7 @@
 # 11 — 一輪受控的真實 Codex smoke，以及它留下來的證據
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 [10](10-recovery-to-final-review.md) 之前的每一張票，都是用 `--runtime fake` 的
 subprocess adapter 驗收的。那證明了 ForgePilot 的程序、鎖與恢復處理正確，
 不證明無人值守跑真實模型會走到同一個結果——

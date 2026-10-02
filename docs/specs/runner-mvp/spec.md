@@ -1,5 +1,7 @@
 # Long-running Runner MVP
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## 這一版要做的事
 
 人類完成 Goal、Story、Work Item 與依賴的前置規劃之後，`forgepilot run --goal <goal-id>` 依 ForgePilot 的判定自動取得下一個合法動作、必要時啟動一個新的 coding agent session 實作指定的 Work Item、跑正式 verification、重新讀取狀態，再繼續下一項；因 Gate、預算或異常而停止，或在全部 current verification 條件滿足時自動完成 Goal。`goal create --review-policy goal` 是唯一 Goal-level 自動完成模式，不提供人工終審選項。

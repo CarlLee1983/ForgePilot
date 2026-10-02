@@ -1,5 +1,7 @@
 # ForgePilot short source-built onboarding prompt
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 Copy this prompt after replacing the source repository and full 40-character
 commit SHA with values you have independently reviewed:
 

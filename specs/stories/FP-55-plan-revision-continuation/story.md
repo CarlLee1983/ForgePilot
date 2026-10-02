@@ -1,5 +1,7 @@
 # Story: FP-55 revise authorized plans and continue within bounds
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 An operator can explicitly authorize an additive reviewed-plan revision and

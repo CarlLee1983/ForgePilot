@@ -1,5 +1,7 @@
 # Story: FP-34 Codex 與 Claude Code 的薄 skill adapter
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 Codex 使用者與 Claude Code 使用者能各自選擇在自己工具官方支援的個人 skill 位置安裝一份極薄

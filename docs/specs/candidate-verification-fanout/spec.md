@@ -1,5 +1,7 @@
 # Candidate-level canonical verification fan-out
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Decision status
 
 這份設計已完成 code trace、三個獨立 interface 方案比較，以及 Sol/high 對 atomicity、freshness、Gate、prerequisite、failure、recovery、compatibility 與 rollback 的複審。Human 已明確接受這項 concurrency、schema 與 Evidence provenance 取捨；決定記於 [ADR-0027](../../adr/0027-candidate-verification-pass-fans-out-by-run.md)，implementation 依本文件以 TDD 進行。

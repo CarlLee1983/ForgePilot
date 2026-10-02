@@ -1,5 +1,7 @@
 # Story: FP-35 onboarding 與 adapter 的 disposable-repository 驗收
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 以可重跑的 disposable Git repository，驗收 #33 的 source-built onboarding procedure 與 #34 已安裝的 Codex／Claude Code adapters。預設 CI 全程離線；明確 opt-in 也只會到測試生成的 executable spy，絕不解析或使用環境既有模型憑證，更不執行真實模型。真實首次模型驗收屬於 #39。

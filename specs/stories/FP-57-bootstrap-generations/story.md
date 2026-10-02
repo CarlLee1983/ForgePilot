@@ -1,5 +1,7 @@
 # Story: FP-57 immutable managed engine generations
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 The source-built Bootstrap installs a complete ForgePilot generation transactionally, switches only

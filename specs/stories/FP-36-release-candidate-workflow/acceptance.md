@@ -1,5 +1,7 @@
 # Acceptance Criteria
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Happy Path
 
 * [ ] AC-001: Workflow 契約宣告以 `workflow_dispatch` 提供一個完整 40 字元 hex

@@ -1,5 +1,7 @@
 # Story: FP-59 supervise pinned jobs across macOS session lifecycle
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 A pinned authorized job remains observable and safely recoverable when a terminal, Main Agent Session,

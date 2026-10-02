@@ -268,7 +268,7 @@ init
 
 ### M2
 
-開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m2-開工前定案已完成) 與 `docs/adr/0001`–`0004`。剩下的是實作。
+開工前定案事項已全部完成，記錄於 architecture.md 當時的「M2 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0001`–`0004`。剩下的是實作。
 
 M2 新增兩個指令，不新增其他：
 
@@ -301,7 +301,7 @@ Integration fixture 加入 Makefile 與真實 commit。驗收：WORK_ITEM PASS�
 
 ### M3
 
-開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m3-開工前定案已完成) 與 `docs/adr/0005`–`0008`。實作已完成，切片與驗收見 [specs/m3-human-gate-and-review/](specs/m3-human-gate-and-review/) 底下的七張 ticket。
+開工前定案事項已全部完成，記錄於 architecture.md 當時的「M3 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0005`–`0008`。實作已完成，切片與驗收見 [specs/m3-human-gate-and-review/](specs/m3-human-gate-and-review/) 底下的七張 ticket。
 
 其中兩項原本列為必須定案的問題是被消滅而非回答：移除 `WAITING_HUMAN` 之後不存在「恢復規則」，移除 Work Item 的 `BLOCKED` 之後不存在「BLOCKED recovery」。
 
@@ -344,7 +344,7 @@ Schema 升至 v3：新增 Gate 集合與其 ID 配發計數，Evidence 加入 re
 
 ### M4
 
-開工前定案事項已全部完成，記錄於 [architecture.md](architecture.md#m4-開工前定案已完成) 與 `docs/adr/0010`–`0011`。實作規格見 [specs/m4-pr-exact-head-review/](specs/m4-pr-exact-head-review/)。
+開工前定案事項已全部完成，記錄於 architecture.md 當時的「M4 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 `docs/adr/0010`–`0011`。實作規格見 [specs/m4-pr-exact-head-review/](specs/m4-pr-exact-head-review/)。
 
 原本列為必須定案的「PR metadata 來源、授權與 read-only integration 邊界」三問，答案是同一個：不從外部取得。ForgePilot 不主動發出網路請求（[ADR-0010](adr/0010-no-outbound-network-requests.md)），PR Reference 是使用者輸入的識別字串，因此沒有來源可談、沒有授權要處理，也沒有 integration 邊界要劃。
 
@@ -383,7 +383,7 @@ Schema 升至 v4：Evidence 加入選填的 `pr`。沿用既有升級契約—�
 
 ### M5
 
-開工前定案事項記錄於 [architecture.md](architecture.md#m5-開工前定案已完成) 與 [ADR-0012](adr/0012-verification-log-outside-state.md)（verification log）；review 拒絕訊息的修正沒有架構層級的取捨，決定直接記在下方。
+開工前定案事項記錄於 architecture.md 當時的「M5 開工前定案」段（該段已隨 ADR-0040 改寫，不再保留） 與 [ADR-0012](adr/0012-verification-log-outside-state.md)（verification log）；review 拒絕訊息的修正沒有架構層級的取捨，決定直接記在下方。
 
 M5 收斂兩件獨立的工作，同屬 M5 但彼此不共用程式碼：
 

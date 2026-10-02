@@ -1,5 +1,7 @@
 # Story: FP-53 atomically adopt and authorize a reviewed Goal Plan
 
+> 已由 ADR-0040 移除，以下為歷史紀錄。
+
 ## Goal
 
 An operator can preview then explicitly authorize an initial reviewed Goal Plan,
