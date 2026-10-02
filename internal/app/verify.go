@@ -413,6 +413,13 @@ func runVerificationLocked(ctx context.Context, root, id string, output io.Write
 		if recordErr == nil {
 			status = state.WorkItemStatus(id)
 			completion = CompletionLines(state, id)
+			// A PASS that left the work RUNNING was recorded but could not
+			// complete it; say why rather than leave a PASS that looks ignored.
+			if evidence.Result == work.Pass && status == work.Running {
+				if blockErr := state.CompletionBlock(id); blockErr != nil {
+					completion = append(completion, fmt.Sprintf("PASS recorded but %s was not completed: %v; verify again once that is resolved", id, blockErr))
+				}
+			}
 		}
 		return recordErr
 	})

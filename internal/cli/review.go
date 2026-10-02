@@ -73,20 +73,26 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 		expectedVerificationID = latest.ID
 	}
 	currentRevision, currentDigest := "", ""
-	if hasVerification && latest.CandidateKind == work.SnapshotCandidate {
-		workspace, inspectErr := repository.InspectSnapshot(context.Background(), root)
-		if inspectErr != nil {
-			return inspectErr
-		}
-		currentRevision, currentDigest = workspace.BaseRevision, workspace.Digest
-	} else {
-		// Legacy COMMIT review remains strict clean-HEAD review.
-		if cleanErr := repository.EnsureClean(context.Background(), root, "reviewing"); cleanErr != nil {
-			return cleanErr
-		}
-		currentRevision, err = repository.Head(context.Background(), root)
-		if err != nil {
-			return err
+	// Only approval compares the workspace with the verified Candidate: it is the
+	// one that completes work, so it needs the Candidate to be current and, for a
+	// COMMIT, the worktree clean. Rejection stops work and needs neither; it is
+	// recorded against the PASS it judged.
+	if result == work.Approved {
+		if hasVerification && latest.CandidateKind == work.SnapshotCandidate {
+			workspace, inspectErr := repository.InspectSnapshot(context.Background(), root)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			currentRevision, currentDigest = workspace.BaseRevision, workspace.Digest
+		} else {
+			// Legacy COMMIT review remains strict clean-HEAD review.
+			if cleanErr := repository.EnsureClean(context.Background(), root, "reviewing"); cleanErr != nil {
+				return cleanErr
+			}
+			currentRevision, err = repository.Head(context.Background(), root)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -94,7 +100,13 @@ func recordReview(args []string, root string, output io.Writer, result work.Resu
 	var status work.Status
 	var completion []string
 	if err := storage.Update(root, func(state *work.State) error {
-		candidate, resolveErr := state.ResolveReviewCandidate(id, expectedVerificationID, currentRevision, currentDigest)
+		var candidate work.Candidate
+		var resolveErr error
+		if result == work.Rejected {
+			candidate, resolveErr = state.VerifiedCandidate(id, expectedVerificationID)
+		} else {
+			candidate, resolveErr = state.ResolveReviewCandidate(id, expectedVerificationID, currentRevision, currentDigest)
+		}
 		if resolveErr != nil {
 			return resolveErr
 		}

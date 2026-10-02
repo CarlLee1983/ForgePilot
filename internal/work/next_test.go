@@ -126,13 +126,15 @@ func TestActionableNextReportsOnlyHumanBlockersWhenNothingCanAdvance(t *testing.
 		}
 	})
 
+	// A cancelled Goal is terminal: nobody can usefully wait for it, so it is
+	// reported as ended instead of as a wait.
 	t.Run("cancelled goal", func(t *testing.T) {
 		state, now, _ := summaryFixture(t)
 		if err := state.CancelGoal("goal", "waiting for direction", now); err != nil {
 			t.Fatal(err)
 		}
 		action := state.ActionableNext(RepositoryState{})
-		if action.Kind != NextActionWaitGoal || action.Reason != "goal goal is CANCELLED" {
+		if action.Kind != NextActionGoalCancelled || action.Goal.ID != "goal" || action.Reason != "waiting for direction" {
 			t.Fatalf("action = %#v", action)
 		}
 	})

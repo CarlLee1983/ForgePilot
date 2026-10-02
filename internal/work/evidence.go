@@ -63,6 +63,21 @@ func (evidence Evidence) Candidate() Candidate {
 	return Candidate{Kind: evidence.CandidateKind, Revision: evidence.Revision, BaseRevision: evidence.BaseRevision, Digest: evidence.CandidateDigest}
 }
 
+// CompletionBlock reports why a Work Item cannot become DONE right now: its Goal
+// is not ACTIVE, or a Gate is open on it. It is the one criterion shared by a
+// PASS that would complete work and an approval that would, so the two paths
+// cannot drift apart.
+func (s *State) CompletionBlock(id string) error {
+	item := s.item(id)
+	if item == nil {
+		return fmt.Errorf("unknown work item %q", id)
+	}
+	if goal := s.goal(item.GoalID); goal == nil || goal.Status != GoalActive {
+		return fmt.Errorf("work item %q does not belong to an active goal", id)
+	}
+	return s.gateBlock(id)
+}
+
 // Verifiable reports whether a Work Item may enter a Verification Run. REVIEW is
 // allowed so that a Work Item whose Evidence has gone Stale can be verified again
 // against the current revision; re-running against an unchanged revision is also
@@ -167,12 +182,16 @@ func (s *State) appendEvidence(id, revision, command string, exitCode *int, resu
 	item.CurrentRun = nil
 	item.UpdatedAt = now
 	item.Status = Running
-	// A Goal that is no longer ACTIVE keeps the Evidence of a run that was in
-	// flight when it was cancelled, but a PASS under it completes nothing.
+	// A PASS that cannot complete the work still keeps its Evidence: a Goal that
+	// is no longer ACTIVE, or a Gate opened while the check was running, leaves
+	// the work RUNNING and a later verification does the completing. Under an
+	// Approval Requirement a PASS is not completion, so it enters REVIEW and
+	// approve applies the same criterion.
 	if result == Pass && goal.Status == GoalActive {
-		if goal.RequireApproval {
+		switch {
+		case goal.RequireApproval:
 			item.Status = Review
-		} else {
+		case s.CompletionBlock(id) == nil:
 			s.complete(id, now)
 		}
 	}
@@ -437,7 +456,7 @@ func (s *State) RecordCandidateReview(id string, candidate Candidate, result Res
 		return Evidence{}, errors.New("rejecting work requires a reason")
 	}
 	if result == Approved {
-		if err := s.gateBlock(id); err != nil {
+		if err := s.CompletionBlock(id); err != nil {
 			return Evidence{}, err
 		}
 		verification, verified := s.LatestVerification(id)
@@ -516,6 +535,20 @@ func (s *State) Reviewable(id string) error {
 		return fmt.Errorf("work item %q does not belong to an active goal", id)
 	}
 	return nil
+}
+
+// VerifiedCandidate is the Candidate a rejection is recorded against: the one
+// the latest PASS verified, provided that PASS is still the one the caller saw.
+// It asks nothing about the workspace, so a stale Candidate can be rejected.
+func (s *State) VerifiedCandidate(id, expectedVerificationID string) (Candidate, error) {
+	latest, ok := s.LatestVerification(id)
+	if !ok || latest.Result != Pass {
+		return Candidate{}, fmt.Errorf("work item %q has no passing verification to review", id)
+	}
+	if latest.ID != expectedVerificationID {
+		return Candidate{}, errors.New("verification changed while preparing review; retry the review")
+	}
+	return latest.Candidate(), nil
 }
 
 // ResolveReviewCandidate applies the distinct review targeting contracts. A

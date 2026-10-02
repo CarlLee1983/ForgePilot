@@ -91,7 +91,7 @@ func TestNextReportsHumanOnlyBlockers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("next with cancelled goal = %q, %v", output, err)
 	}
-	for _, want := range []string{"No agent-actionable work.", "Waiting: WI-001", "Reason: goal queue is CANCELLED"} {
+	for _, want := range []string{"Goal queue is cancelled (waiting for direction)", "No actionable work."} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("next output %q does not contain %q", output, want)
 		}

@@ -150,7 +150,9 @@ func next(args []string, root string, output io.Writer) error {
 		_, err = fmt.Fprintln(output, "No actionable work.")
 	case work.NextActionGoalCompleted:
 		_, err = fmt.Fprintf(output, "Goal %s is completed: every Work Item is DONE.\n", action.Goal.ID)
-	case work.NextActionWaitHumanReview, work.NextActionWaitGate, work.NextActionWaitGoal:
+	case work.NextActionGoalCancelled:
+		_, err = fmt.Fprintf(output, "Goal %s is cancelled (%s). No actionable work.\n", action.Goal.ID, action.Reason)
+	case work.NextActionWaitHumanReview, work.NextActionWaitGate:
 		_, err = fmt.Fprintf(output, "No agent-actionable work.\n\nWaiting: %s\nReason: %s\n", action.Item.ID, action.Reason)
 	default:
 		_, err = fmt.Fprintf(output, "Next: %s\nState: %s\nGoal: %s\nStory: %s\nAction: %s\nReason: %s\n",
@@ -160,10 +162,10 @@ func next(args []string, root string, output io.Writer) error {
 	return err
 }
 
-// nextRepositoryState gathers repository facts only when a REVIEW Work Item can
-// actually be re-verified or is waiting for a Human Review. READY and RUNNING
-// recommendations still work in a repository without a commit, just as next
-// did before candidate-aware selection existed.
+// nextRepositoryState gathers repository facts only when some Work Item is in
+// REVIEW, the one status whose Evidence can be stale or is waiting for a Human
+// Review. READY and RUNNING recommendations still work in a repository without
+// a commit.
 func nextRepositoryState(state *work.State, root string) (work.RepositoryState, error) {
 	return app.CandidateFacts(context.Background(), state, root)
 }

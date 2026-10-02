@@ -14,13 +14,13 @@ const (
 	NextActionStart           NextActionKind = "START"
 	NextActionReconcile       NextActionKind = "RECONCILE"
 	NextActionGoalCompleted   NextActionKind = "GOAL_ALREADY_COMPLETED"
+	NextActionGoalCancelled   NextActionKind = "GOAL_CANCELLED"
 	NextActionWaitHumanReview NextActionKind = "WAIT_HUMAN_REVIEW"
 	NextActionWaitGate        NextActionKind = "WAIT_GATE"
-	NextActionWaitGoal        NextActionKind = "WAIT_GOAL"
 )
 
 // NextAction is the read-only answer to what an agent can legally do next.
-// Goal is populated for an already-completed Goal. Item is empty for that action
+// Goal is populated for an already-ended (completed or cancelled) Goal. Item is empty for that action
 // and when Kind is NextActionNone.
 type NextAction struct {
 	Item   Item
@@ -81,9 +81,9 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 		if item.Status == Pending || item.Status == Done || item.Status == Verifying {
 			continue
 		}
-		goal := s.goal(item.GoalID)
-		if goal != nil && goal.Status != GoalActive {
-			return NextAction{Item: item, Kind: NextActionWaitGoal, Reason: "goal " + goal.ID + " is " + string(goal.Status)}
+		// An ended Goal is terminal: nothing will change, so it is never a wait.
+		if goal := s.goal(item.GoalID); goal != nil && goal.Status != GoalActive {
+			continue
 		}
 		for _, gate := range s.GatesFor(item.ID) {
 			if gate.Status == GateOpen {
@@ -98,17 +98,21 @@ func (s *State) actionableNext(goalID string, repository RepositoryState) NextAc
 		}
 	}
 
-	if goal, ok := s.completedGoalToReport(goalID); ok {
+	if goal, ok := s.endedGoalToReport(goalID); ok {
+		if goal.Status == GoalCancelled {
+			return NextAction{Goal: goal, Kind: NextActionGoalCancelled, Reason: goal.Reason}
+		}
 		return NextAction{Goal: goal, Kind: NextActionGoalCompleted, Reason: "every Work Item is DONE"}
 	}
 	return NextAction{Kind: NextActionNone}
 }
 
-// completedGoalToReport picks the Goal `next` announces as finished. A Goal is
-// announced only once no Goal in scope is still ACTIVE: while another Goal is in
-// progress, an old completed one is history, not news. Among completed Goals the
-// most recently updated wins, which is the one whose last item was just DONE.
-func (s *State) completedGoalToReport(goalID string) (Goal, bool) {
+// endedGoalToReport picks the Goal `next` announces as over. A Goal is announced
+// only once no Goal in scope is still ACTIVE: while another Goal is in progress,
+// an old ended one is history, not news. Among ended Goals the most recently
+// updated wins, which is the one whose last item was just DONE or that was just
+// cancelled.
+func (s *State) endedGoalToReport(goalID string) (Goal, bool) {
 	var latest *Goal
 	for i := range s.Goals {
 		goal := &s.Goals[i]
@@ -118,7 +122,7 @@ func (s *State) completedGoalToReport(goalID string) (Goal, bool) {
 		if goal.Status == GoalActive {
 			return Goal{}, false
 		}
-		if goal.Status == GoalCompleted && (latest == nil || !goal.UpdatedAt.Before(latest.UpdatedAt)) {
+		if latest == nil || !goal.UpdatedAt.Before(latest.UpdatedAt) {
 			latest = goal
 		}
 	}
