@@ -6,6 +6,6 @@
 
 `BLOCKED` 曾被設想為「非人為的外部阻擋」，但每個例子都能改寫成 Gate：「上游還沒 release，要等還是先繞過？」本來就是需要人判斷的問題。`CONTEXT.md` 從未為 Work Item 的 BLOCKED 立過詞條，那是它沒有掙到自己名字的旁證。
 
-**Consequences:** 保留 `Goal.BLOCKED` 是刻意的不對稱——擋整個 Goal 用 Goal 狀態，擋一件工作用 Gate。少了這個記錄，下一個讀者會把 Work Item 的 BLOCKED「補回來」。
+**Consequences:** 擋一件工作用 Gate；Goal 也沒有 `BLOCKED`，要擋整個 Goal 就以 `goal cancel` 結束它（見 [architecture](../architecture.md)）。本 ADR 最初保留了 `Goal.BLOCKED` 作為刻意的不對稱，後來一併移除。少了這個記錄，下一個讀者會把 Work Item 的 BLOCKED「補回來」。
 
-**Falsified if:** 出現一種阻擋，既不是需要人決定的問題，也無法以 Goal 狀態表達——例如 `internal/work/work.go` 需要表示一件工作被系統自身的排程條件擋住。屆時新增的狀態必須有與 Gate 不重疊的判準，否則就是這裡砍掉的東西又長了回來。
+**Falsified if:** 出現一種阻擋，既不是需要人決定的問題，也無法以結束 Goal 表達——例如 `internal/work/work.go` 需要表示一件工作被系統自身的排程條件擋住。屆時新增的狀態必須有與 Gate 不重疊的判準，否則就是這裡砍掉的東西又長了回來。

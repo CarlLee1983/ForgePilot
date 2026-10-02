@@ -35,7 +35,8 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   start <work-id>                   move a READY work item to RUNNING (one at a time per workspace)
   verify <work-id> [--snapshot]     verify clean HEAD, or an immutable working-tree snapshot
   gate open --work <work-id> --question <q> --option <o> --option <o> [--reason <text>]
-  gate <resolve|cancel> <gate-id>
+  gate resolve <gate-id> --option <text> [--note <text>] [--by <name>]
+  gate cancel <gate-id> --reason <text> [--by <name>]
   review approve <work-id> [--note <text>] [--by <name>]    complete REVIEW work (Goals that require approval)
   review reject <work-id> --reason <text> [--by <name>]     send REVIEW work back to RUNNING
   status [--goal <goal-id>] [--work <work-id>] [--json]    show work, readiness, Evidence, and why unfinished work cannot advance

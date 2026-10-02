@@ -1,16 +1,16 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="ForgePilot 讓 AI 輔助工程中的可執行工作、驗證證據與人工決策維持在同一條可追溯的路徑上。">
-<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta name="description" content="ForgePilot keeps actionable work, verification evidence and human decisions on one traceable path in AI-assisted engineering.">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="tokens.css">
-<link rel="alternate" hreflang="en" href="en/">
-<title>ForgePilot — 完成，不是宣告</title>
+<link rel="stylesheet" href="../tokens.css">
+<link rel="alternate" hreflang="zh-Hant" href="../">
+<title>ForgePilot — Done is proven, not declared</title>
 <style>
 /* ── 全局重置與基底排版 ── */
 html, body { overflow-x: clip; }
@@ -803,23 +803,23 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
   </defs>
 </svg>
 
-<nav class="site-nav" aria-label="主要導覽">
+<nav class="site-nav" aria-label="Main navigation">
   <div class="shell site-nav__inner">
     <a class="wordmark" href="#top">
       <span class="brand-diamond"></span>
       <span>ForgePilot</span>
     </a>
     <ul class="nav-links">
-      <li><a href="#problem">為什麼需要</a></li>
-      <li><a href="#proof">四道關卡</a></li>
-      <li><a href="#graph-engineering">Graph 工程實踐</a></li>
-      <li><a href="#principles">設計邊界</a></li>
-      <li><a href="guide.html">完整導覽</a></li>
-      <li><a href="learn/handbook.html">手冊</a></li>
+      <li><a href="#problem">Why</a></li>
+      <li><a href="#proof">Four gates</a></li>
+      <li><a href="#graph-engineering">Graph engineering</a></li>
+      <li><a href="#principles">Boundaries</a></li>
+      <li><a href="https://github.com/CarlLee1983/ForgePilot#readme">README</a></li>
+      <li><a href="../learn/handbook.html" hreflang="zh-Hant">Handbook (Chinese)</a></li>
     </ul>
-    <a class="lang-switch" href="en/" hreflang="en" lang="en">English</a>
+    <a class="lang-switch" href="../" hreflang="zh-Hant" lang="zh-Hant">繁體中文</a>
     <button class="command-trigger" type="button" data-command-open aria-haspopup="dialog">
-      <span>尋找內容</span><kbd>⌘K</kbd>
+      <span>Search</span><kbd>⌘K</kbd>
     </button>
   </div>
 </nav>
@@ -833,20 +833,20 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           <span class="hero-tag-dot"></span>
           <span>Passive DAG Ledger</span>
         </div>
-        <h1 class="hero__word" id="hero-title">完成，<span class="mark-accent">不是</span>宣告。</h1>
+        <h1 class="hero__word" id="hero-title">Done is proven, <span class="mark-accent">not</span> declared.</h1>
 
         <div class="hero__prose">
           <p class="lead">
-            AI Agent 可以在幾秒內生成大量程式碼，也可以毫不費力地回報「我已經做完了」。ForgePilot 不相信任何缺乏證據的宣稱。
+            An AI agent can generate a lot of code in seconds, and can just as easily report "I'm done." ForgePilot does not trust any claim that comes without evidence.
           </p>
           <p class="context">
-            它不是儀表板，也不介入寫程式的過程。它唯一的職責，是在驗證證據不足、工作樹髒污、或是關鍵人工決策尚未落地時，明確無誤地在原地擋下推進，讓軟體工程重拾可追溯的重量。
+            It is not a dashboard, and it stays out of the coding itself. Its one job is to stop work from advancing when the verification evidence is missing, the working tree is dirty, or a human decision is still open, so that engineering work stays traceable.
           </p>
         </div>
 
         <div class="hero__actions">
-          <a class="button button--primary" href="guide.html">探索完整產品導覽 <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
-          <a class="button button--quiet" href="https://github.com/CarlLee1983/ForgePilot" target="_blank">查看 GitHub ↗</a>
+          <a class="button button--primary" href="https://github.com/CarlLee1983/ForgePilot#readme">Read the README <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="button button--quiet" href="https://github.com/CarlLee1983/ForgePilot" target="_blank">View on GitHub ↗</a>
         </div>
       </div>
 
@@ -905,22 +905,22 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
     <div class="deepdive__layout">
       <div>
         <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-gate"/></svg> The Cost of Certainty</span>
-        <h2 class="deepdive__title" id="problem-title">當生成變得便宜，驗證就必須變得極度昂貴。</h2>
+        <h2 class="deepdive__title" id="problem-title">When generating code is cheap, verification has to carry the weight.</h2>
         <p style="color:var(--color-muted); font-size:var(--text-base); margin:0;">
-          在人類寫程式的時代，完成工作的阻力來自撰寫過程；而在 Agent 時代，最大的系統性風險在於「宣告做完」不需要承擔任何成本。
+          When people wrote the code, the friction was in the writing. With agents, the biggest systemic risk is that declaring work done costs nothing.
         </p>
       </div>
 
       <div class="deepdive__prose">
         <p>
-          當你把工程委託給 AI Agent，它通常同時掌握過多的權力：自己決定挑哪一題、自己在工作目錄修改代碼、最後自己宣布測試通過。只要其中一環出現幻覺或遺漏，你往往要等到合併或上線後才會發現災難。
+          When you hand engineering work to an AI agent, it usually holds too much at once: it picks the task, changes the code in your working tree, and announces that the tests pass. If any one of those steps hallucinates or misses something, you often find out only after the merge or the release.
         </p>
         <div class="deepdive__callout">
-          <strong>ForgePilot 將這三個角色強制解耦。</strong><br>
-          哪一件工作現在可以做，由依賴與 <code>next</code> 客觀決定；代碼由 Agent 撰寫；但算不算完成，只能由隔離環境對確切 Candidate 的真實 PASS 紀錄決定（Goal 要求 Approval 時再加上人類的核准）。Agent 的完成宣稱永遠不是通行證。
+          <strong>ForgePilot separates those three roles.</strong><br>
+          Dependencies and <code>next</code> decide which work can start now. The agent writes the code. Whether the work is done is decided only by a real PASS recorded in an isolated checkout of the exact Candidate, plus a human approval when the Goal requires one. An agent saying it is finished never counts.
         </div>
         <p>
-          ForgePilot 完全離線：不發出網路請求，也不架設遠端資料庫；除 Git 與你的 <code>make verify</code> 外不啟動任何程序，也不啟動 Agent。一切治理事實以具備程序鎖保護的狀態檔落地保存。不留模糊空間，沒有任何僥倖。
+          ForgePilot is fully offline. It makes no network requests and runs no remote database. Apart from Git and your <code>make verify</code>, it starts no processes, and it never launches an agent. Every fact it tracks lives in one state file protected by a process lock.
         </p>
       </div>
     </div>
@@ -931,38 +931,38 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
     <div class="proof__layout">
       <div class="proof__copy">
         <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-seal"/></svg> Immutable Gates</span>
-        <h2 id="proof-title">四道關卡，少一道就停在原地。</h2>
-        <p>這不是空泛的 dashboard，而是真實的狀態機門檻。少了任何一項事實證據，系統明確拒絕推進。</p>
+        <h2 id="proof-title">Four gates. Miss one and the work stays put.</h2>
+        <p>These are state-machine checks, not a dashboard. If any one fact is missing, ForgePilot refuses to advance the work and says why.</p>
       </div>
 
-      <div class="proof-flow" data-reveal aria-label="ForgePilot 的工作推進順序">
+      <div class="proof-flow" data-reveal aria-label="How ForgePilot advances work">
         <div class="flow-node">
           <div class="flow-node__left">
             <svg class="flow-node__icon" aria-hidden="true"><use href="#i-flag"/></svg>
-            <span class="flow-node__name">Work Item · 目標佇列</span>
+            <span class="flow-node__name">Work Item · queue</span>
           </div>
-          <span class="flow-node__fact">next 給出唯一輪到的下一件</span>
+          <span class="flow-node__fact">next names the one item whose turn it is</span>
         </div>
         <div class="flow-node">
           <div class="flow-node__left">
             <svg class="flow-node__icon" aria-hidden="true"><use href="#i-hash"/></svg>
-            <span class="flow-node__name">Candidate · 確切版本</span>
+            <span class="flow-node__name">Candidate · exact version</span>
           </div>
-          <span class="flow-node__fact">鎖定 Commit SHA 或工作樹 Snapshot</span>
+          <span class="flow-node__fact">Pins the HEAD commit or a working-tree snapshot</span>
         </div>
         <div class="flow-node">
           <div class="flow-node__left">
             <svg class="flow-node__icon" aria-hidden="true"><use href="#i-seal"/></svg>
-            <span class="flow-node__name">Verification · 隔離驗證</span>
+            <span class="flow-node__name">Verification · isolated check</span>
           </div>
-          <span class="flow-node__fact">在乾淨 Worktree 實跑 Makefile Canonical Check</span>
+          <span class="flow-node__fact">Runs your make verify in a clean, detached worktree</span>
         </div>
         <div class="flow-node">
           <div class="flow-node__left">
             <svg class="flow-node__icon" aria-hidden="true"><use href="#i-ask"/></svg>
-            <span class="flow-node__name">Gate · 人的決定</span>
+            <span class="flow-node__name">Gate · human decision</span>
           </div>
-          <span class="flow-node__fact">未解除 Gate 擋住推進；PASS 即完成並解鎖下游</span>
+          <span class="flow-node__fact">An open Gate blocks the work; PASS completes it and unlocks what depends on it</span>
         </div>
       </div>
     </div>
@@ -972,22 +972,22 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
   <section class="graph-engineering shell" id="graph-engineering" aria-labelledby="graph-title">
     <div class="graph-head">
       <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-graph"/></svg> Real-world Graph Engineering</span>
-      <h2 id="graph-title">從 ADR、Spec、Story 到 Work Item DAG 的驅動閉環</h2>
+      <h2 id="graph-title">From ADRs, specs and Stories to a Work Item DAG</h2>
       <p>
-        這不是理論推導，而是我們在多輪 Dogfood 開發中<strong>真實驗證並落地</strong>的工程機制。前置規格以 ADR、Spec 與經人核准的 Warrant Story 完整定稿，ForgePilot 以一份 Goal Plan 匯入為嚴密的可執行依賴圖（DAG），外部 Agent 依 <code>next</code> 推進，透過隔離驗證、Evidence 與明確的 Gate 邊界維持可追溯的推進順序。
+        This loop comes from several rounds of <strong>dogfooding</strong>, not from theory. ADRs, specs and human-approved Warrant Stories settle the intent first. ForgePilot imports one Goal Plan as an executable dependency graph (DAG). An external agent follows <code>next</code>, and isolated verification, Evidence and explicit Gates keep the order traceable.
       </p>
     </div>
 
     <!-- 四階段流水線 -->
-    <div class="graph-pipeline" aria-label="Graph Engineering 推進流水線">
+    <div class="graph-pipeline" aria-label="Graph engineering pipeline">
       <article class="pipeline-step">
         <div class="pipeline-step__head">
           <span class="pipeline-step__tag">STAGE 01</span>
           <span class="pipeline-step__badge">ADR</span>
         </div>
-        <h3 class="pipeline-step__title">ADR 決策固化</h3>
+        <h3 class="pipeline-step__title">Record decisions as ADRs</h3>
         <p class="pipeline-step__desc">
-          所有非直觀的架構取捨與邊界約束，皆先沉澱為不可隨意反轉的架構決策紀錄（ADR），明訂成立邊界與失效條件，杜絕後續反覆推翻。
+          Every non-obvious trade-off and boundary is first written down as an Architecture Decision Record, with the conditions under which it would no longer hold, so it is not silently reversed later.
         </p>
       </article>
 
@@ -996,9 +996,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           <span class="pipeline-step__tag">STAGE 02</span>
           <span class="pipeline-step__badge">Warrant</span>
         </div>
-        <h3 class="pipeline-step__title">Spec & Story 規格拆分</h3>
+        <h3 class="pipeline-step__title">Split into specs and Stories</h3>
         <p class="pipeline-step__desc">
-          將宏觀目標細化為具備唯一職責的規格文檔與 Story，附帶完備的 Acceptance Criteria (AC) 與不可妥協的測試契約，定義「何謂正確」。
+          The goal is broken into specs and Stories with one responsibility each, carrying acceptance criteria and test contracts that define what "correct" means.
         </p>
       </article>
 
@@ -1007,9 +1007,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           <span class="pipeline-step__tag">STAGE 03</span>
           <span class="pipeline-step__badge">ForgePilot</span>
         </div>
-        <h3 class="pipeline-step__title">Work Item DAG 拓撲編排</h3>
+        <h3 class="pipeline-step__title">Import the Work Item DAG</h3>
         <p class="pipeline-step__desc">
-          <code>goal import</code> 讀入 Goal Plan，一次建立 Goal 與整張嚴密的有向無環圖。有環、未知依賴或不存在的 Story 路徑整份拒絕；前置未滿足者讀取時為 PENDING，解鎖後為 READY。
+          <code>goal import</code> reads a Goal Plan and creates the Goal and its whole directed acyclic graph at once. A cycle, an unknown dependency or a missing Story path rejects the whole plan. Items whose dependencies are not DONE read as PENDING, and as READY once they are.
         </p>
       </article>
 
@@ -1018,9 +1018,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           <span class="pipeline-step__tag">STAGE 04</span>
           <span class="pipeline-step__badge">Agent + ForgePilot</span>
         </div>
-        <h3 class="pipeline-step__title">單點實作、驗證與完成</h3>
+        <h3 class="pipeline-step__title">Implement, verify, complete</h3>
         <p class="pipeline-step__desc">
-          Agent 實作並呼叫 <code>verify</code>；ForgePilot 對 immutable Candidate 執行 canonical verification，PASS 即 DONE 並於同一次交易解鎖下游，最後一件 DONE 時 Goal 自動完成。Goal 以 <code>require_approval</code> 匯入時，PASS 先進 REVIEW，人 <code>review approve</code> 後才 DONE。
+          The agent implements and runs <code>verify</code>. ForgePilot runs the canonical check against an immutable Candidate. PASS means DONE and unlocks downstream work in the same transaction, and the Goal completes when its last item is DONE. If the Goal was imported with <code>require_approval</code>, PASS moves the item to REVIEW and a human's <code>review approve</code> makes it DONE.
         </p>
       </article>
     </div>
@@ -1028,23 +1028,23 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
     <!-- 實踐核心三大原則 -->
     <div class="graph-principles-grid">
       <div class="graph-principle">
-        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-loop"/></svg> 單點實作與隔離驗證</h4>
+        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-loop"/></svg> One item at a time, verified in isolation</h4>
         <p>
-          每個節點被認領後，由 Agent 專注實作該 Story 的 AC。完成後呼叫 <code>verify</code>，由 ForgePilot 在 Candidate 的隔離 checkout 執行 canonical <code>make verify</code>，才取得客觀 PASS Evidence。同一時間只有一件工作佔著位置。
+          Once an item is claimed, the agent implements that Story's acceptance criteria and runs <code>verify</code>. ForgePilot runs <code>make verify</code> in an isolated checkout of the Candidate, and only that produces PASS Evidence. Only one item holds the workspace at a time.
         </p>
       </div>
 
       <div class="graph-principle">
-        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-seal"/></svg> 失敗修復與人的停損點</h4>
+        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-seal"/></svg> Repair on failure, stop for people</h4>
         <p>
-          驗證失敗時工作留在 RUNNING，<code>next</code> 轉為 <code>REPAIR</code>，讀 log 修好再驗證。PASS 即 DONE，下游同一次交易解鎖。遇到架構決策或規格歧義，Agent 開 Gate 並停下，等人決定，絕不自己選一個繼續。
+          After a FAIL the item stays RUNNING and <code>next</code> says <code>REPAIR</code>: read the log, fix it, verify again. When an architectural decision or an ambiguous spec comes up, the agent opens a Gate and stops until a person decides, instead of picking an option and carrying on.
         </p>
       </div>
 
       <div class="graph-principle">
-        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-flag"/></svg> 全域拓撲確定性驅動</h4>
+        <h4><svg style="width:16px;height:16px;color:var(--color-accent);" aria-hidden="true"><use href="#i-flag"/></svg> Driven by the graph, not by guesses</h4>
         <p>
-          Agent 永遠不需要猜測「下一步做什麼」。ForgePilot 根據 Graph 拓撲與狀態機即時給出唯一合法的 <code>next</code> 行動，外部 Agent 照著跑迴圈，直到所有節點完成、Goal 自動結束。
+          The agent never has to guess what to do next. ForgePilot derives the one legal <code>next</code> action from the graph and the state machine, and the agent runs that loop until every node is done and the Goal completes.
         </p>
       </div>
     </div>
@@ -1054,8 +1054,8 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
   <section class="principles shell" id="principles" aria-labelledby="principles-title">
     <div class="principles__head">
       <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-book"/></svg> Architectural Bounds</span>
-      <h2 id="principles-title">守住工程確定性的三道硬性邊界</h2>
-      <p>工具只管理它擁有的邊界，把不該猜的決策留給真正負責的人。</p>
+      <h2 id="principles-title">Three hard boundaries</h2>
+      <p>The tool manages only what it owns, and leaves the decisions it should not guess to the people responsible for them.</p>
     </div>
 
     <div class="principles__grid">
@@ -1064,9 +1064,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           <span class="principle-card__num">01 / EVIDENCE</span>
           <svg class="principle-card__icon" aria-hidden="true"><use href="#i-hash"/></svg>
         </div>
-        <h3 class="principle-card__title">沒有 Evidence，就沒有完成。</h3>
+        <h3 class="principle-card__title">No Evidence, no done.</h3>
         <p class="principle-card__body">
-          驗證結果永遠綁定在具體的 Candidate Revision。代碼有任何未提交變更，舊的 PASS 絕不替新內容背書。
+          A verification result is always bound to an exact Candidate revision. Once the code changes, an old PASS never vouches for the new content.
         </p>
       </article>
 
@@ -1075,9 +1075,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           <span class="principle-card__num">02 / HUMAN DECISION</span>
           <svg class="principle-card__icon" aria-hidden="true"><use href="#i-ask"/></svg>
         </div>
-        <h3 class="principle-card__title">人該決定的，不交給流程猜。</h3>
+        <h3 class="principle-card__title">What people decide, the process does not guess.</h3>
         <p class="principle-card__body">
-          Gate 讓關鍵設計分歧有名字、有選項，明確暫停下一步工作。只要問題懸而未決，下游一律凍結。
+          A Gate gives a design question a name and a set of options, and pauses the work it is about. While the question is open, that work cannot complete, so nothing downstream unlocks.
         </p>
       </article>
 
@@ -1086,9 +1086,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
           <span class="principle-card__num">03 / SEAM DISCIPLINE</span>
           <svg class="principle-card__icon" aria-hidden="true"><use href="#i-gate"/></svg>
         </div>
-        <h3 class="principle-card__title">工具只管理它擁有的邊界。</h3>
+        <h3 class="principle-card__title">The tool manages only what it owns.</h3>
         <p class="principle-card__body">
-          Story 的規格屬於 Warrant，代碼質量屬於 Repository；ForgePilot 僅專注於驗證「現在能否推進」的事實。
+          Story intent belongs to Warrant, and code quality belongs to the repository's own checks. ForgePilot only tracks whether work can move forward right now.
         </p>
       </article>
     </div>
@@ -1098,26 +1098,26 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
   <section class="guide-intro shell" id="guide" aria-labelledby="guide-title">
     <div>
       <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-book"/></svg> Deep Documentation</span>
-      <h2 id="guide-title">想知道它為什麼這樣擋？讀完整設計。</h2>
-      <p class="guide-intro__lede">入口頁說明立場；長篇導覽則把狀態機、隔離驗證與不能妥協的設計邊界完整攤開。</p>
+      <h2 id="guide-title">Want to know why it refuses? Read the design.</h2>
+      <p class="guide-intro__lede">The README is in English. The longer guide, the handbook, the diagrams and the architecture document are in Traditional Chinese.</p>
     </div>
 
     <div class="guide-links">
-      <a class="guide-link" href="guide.html">
-        <span class="guide-link__name">完整產品導覽 <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
-        <span class="guide-link__description">從「為什麼」到 Goal、Work Item、Evidence 與 DONE。</span>
+      <a class="guide-link" href="https://github.com/CarlLee1983/ForgePilot#readme">
+        <span class="guide-link__name">README <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+        <span class="guide-link__description">Install, the Goal Plan format and the agent loop.</span>
       </a>
-      <a class="guide-link" href="learn/handbook.html">
-        <span class="guide-link__name">使用手冊 <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
-        <span class="guide-link__description">依合法路徑操作 CLI，而不是從輸出猜狀態。</span>
+      <a class="guide-link" href="../learn/handbook.html" hreflang="zh-Hant">
+        <span class="guide-link__name">Handbook <small>(Traditional Chinese)</small> <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+        <span class="guide-link__description">Every command, its real output, and what to do when it refuses.</span>
       </a>
-      <a class="guide-link" href="diagrams/work-item-lifecycle.html">
-        <span class="guide-link__name">狀態機圖 <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
-        <span class="guide-link__description">看 Work Item 的生命週期和何時拒絕推進。</span>
+      <a class="guide-link" href="../diagrams/work-item-lifecycle.html" hreflang="zh-Hant">
+        <span class="guide-link__name">State machine diagram <small>(Traditional Chinese)</small> <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+        <span class="guide-link__description">The Work Item lifecycle and where it refuses to advance.</span>
       </a>
       <a class="guide-link" href="https://github.com/CarlLee1983/ForgePilot/blob/main/docs/architecture.md" target="_blank">
         <span class="guide-link__name">Architecture <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
-        <span class="guide-link__description">責任邊界、資料模型與不可重建的設計決定。</span>
+        <span class="guide-link__description">Responsibilities, data model and storage <small>(Traditional Chinese)</small>.</span>
       </a>
     </div>
   </section>
@@ -1127,9 +1127,9 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
     <div class="start__layout">
       <div>
         <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-flag"/></svg> Quickstart</span>
-        <h2 class="start__title" id="start-title">把事實交給下一個 session。</h2>
-        <p class="start__copy">用 <code>go install</code> 安裝，在受管理的 repository 執行 <code>init</code>，再用 <code>goal import</code> 匯入一份 Goal Plan；之後外部 Agent 依 <code>next</code> 一件件做完。</p>
-        <a class="button button--primary" href="learn/handbook.html">閱讀使用手冊 <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+        <h2 class="start__title" id="start-title">Hand the facts to the next session.</h2>
+        <p class="start__copy">Install with <code>go install</code>, run <code>init</code> in the repository you manage, and import a Goal Plan with <code>goal import</code>. From there an external agent works through the items one by one, following <code>next</code>.</p>
+        <a class="button button--primary" href="https://github.com/CarlLee1983/ForgePilot#install">Install instructions <svg class="flow-node__icon" style="width:16px;height:16px;" aria-hidden="true"><use href="#i-arrow"/></svg></a>
       </div>
 
       <div class="start-terminal">
@@ -1160,12 +1160,12 @@ Reason: earliest READY work</code></pre>
 
 <footer class="footer">
   <div class="shell">
-    <p class="footer__statement">讓「完成」有足夠的重量。</p>
+    <p class="footer__statement">Make "done" mean something.</p>
     <div class="footer__meta">
       <span>ForgePilot · local CLI for AI-assisted engineering</span>
       <div class="footer__links">
-        <a href="guide.html">完整導覽</a>
-        <a href="learn/handbook.html">手冊</a>
+        <a href="https://github.com/CarlLee1983/ForgePilot#readme">README</a>
+        <a href="../" hreflang="zh-Hant">繁體中文</a>
         <a href="https://github.com/CarlLee1983/ForgePilot" target="_blank">GitHub</a>
       </div>
     </div>
@@ -1175,17 +1175,17 @@ Reason: earliest READY work</code></pre>
 <!-- 快捷搜尋 Dialog -->
 <dialog class="command-palette" data-command-dialog aria-labelledby="command-title">
   <div class="command-palette__head">
-    <label for="command-search" id="command-title">尋找內容</label>
-    <input class="command-palette__input" id="command-search" type="search" autocomplete="off" placeholder="輸入「手冊」、「架構」或「GitHub」" data-command-search>
+    <label for="command-search" id="command-title">Search</label>
+    <input class="command-palette__input" id="command-search" type="search" autocomplete="off" placeholder="Try “handbook”, “architecture” or “GitHub”" data-command-search>
   </div>
   <div class="command-palette__results" data-command-results>
-    <button class="command-item" type="button" data-command-target="guide.html"><span>完整產品導覽</span><small>Guide</small></button>
-    <button class="command-item" type="button" data-command-target="learn/handbook.html"><span>使用手冊</span><small>Handbook</small></button>
-    <button class="command-item" type="button" data-command-target="diagrams/work-item-lifecycle.html"><span>狀態機圖</span><small>Lifecycle</small></button>
+    <button class="command-item" type="button" data-command-target="https://github.com/CarlLee1983/ForgePilot#readme"><span>README</span><small>Overview</small></button>
+    <button class="command-item" type="button" data-command-target="../learn/handbook.html"><span>Handbook (Traditional Chinese)</span><small>Handbook</small></button>
+    <button class="command-item" type="button" data-command-target="../diagrams/work-item-lifecycle.html"><span>State machine diagram</span><small>Lifecycle</small></button>
     <button class="command-item" type="button" data-command-target="https://github.com/CarlLee1983/ForgePilot"><span>GitHub repository</span><small>Source</small></button>
-    <p class="command-empty" data-command-empty hidden style="margin:0; padding:var(--space-md); color:var(--color-muted);">找不到相符內容。</p>
+    <p class="command-empty" data-command-empty hidden style="margin:0; padding:var(--space-md); color:var(--color-muted);">No matching pages.</p>
   </div>
-  <div class="command-palette__footer">↑ ↓ 選擇　Enter 開啟　Esc 關閉</div>
+  <div class="command-palette__footer">↑ ↓ to select · Enter to open · Esc to close</div>
 </dialog>
 
 <script>

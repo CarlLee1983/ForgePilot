@@ -4,7 +4,7 @@
 
 ## Knowledge
 
-- [CONTEXT.md](../../CONTEXT.md)
+- [CONTEXT.md](https://github.com/CarlLee1983/ForgePilot/blob/main/CONTEXT.md)
   詞彙的唯一定義處，每個詞附「不是什麼」。用於：任何時候名詞開始鬆動。
 - [docs/architecture.md](../architecture.md)
   責任邊界、資料模型、生命週期、`next` 規則與持久化。用於：判斷某個行為是刻意的還是 bug。
@@ -14,7 +14,7 @@
   狀態機、分層、交易邊界、verify 與 approve 的順序。用於：需要先看懂形狀。
 - `internal/cli/*.go`
   指令的實際行為與錯誤訊息。用於：文件與實際不符時——**以程式碼為準**。
-- `internal/cli/integration_test.go`
+- `integration_test.go`（repository root）
   每一條使用流程都有一個以獨立 process 跑真實 git repository 的測試。用於：想知道某個情境到底會怎樣，最快的答案是找對應的測試。
 
 ## Wisdom (Communities)

@@ -324,9 +324,9 @@
     <div class="arch-sub">
       <div class="arch-title">
         <span>2. Orchestration 層 (internal/app)</span>
-        <span class="tag-badge">verify &amp; goal import</span>
+        <span class="tag-badge">verify · goal import · start</span>
       </div>
-      <p class="arch-desc"><code>verify</code> 與 <code>goal import</code> 的流程只有這一份，<code>internal/cli/verify.go</code> 是薄殼。唯一可以同時碰 <code>work</code>、<code>storage</code>、<code>repository</code> 的地方。</p>
+      <p class="arch-desc"><code>verify</code> 與 <code>goal import</code> 的流程只有這一份，<code>internal/cli/verify.go</code> 是薄殼。Candidate facts 與 <code>start</code> 的協調也在這裡。<code>status</code>、<code>review</code>、<code>gate</code> 的讀取路徑則由 <code>internal/cli</code> 直接使用 <code>storage</code> 與 <code>repository</code>。</p>
     </div>
     <div class="arch-sub">
       <div class="arch-title">
@@ -368,28 +368,28 @@
 </div>
 
 <h3>交易寫入流程（storage.Update）</h3>
-<p>當執行任何狀態修改指令（<code>goal import</code>, <code>start</code>, <code>verify</code>, <code>gate open</code>, <code>review approve</code>）時，底層嚴格走以下 8 步原子交易：</p>
+<p>當執行任何狀態修改指令（<code>goal import</code>, <code>start</code>, <code>verify</code>, <code>gate open</code>, <code>review approve</code>）時，底層走同一條受鎖的讀-改-寫交易，主要步驟如下：</p>
 
 <div class="steps">
   <div class="step-item">
     <div class="step-num">1</div>
     <div class="step-content">
       <h5>取得 OS 核心檔案排他鎖</h5>
-      <p>透過系統呼叫 <code>syscall.Flock(fd, syscall.LOCK_EX)</code> 鎖住 <code>.forgepilot/locks/state.lock</code>。若行程異常崩潰，作業系統會自動回收該鎖，絕不殘留死鎖。</p>
+      <p>透過系統呼叫 <code>syscall.Flock(fd, syscall.LOCK_EX)</code> 鎖住 <code>.forgepilot/locks/state.lock</code>（取鎖前先以 <code>canonicalRoot</code> 正規化 repository 路徑）。若行程異常崩潰，作業系統會自動回收該鎖，絕不殘留死鎖。</p>
     </div>
   </div>
   <div class="step-item">
     <div class="step-num">2</div>
     <div class="step-content">
       <h5>反序列化載入記憶體</h5>
-      <p>讀取 <code>state.json</code>，透過 <code>json.NewDecoder</code> 嚴格解析進 <code>work.State</code> 記憶體結構體（拒絕未知欄位），並檢查 <code>SchemaVersion</code>。</p>
+      <p>讀取 <code>state.json</code>，透過 <code>json.NewDecoder</code> 嚴格解析進 <code>work.State</code> 記憶體結構體（拒絕未知欄位），並檢查 <code>SchemaVersion</code>；接著以 <code>validateRepository</code> 確認這份 state 屬於目前的 repository。</p>
     </div>
   </div>
   <div class="step-item">
     <div class="step-num">3</div>
     <div class="step-content">
       <h5>執行純邏輯閉包</h5>
-      <p>執行傳入的 <code>operation(&amp;state)</code> 函式。進行狀態檢查、轉移、Evidence 記錄，以及 Goal 的自動完成。</p>
+      <p>執行傳入的 <code>operation(&amp;state)</code> 函式。進行狀態檢查、轉移、Evidence 記錄，以及 Goal 的自動完成。閉包回傳 <code>ErrNoChange</code> 時代表無事可寫，交易在此結束、不落盤。</p>
     </div>
   </div>
   <div class="step-item">
@@ -475,7 +475,7 @@
     <div class="step-num">A</div>
     <div class="step-content">
       <h5>固定 Candidate 候選版本</h5>
-      <p>可以是既有的 Git Commit SHA；若是使用 <code>verify --snapshot</code>，系統會利用 Private Git Index 擷取當前未 commit 的變更，寫入 <code>refs/forgepilot/snapshots/*</code>，<strong>不產生污染 git log 的 WIP commit，也不改動當前分支的 HEAD</strong>。</p>
+      <p>不帶 flag 時是目前的 HEAD commit，且工作樹必須乾淨（<code>verify</code> 不接受任意 revision 參數）；若是使用 <code>verify --snapshot</code>，系統會利用 Private Git Index 擷取當前未 commit 的變更，寫入 <code>refs/forgepilot/snapshots/*</code>，<strong>不產生污染 git log 的 WIP commit，也不改動當前分支的 HEAD</strong>。</p>
     </div>
   </div>
   <div class="step-item">

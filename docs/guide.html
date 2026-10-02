@@ -610,8 +610,9 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
 <pre><span class="o">## How work is picked up in this repo
 
 1. Every round starts with `forgepilot next --json`. Act only on
-   the `action` it returns, then ask again. If it says WAIT or NONE,
-   stop and tell a human. Never pick your own next task.
+   the `action` it returns, then ask again. If it says WAIT, NONE,
+   GOAL_ALREADY_COMPLETED or GOAL_CANCELLED, stop and tell a human.
+   Never pick your own next task.
 2. Claim it with `forgepilot start &lt;work-id&gt;`. Do not skip this.
 3. Never report "done". When you believe the work is finished, run
    `forgepilot verify &lt;work-id&gt;` (or `--snapshot` for uncommitted
@@ -626,7 +627,7 @@ footer p { max-width: 64ch; margin: 0 0 10px; line-height: 1.7; }
 
     <div class="body-text" style="margin-top:26px">
       <p>第四條最容易被忽略，它也是這套東西真正改變的地方。agent 卡住的時候原本會自己選一條路走下去，現在它把問題留在佇列上，你下次看 <code>status</code> 就會看到。</p>
-      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>gate resolve</code> 與 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件：DONE 只會是 <code>verify</code> 在確切 Candidate 上 PASS 的結果，沒有任何指令能直接寫入；approve 就算被跑了，最新 PASS 不是目前的 Candidate、或還有 Gate 開著，工作照樣不會進 DONE，而且那筆決定會用它的 git 身分標示為「自述」留在記錄裡，跑不掉。</p>
+      <p>最後那句要說清楚它靠什麼成立。ForgePilot <strong>不認證身分</strong>，agent 技術上跑得動 <code>gate resolve</code> 與 <code>review approve</code>，所以那是一句約定，不是一道鎖。真正擋著的是完成條件：DONE 只會是 <code>verify</code> 在確切 Candidate 上 PASS 的結果，沒有任何指令能直接寫入；approve 就算被跑了，最新 PASS 不是目前的 Candidate、或還有 Gate 開著，approve 會被拒絕、什麼都不寫，工作照樣不會進 DONE。條件滿足而真的通過的那一次，決定者會以它的 git 身分標示為「自述」留在記錄裡，跑不掉。</p>
       <p>接下來的事跟你手動用一模一樣，<a href="#start">安裝與 init</a> 之後把上面四條貼進去就能開始。</p>
     </div>
   </div>
@@ -654,12 +655,13 @@ its PASS EV-005 no longer names the current
 candidate; run forgepilot verify audit-log</span>
 
 <span class="c">forgepilot verify audit-log</span>
-<span class="ok">EV-006 PASS at 23c40dc8c511</span>
+<span class="ok">EV-006 PASS at 23c40dc8c5119a07e3f5b26d4c18e0a7f93b2d6c</span>
 <span class="o">audit-log REVIEW</span>
 
 <span class="c">forgepilot review approve audit-log</span>
 <span class="o">EV-007 APPROVED at 23c40dc8c511</span>
 <span class="ok">audit-log DONE</span>
+<span class="o">Reviewed by: you@example.com (self-asserted; ForgePilot does not authenticate identities)</span>
 <span class="ok">Goal audit COMPLETED</span></pre>
       </div>
     </div>

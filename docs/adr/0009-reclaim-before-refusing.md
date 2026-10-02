@@ -10,4 +10,4 @@ M2 的承諾因此被縮小而非取消：**沒有孤兒可回收時，被拒絕
 
 **Consequences:** `verify` 失敗時可能已經改變了 state，因此錯誤訊息與輸出必須同時出現，讓使用者看得到發生了什麼。回收與開始新執行從單一交易變成兩次交易，中間的狀態是「舊執行已收尾、工作回到 RUNNING」——那是一個完整而正確的狀態，不是缺口。
 
-**Falsified if:** `internal/cli/verify.go` 出現任何在回收孤兒之前就會拒絕整個指令的條件，或 `internal/work/evidence.go` 的 `ReclaimRun` 開始詢問 Gate 或 Goal 的狀態。那表示這個分界被取消，工作會再次卡在 VERIFYING 且無路可出。
+**Falsified if:** `internal/app/verify.go`（`verify` 的流程已從 `internal/cli/verify.go` 移到這裡，後者只是薄殼）出現任何在回收孤兒之前就會拒絕整個指令的條件，或 `internal/work/evidence.go` 的 `ReclaimRun` 開始詢問 Gate 或 Goal 的狀態。那表示這個分界被取消，工作會再次卡在 VERIFYING 且無路可出。
