@@ -10,7 +10,7 @@
 
 1. [CONTEXT.md](CONTEXT.md) — 詞彙。把 Story 與 Work Item 混用是這個 domain 最容易犯的錯
 2. [docs/architecture.md](docs/architecture.md) — 責任邊界、資料模型、生命週期、`next` 規則、儲存
-3. [docs/adr/README.md](docs/adr/README.md) — 40 份決定：13 份 accepted、1 份（0008）部分被取代、26 份被 0040 取代；沒有 proposed 的開放問題。被取代的 ADR 只當歷史讀
+3. [docs/adr/README.md](docs/adr/README.md) — 41 份決定：13 份 accepted、1 份（0008）部分被取代、26 份被 0040 取代、1 份（0013）被 0041 取代；沒有 proposed 的開放問題。被取代的 ADR 只當歷史讀
 4. [docs/development-plan.md](docs/development-plan.md) — CLI 契約（**flag 命名以此為準**）與變更面驗證矩陣；其下的「歷史紀錄」是 ADR-0040 之前的 milestone，不代表現況
 5. `docs/specs/` 與 `specs/stories/` — 歷史規格與 ForgePilot 自己的 Story，描述已移除能力者頂部有標示
 

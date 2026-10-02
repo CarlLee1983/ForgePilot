@@ -49,8 +49,8 @@ func TestValidateStory(t *testing.T) {
 	}
 }
 
-// ADR-0013 relies on ValidateStory accepting a Story directory: borrowing the
-// PraxisBound Story directory contract must not require a second path rule.
+// ADR-0041 relies on ValidateStory accepting a Story directory: the legacy
+// directory Stories stay referenceable next to Warrant's single-file Stories.
 func TestValidateStoryAcceptsStoryDirectory(t *testing.T) {
 	root := t.TempDir()
 	storyDirectory := filepath.Join(root, "specs", "stories", "FP-42-self-adoption")

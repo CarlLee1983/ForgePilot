@@ -10,7 +10,7 @@ ForgePilot 是被動的 DAG 帳本（[ADR-0040](adr/0040-forgepilot-is-a-passive
 2. **變更面驗證矩陣**與**交付格式**。
 3. **歷史紀錄**——ADR-0040 之前各 milestone 與階段的契約、驗收與實跑紀錄，保留作為「當時決定了什麼、為什麼」的出處，內容不再代表現況。
 
-開發時如採用 PraxisBound，工程 requirements 與 acceptance criteria 由正式 Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
+開發時如採用 Warrant，工程 requirements 與 acceptance criteria 由經人核准的 Warrant Story 承載，Work Item 只 reference Story。本文件不另定 Story schema，也不自動產生 Story。
 
 ## CLI 契約
 

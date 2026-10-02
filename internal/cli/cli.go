@@ -40,7 +40,7 @@ const helpText = `ForgePilot — engineering control plane for AI-assisted work.
   review reject <work-id> --reason <text> [--by <name>]     send REVIEW work back to RUNNING
   status [--goal <goal-id>] [--work <work-id>] [--json]    show work, readiness, Evidence, and why unfinished work cannot advance
 
-ForgePilot does not replace PraxisBound or your coding agent. Nothing here makes
+ForgePilot does not replace Warrant or your coding agent. Nothing here makes
 a network request.
 `
 

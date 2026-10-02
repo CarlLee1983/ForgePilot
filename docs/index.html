@@ -955,7 +955,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <span class="eyebrow"><svg style="width:14px;height:14px;" aria-hidden="true"><use href="#i-graph"/></svg> Real-world Graph Engineering</span>
       <h2 id="graph-title">從 ADR、Spec、Story 到 Work Item DAG 的驅動閉環</h2>
       <p>
-        這不是理論推導，而是我們在多輪 Dogfood 開發中<strong>真實驗證並落地</strong>的工程機制。前置規格由 PraxisBound 完整定稿，ForgePilot 以一份 Goal Plan 匯入為嚴密的可執行依賴圖（DAG），外部 Agent 依 <code>next</code> 推進，透過隔離驗證、Evidence 與明確的 Gate 邊界維持可追溯的推進順序。
+        這不是理論推導，而是我們在多輪 Dogfood 開發中<strong>真實驗證並落地</strong>的工程機制。前置規格以 ADR、Spec 與經人核准的 Warrant Story 完整定稿，ForgePilot 以一份 Goal Plan 匯入為嚴密的可執行依賴圖（DAG），外部 Agent 依 <code>next</code> 推進，透過隔離驗證、Evidence 與明確的 Gate 邊界維持可追溯的推進順序。
       </p>
     </div>
 
@@ -964,7 +964,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <article class="pipeline-step">
         <div class="pipeline-step__head">
           <span class="pipeline-step__tag">STAGE 01</span>
-          <span class="pipeline-step__badge">PraxisBound</span>
+          <span class="pipeline-step__badge">ADR</span>
         </div>
         <h3 class="pipeline-step__title">ADR 決策固化</h3>
         <p class="pipeline-step__desc">
@@ -975,7 +975,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
       <article class="pipeline-step">
         <div class="pipeline-step__head">
           <span class="pipeline-step__tag">STAGE 02</span>
-          <span class="pipeline-step__badge">PraxisBound</span>
+          <span class="pipeline-step__badge">Warrant</span>
         </div>
         <h3 class="pipeline-step__title">Spec & Story 規格拆分</h3>
         <p class="pipeline-step__desc">
@@ -1069,7 +1069,7 @@ h1, h2, h3, h4, .display-font { font-family: var(--font-display); color: var(--c
         </div>
         <h3 class="principle-card__title">工具只管理它擁有的邊界。</h3>
         <p class="principle-card__body">
-          Story 的規格屬於 PraxisBound，代碼質量屬於 Repository；ForgePilot 僅專注於驗證「現在能否推進」的事實。
+          Story 的規格屬於 Warrant，代碼質量屬於 Repository；ForgePilot 僅專注於驗證「現在能否推進」的事實。
         </p>
       </article>
     </div>
