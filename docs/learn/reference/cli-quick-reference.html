@@ -11,8 +11,6 @@
 <link rel="stylesheet" href="../assets/course.css">
 </head>
 <body>
-<div role="note" class="adr0040-notice" style="margin:0;padding:12px 20px;background:#fff4d6;color:#4a3600;border-bottom:2px solid #d99a00;font:500 14px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center;position:relative;z-index:1000;">本頁描述 ADR-0040 收斂前的產品，部分指令已移除；現行指令見 <a href="../../../README.md" style="color:#7a4b00;text-decoration:underline;">README</a> 與 <a href="../../development-plan.md#cli-契約" style="color:#7a4b00;text-decoration:underline;">docs/development-plan.md 的 CLI 契約</a>。</div>
-
 <!-- 微動態自然水波光暈 -->
 <div class="ambient-scene" aria-hidden="true">
   <div class="ambient-glow-top"></div>
@@ -48,7 +46,7 @@
     <span>Reference · 印得出來的一頁</span>
   </div>
   <h1>ForgePilot CLI <span class="mark-accent">快速參考</span></h1>
-  <p class="lede">十個指令、六個狀態、四項完成條件，以及每一個會拒絕你的地方。以 <code>internal/cli</code> 的實際行為為準。</p>
+  <p class="lede">八組指令、五個持久化狀態，以及每一個會拒絕你的地方。指令以 <code>forgepilot --help</code> 與 <a href="../../development-plan.md#cli-契約">CLI 契約</a> 為準。</p>
 </header>
 
 <h2>指令</h2>
@@ -58,61 +56,59 @@
   <thead><tr><th>指令</th><th>參數</th><th>結果</th></tr></thead>
   <tbody>
     <tr><td><code>init</code></td><td>—</td><td>在目前 repository root 建立 <code>.forgepilot/</code>，並往 <code>.gitignore</code> 補上 entry。重複執行不覆寫。</td></tr>
-    <tr><td><code>migrate</code></td><td>—</td><td>備份為 <code>state.json.v&lt;n&gt;.bak</code> 後升級 schema。已是最新則回報並 exit 0。備份已存在時拒絕。</td></tr>
-    <tr><td><code>goal create</code></td><td><code>--id --title [--description] [--review-policy work-item|goal]</code></td><td>建立 ACTIVE Goal。WORK_ITEM 是預設；GOAL 在 current Candidate 全數 PASS、沒有 OPEN Gate 時自動完成，不提供人工 final-review 選項。ID 由你指定。</td></tr>
-    <tr><td><code>goal block</code></td><td><code>&lt;goal-id&gt; --reason</code></td><td>轉為 BLOCKED。底下活躍工作維持原狀但無法推進。</td></tr>
-    <tr><td><code>goal unblock</code></td><td><code>&lt;goal-id&gt;</code></td><td>轉回 ACTIVE。</td></tr>
-    <tr><td><code>goal complete</code></td><td><code>&lt;goal-id&gt;</code></td><td>WORK_ITEM policy 下全部 Work Item 皆 DONE 才允許。GOAL policy 的 VERIFIED completion 由 Runner 依驗證與 Gate 條件原子完成。</td></tr>
-    <tr><td><code>goal cancel</code></td><td><code>&lt;goal-id&gt; --reason</code></td><td>轉為 CANCELLED。</td></tr>
-    <tr><td><code>work add</code></td><td><code>--goal --story [--depends-on ...]</code></td><td>配發 <code>WI-nnn</code>。依賴皆 DONE 則 READY，否則 PENDING。</td></tr>
-    <tr><td><code>next</code></td><td>—</td><td><strong>純查詢</strong>。不 claim、不 start、不改狀態。會說明選取理由。</td></tr>
-    <tr><td><code>start</code></td><td><code>&lt;work-id&gt;</code></td><td>READY → RUNNING。在寫交易內重查 Goal 與依賴。</td></tr>
-    <tr><td><code>verify</code></td><td><code>&lt;work-id&gt; [--snapshot]</code></td><td>先回收孤兒；無 flag 時在隔離 worktree 對乾淨 HEAD 跑 <code>make verify</code>，<code>--snapshot</code> 時對 immutable working-tree snapshot 執行，append Evidence。</td></tr>
+    <tr><td><code>goal import</code></td><td><code>&lt;plan-path&gt;</code></td><td>讀 Goal Plan（JSON），一次建立 Goal 與整張 DAG；節點 ID 即 Work Item ID。任何驗證失敗整份不寫入。重新匯入同一 Goal 只接受新增節點。</td></tr>
+    <tr><td><code>goal cancel</code></td><td><code>&lt;goal-id&gt; --reason</code></td><td>ACTIVE → CANCELLED，不再出現在 <code>next</code>。</td></tr>
+    <tr><td><code>next</code></td><td><code>[--json]</code></td><td><strong>純查詢</strong>。只回傳一個建議動作與理由，不 start、不改狀態。<code>--json</code> 的每個欄位永遠存在。</td></tr>
+    <tr><td><code>start</code></td><td><code>&lt;work-id&gt;</code></td><td>READY → RUNNING。在寫交易內重查 Goal、依賴、Gate 與佔位。</td></tr>
+    <tr><td><code>verify</code></td><td><code>&lt;work-id&gt; [--snapshot]</code></td><td>先回收孤兒；無 flag 時在隔離 worktree 對乾淨 HEAD 跑 <code>make verify</code>，<code>--snapshot</code> 時對 immutable working-tree snapshot 執行，append Evidence。PASS 即 DONE（Goal 要求 Approval 時進 REVIEW）。</td></tr>
     <tr><td><code>gate open</code></td><td><code>--work --question --option --option [--reason]</code></td><td>配發 <code>GATE-nnn</code>。至少兩個 <code>--option</code>。該工作即被阻擋。</td></tr>
     <tr><td><code>gate resolve</code></td><td><code>&lt;gate-id&gt; --option [--note] [--by]</code></td><td>只接受列出的選項之一。轉為 RESOLVED。</td></tr>
     <tr><td><code>gate cancel</code></td><td><code>&lt;gate-id&gt; --reason [--by]</code></td><td>轉為 CANCELLED 並解除阻擋——記錄「這個問題問錯了」。</td></tr>
-    <tr><td><code>review approve</code></td><td><code>&lt;work-id&gt; [--pr] [--note] [--by]</code></td><td>append APPROVED；四項條件成立則同交易進入 DONE 並解鎖下游。</td></tr>
-    <tr><td><code>review reject</code></td><td><code>&lt;work-id&gt; --reason [--pr] [--by]</code></td><td>append REJECTED，工作退回 RUNNING。</td></tr>
-    <tr><td><code>status</code></td><td>—</td><td>整份佇列：狀態、最新 Evidence、OPEN Gate 數、未完成的原因。</td></tr>
+    <tr><td><code>review approve</code></td><td><code>&lt;work-id&gt; [--note] [--by]</code></td><td>僅適用要求 Approval 的 Goal。append APPROVED；條件成立則同交易進入 DONE 並解鎖下游。</td></tr>
+    <tr><td><code>review reject</code></td><td><code>&lt;work-id&gt; --reason [--by]</code></td><td>append REJECTED，REVIEW 工作退回 RUNNING。</td></tr>
+    <tr><td><code>status</code></td><td><code>[--goal] [--work] [--json]</code></td><td>每個 Goal 的節點：狀態、最新 Evidence、OPEN Gate、未完成的原因。</td></tr>
   </tbody>
 </table>
 </div>
 
-<p class="muted">沒有的東西：<code>done</code>、<code>complete &lt;work-id&gt;</code>、任何 reopen、Gate 查詢指令、<code>--json</code>、任意 status setter。</p>
+<p class="muted">沒有的東西：<code>done</code>、<code>complete &lt;work-id&gt;</code>、任何 reopen、<code>work add</code>、<code>reconcile</code>、<code>migrate</code>、<code>--pr</code>。呼叫已移除的指令會回報 <code>unknown command</code>。</p>
 
 <h2>狀態</h2>
 
+<p>持久化的狀態只有五個：未開始（<code>NOT_STARTED</code>）、<code>RUNNING</code>、<code>VERIFYING</code>、<code>REVIEW</code>、<code>DONE</code>。<code>PENDING</code> 與 <code>READY</code> 是讀取時依「依賴是否全部 DONE」算出的投影，不保存。</p>
+
 <pre><code>PENDING ──依賴皆 DONE──▶ READY ──start──▶ RUNNING ──verify──▶ VERIFYING
                                              ▲                    │
-                                             │                    │ PASS
-                          FAIL / INTERRUPTED └────────────────────┤
-                                                                  ▼
-                          reject ◀──────────────────────────── REVIEW ──四項條件──▶ DONE
-                                                                  │                  （終態）
-                                                                  └──重新 verify──▶ VERIFYING</code></pre>
+                                             │ FAIL / INTERRUPTED │
+                                             └────────────────────┤
+                                                                  │ PASS
+                          ┌── 要求 Approval ──────────────────────┤
+                          ▼                                       ▼
+                       REVIEW ──approve──▶ DONE ◀──不要求 Approval──┘
+                          │                （終態）
+                          ├──reject──▶ RUNNING
+                          └──重新 verify──▶ VERIFYING</code></pre>
 
 <p><strong>Gate 不在這張圖上。</strong>它是正交的維度：未解除的 Gate 擋住推進，但不改變狀態欄。</p>
 
-<h2>進入 DONE 的四項條件</h2>
+<h2>進入 DONE 的條件</h2>
 
-<p>在 <code>review approve</code> 的同一次交易內檢查，全部成立才完成：</p>
+<p>預設的 Goal 在 <code>verify</code> PASS 的同一次交易內就是 DONE，並解鎖下游；全部節點 DONE 時 Goal 自動 COMPLETED。要求 Approval 的 Goal 則在 <code>review approve</code> 的同一次交易內檢查，全部成立才完成：</p>
 
 <div class="scroll">
 <table>
   <thead><tr><th>條件</th><th>不成立時 status 會說</th></tr></thead>
   <tbody>
-    <tr><td>同一 revision 的<strong>最新</strong> Verification 為 PASS</td><td><code>the latest verification EV-00n is FAIL</code> 或 <code>no verification evidence yet</code></td></tr>
-    <tr><td><strong>最新</strong> Human Review 為 APPROVED</td><td><code>no human review yet</code> 或 <code>the latest human review EV-00n is REJECTED</code></td></tr>
-    <tr><td>兩者綁在同一個 revision 上</td><td><code>the latest PASS is at revision X but the approval is at Y</code></td></tr>
-    <tr><td>該 Work Item 無未解除 Gate</td><td><code>n open gate(s)</code></td></tr>
-    <tr><td>其 Goal 為 ACTIVE</td><td><code>goal "x" is BLOCKED, not ACTIVE</code></td></tr>
+    <tr><td>最新 Verification 為 PASS，且仍是目前的 Candidate</td><td><code>approve</code> 被拒並要求重新 <code>verify</code>；<code>next</code> 建議 <code>REVERIFY</code></td></tr>
+    <tr><td>該 Work Item 無未解除 Gate</td><td><code>open Gate GATE-n</code></td></tr>
+    <tr><td>其 Goal 為 ACTIVE</td><td><code>goal x is CANCELLED</code></td></tr>
   </tbody>
 </table>
 </div>
 
 <div class="callout">
-  <span class="label">最容易忘的一條</span>
-  <p>條件<strong>只在 <code>review approve</code> 執行的當下</strong>被評估。如果最後一個阻擋是在 approve 之後才解除的（你先 approve、再 resolve Gate），工作會停在 REVIEW，必須<strong>再跑一次 <code>review approve</code></strong>。這是刻意的——核准者會先看到 Gate 被怎麼決定。<code>status</code> 會明講：<em>Not complete, but every condition now holds</em>。</p>
+  <span class="label">stale 只對 REVIEW 有意義</span>
+  <p>REVIEW 工作的 PASS Evidence 綁定的 Candidate 不再符合目前 workspace（HEAD 變了，或 snapshot 的 digest 變了）時，<code>approve</code> 會被拒絕，必須重新 <code>verify</code>。DONE 是終態，不判 stale，也沒有 reopen。</p>
 </div>
 
 <h2>它會拒絕你的地方</h2>
@@ -121,15 +117,18 @@
 <table>
   <thead><tr><th>情況</th><th>行為</th></tr></thead>
   <tbody>
-    <tr><td>工作樹不乾淨（含 untracked）</td><td>不帶 flag 的 <code>verify</code> 拒絕；可用 <code>verify &lt;work-id&gt; --snapshot</code> 驗證 working tree。COMMIT review 仍拒絕，SNAPSHOT review 則要求 workspace digest 未變。</td></tr>
+    <tr><td>工作樹不乾淨（含 untracked）</td><td>不帶 flag 的 <code>verify</code> 拒絕並列出髒檔案；可用 <code>verify &lt;work-id&gt; --snapshot</code> 驗證 working tree。</td></tr>
     <tr><td>受驗 revision 沒有 <code>make verify</code> target</td><td>拒絕且不寫 Evidence——那是無法驗證，不是驗證失敗</td></tr>
-    <tr><td>Story reference 不在 <code>specs/stories/</code> 內或不存在</td><td><code>work add</code> 拒絕</td></tr>
-    <tr><td>有未解除 Gate</td><td>擋 <code>start</code>、擋 <code>verify</code>、不被 <code>next</code> 選中、擋完成</td></tr>
-    <tr><td>Goal 非 ACTIVE</td><td>擋開始新工作與擋完成，但<strong>進行中的驗證跑完仍記錄 Evidence</strong></td></tr>
+    <tr><td>已有一件 RUNNING 或 VERIFYING</td><td><code>start</code> 拒絕，錯誤指出佔位的工作：<code>only one work item can be RUNNING or VERIFYING at a time</code></td></tr>
+    <tr><td>依賴未全部 DONE</td><td><code>start</code> 拒絕：<code>dependencies not DONE: a</code></td></tr>
+    <tr><td>Story 路徑不存在、不在 <code>specs/stories/</code> 底下或逃出 repository</td><td><code>goal import</code> 整份拒絕，錯誤指出節點與欄位</td></tr>
+    <tr><td>Goal Plan 有環、未知／重複依賴、重複節點、未知 JSON 欄位</td><td><code>goal import</code> 整份拒絕</td></tr>
+    <tr><td>有未解除 Gate</td><td>擋 <code>start</code>、擋 <code>verify</code>、不被 <code>next</code> 推薦、擋完成</td></tr>
+    <tr><td>Goal 非 ACTIVE</td><td>擋開始新工作與擋完成，也不能再匯入；<strong>進行中的驗證跑完仍記錄 Evidence</strong></td></tr>
+    <tr><td>對不要求 Approval 的 Goal 執行 <code>review</code></td><td>拒絕並說明原因</td></tr>
     <tr><td><code>gate resolve</code> 給了未列出的選項</td><td>拒絕。選項全都不對時的正確動作是 <code>cancel</code> 再重開一個</td></tr>
     <tr><td><code>review reject</code> 沒給 <code>--reason</code></td><td>拒絕</td></tr>
-    <tr><td><code>--pr</code> 不是 <code>owner/name#number</code></td><td>整個指令失敗且不寫入任何東西</td></tr>
-    <tr><td>state schema 版本不符</td><td>拒讀。較舊者指示 <code>migrate</code>，較新者明說本 binary 不支援</td></tr>
+    <tr><td>state schema 版本不符</td><td>拒讀。較舊者指向一次性匯出工具，較新者明說本 binary 不支援</td></tr>
     <tr><td>沒設定 <code>git config user.email</code> 又沒給 <code>--by</code></td><td>拒絕，並指名該用哪個 flag</td></tr>
   </tbody>
 </table>
@@ -146,7 +145,7 @@
 
 <footer>
   <p>回到 <a href="../handbook.html">使用手冊</a> · <a href="../MISSION.md">MISSION</a></p>
-  <p>此表以 <code>internal/cli</code> 的實際行為為準。與文件不符時以程式碼為準，並把這份表修正回來。</p>
+  <p>此表以 <code>forgepilot --help</code> 與 CLI 契約為準。與實際行為不符時以程式碼為準，並把這份表修正回來。</p>
 </footer>
 
 </div>
