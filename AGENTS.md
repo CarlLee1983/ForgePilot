@@ -4,7 +4,7 @@
 
 ## 這是什麼
 
-管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5、P0／P1 與 Goal-level Review Policy 全部實作完成；roadmap 沒有下一個 milestone，後續工作來自 dogfood，開在 issue tracker 上。
+管理工程工作的可執行性、進度與決策證據的本機 CLI。Go 1.25.5、**只用標準函式庫**、module `github.com/CarlLee1983/ForgePilot`、只支援 macOS 本機檔案系統。M1–M5 與 P0／P1 全部實作完成；roadmap 沒有下一個 milestone，後續工作來自 dogfood，開在 issue tracker 上。
 
 **定位正在收斂**：[ADR-0040](docs/adr/0040-forgepilot-is-a-passive-dag-ledger.md) 把 ForgePilot 定為被動的 DAG 帳本。Runner、supervised execution、Story readiness review、runtime resolution 與 verification fan-out 已移除；自管分發等能力待移除。動任何程式碼前先讀它；下面提到待移除能力的條目描述的是收斂前的程式碼，與 ADR-0040 衝突時以 ADR-0040 為準。
 
@@ -22,18 +22,19 @@
 
 這些看起來像疏漏，其實是決定。動手前先讀對應的 ADR。
 
-- **Work Item 上沒有 revision 欄位，也沒有 PR 欄位。** 兩者都只存在於 Evidence。看到 Evidence 上有一個沒有任何規則讀取的 `pr`，那是刻意的——ADR-0003、ADR-0011
+- **Work Item 上沒有 revision 欄位；PR Reference 已整個移除。** revision 只存在於 Evidence。Evidence 與 Work Item 都沒有 PR 欄位、`review` 沒有 `--pr`，那是刻意的：ForgePilot 不保存它無法查證、也沒有任何規則讀取的字串——ADR-0003、ADR-0040（取代 ADR-0011）
 - **Candidate 不存在 Work Item 上。** `COMMIT`／`SNAPSHOT` identity 只隨 `current_run` 與 Evidence 存在；snapshot ref 在 `refs/forgepilot/snapshots/`，不建立 branch、tag 或 WIP commit——ADR-0014
 - **Evidence 上沒有指向 verification 輸出的欄位。** 輸出以 run 為鍵存在 `.forgepilot/logs/` 底下，`current_run` 才有 `LogPath`——ADR-0012
-- **沒有完成指令。** 沒有 `done`、沒有 `complete <work-id>`、沒有測試專用的 approve。DONE 只能是 `review approve` 在條件滿足時的結果——ADR-0008
+- **沒有完成指令。** 沒有 `done`、沒有 `complete <work-id>`、沒有 `goal complete`、沒有測試專用的 approve。DONE 只能是兩種結果之一：Goal 沒有 Approval Requirement 時 `verify` 在 current Candidate 上 PASS，或有 Approval Requirement 時 `review approve`（Candidate 未 stale 且無未解除 Gate）。兩者都在同一交易解鎖下游——ADR-0008（「沒有完成指令」仍成立）、ADR-0040
+- **Goal 完成沒有指令，也不重驗歷史。** 最後一件工作 DONE 的同一交易 Goal 自動 COMPLETED；完成條件只看「全部工作 DONE」，不要求每件 PASS 對上最終 Candidate（拓撲序中後完成的節點，其 `make verify` 已涵蓋整個 repository）。Goal 狀態只有 ACTIVE、COMPLETED、CANCELLED；`VERIFIED`、Review Policy、Completion Policy、Goal Completion Evidence 與 `review request` 都已刪除，看到它們不存在是決定，不是疏漏——ADR-0040
 - **DONE 沒有 reopen。** 要重做就新增一件 Work Item，讓「為什麼重做」有地方被記錄——ADR-0006
-- **沒有 `WAITING_HUMAN`，Work Item 也沒有 `BLOCKED`。** 阻擋由「有沒有未解除的 Gate」表達，不佔用狀態欄——ADR-0007
+- **沒有 `WAITING_HUMAN`，Work Item 也沒有 `BLOCKED`，Goal 也沒有 `BLOCKED`。** 阻擋由「有沒有未解除的 Gate」表達，不佔用狀態欄；`goal block|unblock` 已移除——ADR-0007、ADR-0040
 - **決策者身分不做認證。** 半套的認證比不做更危險，它會讓人以為那個名字有保證——ADR-0005
-- **不發出任何網路請求。** 不自行 HTTP，不 spawn `gh`。PR Reference 是使用者輸入的字串，只驗格式，不查證那個 PR 存在——ADR-0010
+- **不發出任何網路請求。** 不自行 HTTP，不 spawn `gh`——ADR-0010
 - **`verify` 先無條件回收孤兒，再判斷能不能開始新的執行。** `internal/cli/verify.go` 有一段被縮小的承諾，那是 M3 刻意改的——ADR-0009
 - **verification orchestration 只有一份，在 `internal/app`。** `internal/cli/verify.go` 是薄殼，改驗證流程改 `internal/app/verify.go`——ADR-0019
 - **State 只讀 schema 19，沒有升版鏈，也沒有 `migrate`。** 讀到其他版本一律在嚴格解碼之前就拒絕（舊版本會帶著本版不認得的欄位，先解碼只會得到 "unknown field" 而看不到原因）；舊 state 走 `tools/export-plan` 轉成 Goal Plan 再 `goal import`。看到 `internal/storage` 沒有 migration 是決定，不是疏漏。Goal 與 Work Item 只能由 `goal import` 建立，Work Item ID 就是計畫節點 ID，不再有 `WI-###` 自動配發——ADR-0040
-- **`Validate` 不檢查 DONE 的四項條件。** 加上去會讓 Validate 與當下的完成規則綁死，日後規則一改，舊的合法 DONE 就變成讀不進來的 state
+- **`Validate` 不檢查 DONE 工作當初是怎麼完成的**（有沒有 PASS、有沒有 approval Evidence）。加上去會讓 Validate 與當下的完成規則綁死，日後規則一改，舊的合法 DONE 就變成讀不進來的 state。它只守結構不變量：REVIEW 必須有最新的 PASS 且其 Goal 要求 approval、COMPLETED 的 Goal 全部工作 DONE、Goal 狀態只有 ACTIVE／COMPLETED／CANCELLED
 
 ## 地雷
 
